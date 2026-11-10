@@ -10,7 +10,9 @@ DeepSeek 已完成短需求的真实规格整理调用；模型只在规格阶�
 
 ## 目标和流程
 
-以 [产品需求](PRODUCT_REQUIREMENTS.md) 定义高完成度目标，以 [实现流程](ROADMAP.md) 推进持续迭代，不设置固定周次排期。开发方式遵循根目录 [AGENTS.md](../AGENTS.md)。
+当前协作流程以用户于 2026 年 11 月 10 日指定的 [新版设计](DESIGN.md) 为依据：规格确认、任务分解、主 Agent 编码自检、固定版本、测试与 Review 独立检查、返工复验及集成验证。原始 Word 在仓库根目录原样保存。
+
+以 [产品需求](PRODUCT_REQUIREMENTS.md) 定义高完成度目标，以 [实现流程](ROADMAP.md) 推进持续迭代，不设置固定周次排期。开发方式遵循根目录 [AGENTS.md](../AGENTS.md)。本轮只替换和同步设计文档，没有实现新版研发执行功能；当前原型行为仍见 [实现说明](PROTOTYPE_DESIGN.md)。
 
 ## 验证基线
 

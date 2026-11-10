@@ -4,7 +4,7 @@
 
 这是一个可以本地运行的课程项目原型，包含真实的后端调度与持久化。它生成后续软件开发计划，编码任务仍由开发团队或另行接入的执行器完成。首版不会执行需求文档中的命令，也不会自动修改目标软件仓库。
 
-后续目标已明确为采用 Agent 主导开发方式，建设面向复杂全栈 Web 业务、支持持续需求变更的软件研发 Agent 平台。高完成度目标见 [产品需求](docs/PRODUCT_REQUIREMENTS.md)，能力建设与持续迭代方式见 [实现流程](docs/ROADMAP.md)。这些是待实现的目标，当前运行能力仍以下文和验证记录为准。
+后续目标已明确为采用 Agent 主导开发方式，建设面向复杂全栈 Web 业务、支持持续需求变更的软件研发 Agent 平台。当前协作设计以 [新版 Word 文档](软件项目%20Agent%20协作流程%20开发编排新版.docx) 为依据，[DESIGN](docs/DESIGN.md) 提供同步 Markdown。高完成度目标见 [产品需求](docs/PRODUCT_REQUIREMENTS.md)，持续迭代方式见 [实现流程](docs/ROADMAP.md)。目标设计不代表现有代码已完成，当前运行能力仍以下文和验证记录为准。
 
 ## 开发入口
 
@@ -146,10 +146,11 @@ docs/STATUS.md          当前实现、遗留问题和下一项验收
 tests/                  规划器、编排器和接口测试
 examples/               可导入的软件需求与完整分析示例
 docs/API.md             请求与数据结构约定
-docs/DESIGN.md          当前软件开发场景的设计说明
+docs/DESIGN.md          新版 Agent 协作设计的 Markdown 同步
+docs/PROTOTYPE_DESIGN.md 当前已实现规划原型的说明
 ```
 
-目录中的 Word 讨论稿为早期 CSV 演示方案，作为讨论历史保留。当前项目以 [软件需求编排设计](docs/DESIGN.md) 和实际接口为准。
+今天的设计文档已替换为 [软件项目 Agent 协作流程 开发编排新版](软件项目%20Agent%20协作流程%20开发编排新版.docx)，原 Word 内容原样保存；旧稿可从 Git 历史查看。后续协作流程按 [当前设计](docs/DESIGN.md) 推进，现有代码行为另见 [原型实现说明](docs/PROTOTYPE_DESIGN.md) 和 [API](docs/API.md)。
 
 ## 常见问题
 
