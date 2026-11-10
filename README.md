@@ -6,6 +6,12 @@
 
 后续目标已明确为采用 Agent 主导开发方式，建设面向复杂全栈 Web 业务、支持持续需求变更的软件研发 Agent 平台。高完成度目标见 [产品需求](docs/PRODUCT_REQUIREMENTS.md)，能力建设与持续迭代方式见 [实现流程](docs/ROADMAP.md)。这些是待实现的目标，当前运行能力仍以下文和验证记录为准。
 
+## 开发入口
+
+Agent 开发前阅读 [AGENTS.md](AGENTS.md)，其中包含完整开发流程、验证、需求变更、并行修改、数据保护和交接规范。[agent.md](agent.md) 是同一规范的兼容入口，正文统一维护在 AGENTS.md。
+
+当前进展和下一项验收见 [STATUS](docs/STATUS.md)。源码仓库：[Peanora/SE-group1](https://github.com/Peanora/SE-group1)。规范、源码、测试和无秘密的配置示例共同版本管理；`.env`、用户数据和本地产物不上传。
+
 ## 启动
 
 安装 Node.js 22 或以上版本，在项目目录执行：
@@ -135,8 +141,10 @@ lib/store.mjs           本地项目记录与原子持久化
 lib/documents.mjs       文本与 DOCX 输入解析
 lib/zip.mjs             导出 ZIP 文档包
 server.mjs              HTTP API 和静态文件服务
+AGENTS.md               Agent 开发流程和仓库规范
+docs/STATUS.md          当前实现、遗留问题和下一项验收
 tests/                  规划器、编排器和接口测试
-examples/               两份可导入的软件需求
+examples/               可导入的软件需求与完整分析示例
 docs/API.md             请求与数据结构约定
 docs/DESIGN.md          当前软件开发场景的设计说明
 ```
