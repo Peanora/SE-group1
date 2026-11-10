@@ -67,6 +67,26 @@ LLM_API_KEY=填写服务提供方的密钥
 LLM_MODEL=填写该服务实际支持的模型名称
 ```
 
+### 使用 DeepSeek
+
+项目配置示例已按 2026 年 11 月 10 日的 [DeepSeek 官方接口说明](https://api-docs.deepseek.com/) 设置为：
+
+```dotenv
+LLM_BASE_URL=https://api.deepseek.com
+LLM_API_KEY=在本地填写自己的密钥
+LLM_MODEL=deepseek-flash
+LLM_JSON_MODE=1
+LLM_THINKING=disabled
+LLM_MAX_TOKENS=16384
+LLM_TIMEOUT_MS=120000
+```
+
+在 [DeepSeek 开放平台](https://platform.deepseek.com/) 创建 API Key，只在本地 `.env` 填写。该文件由 Git 忽略；前端和导出文件不会接收密钥。`deepseek-v4-pro` 也可通过修改模型名使用，模型可用性以服务提供方当前说明为准。
+
+执行 `npm run model:check`，会真实调用模型分析一条简短需求，并检查 JSON 结构和原文引用；调用会产生正常 API 用量，终端不会输出密钥。修改 `.env` 后重启服务并刷新前端，即可选择模型模式。
+
+非思考模式用于先验证需求整理链路。`LLM_THINKING` 是 DeepSeek 扩展参数，切换其他兼容服务时应按其文档设置或留空。输出被截断时会明确报错，不把不完整规格当成成功结果。[JSON 输出](https://api-docs.deepseek.com/guides/json_mode/)、[思考模式](https://api-docs.deepseek.com/guides/thinking_mode/)。
+
 `LLM_BASE_URL` 是基础地址，不包含 `/chat/completions`。本地 `localhost`、`127.0.0.1` 模型服务可以不填密钥；远程服务需要密钥。服务启动后会显示模型是否已配置，修改配置后重启服务。
 
 模型收到的是需求文档内容。系统检查模型返回的结构、验收条件和原文引用；无法在原始需求中找到的引用会被拒绝。接口错误不会自动伪装成本地规则成功。密钥只由后端读取，不进入前端配置或导出文档。
@@ -78,6 +98,8 @@ LLM_MODEL=填写该服务实际支持的模型名称
 | `DATA_DIR` | 项目目录下的 `data`，项目与运行记录保存位置。 |
 | `WORKFLOW_STEP_DELAY_MS` | `350`，方便观察阶段变化的演示间隔；设为 `0` 可去除间隔。 |
 | `LLM_JSON_MODE` | `1`，要求服务返回 JSON 对象；服务不支持该参数时可设为 `0`，仍须返回有效 JSON 规格。 |
+| `LLM_THINKING` | 默认不发送；DeepSeek 示例配置为 `disabled`，可设 `enabled`。其他服务不支持时留空。 |
+| `LLM_MAX_TOKENS` | 默认不发送；DeepSeek 示例配置为 `16384`，限制单次输出长度。 |
 | `LLM_TIMEOUT_MS` | `90000`，模型请求超时，程序限制在 1 至 120 秒之间。 |
 
 ## 输入与数据保存
@@ -99,7 +121,7 @@ npm run check
 
 自动化测试使用 Node.js 自带测试工具，测试数据保存在临时目录，不修改用户项目数据。覆盖规划器原文追踪与任务覆盖、DAG 校验、文档文本转义、模型适配器模拟响应，以及后端编排和文件接口。
 
-模型适配器测试通过注入模拟响应验证接口格式、输出校验和错误遮蔽，不会调用真实付费服务。使用自己的模型配置后，可再用同一需求验证真实服务的连通性与输出质量。
+`npm test` 中的模型适配器测试通过注入模拟响应验证接口格式、输出校验和错误遮蔽，不会调用真实付费服务；`npm run model:check` 是独立的真实服务检查。实际验证记录见 [验证记录](docs/VERIFICATION.md)。
 
 ## 项目结构
 
