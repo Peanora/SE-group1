@@ -262,9 +262,24 @@ test('late launch cancellation closes the browser and cannot start a candidate',
 
 test('total time budget interrupts a hanging browser operation and still confirms owned process cleanup', async t => {
   const rootDir = await setup(t);
-  const { service, observed } = adapters({ onGoto: () => new Promise(() => {}) });
+  // Fire the same trusted deadline after reaching the intended owned-resource
+  // boundary. A wall-clock 250ms can expire during snapshot preparation under
+  // the full suite, before there is any browser or runtime to stop.
+  const nativeSetTimeout = globalThis.setTimeout;
+  let fireDeadline, deadlineTriggered = false, enteredNavigation = false;
+  t.mock.method(globalThis, 'setTimeout', (callback, delay, ...args) => {
+    if (delay === 250 && !fireDeadline) {
+      fireDeadline = () => { deadlineTriggered = true; callback(...args); };
+      return nativeSetTimeout(callback, 5000, ...args);
+    }
+    return nativeSetTimeout(callback, delay, ...args);
+  });
+  const { service, observed } = adapters({ onGoto: () => {
+    enteredNavigation = true; queueMicrotask(fireDeadline); return new Promise(() => {});
+  } });
   const report = await service({ rootDir, files, timeoutMs: 250 });
   completeness(report); assert.equal(report.status, 'timed_out');
+  assert.equal(enteredNavigation, true); assert.equal(deadlineTriggered, true); assert.equal(observed.launched, 1);
   assert.equal(report.browser.closed, true); assert.equal(report.terminationConfirmed, true);
   assert.equal(observed.closed, 1); assert.ok(observed.stopped >= 1);
   assert.ok(report.checks.some(item => item.passed === false));
