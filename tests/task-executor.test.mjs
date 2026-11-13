@@ -100,10 +100,13 @@ test('无法确认目标进程停止时保持待协调，不能报告已停止',
 });
 
 test('预检停止未确认也必须待协调，不能误报取消完成', async t => {
+  const controller = new AbortController();
   const record = await (await run(t, async () => replacement(good), {
-    sandbox: { preflight: async () => { throw Object.assign(new Error('未确认'), { reconciliationRequired: true }); }, run: async () => assert.fail() },
+    signal: controller.signal,
+    sandbox: { preflight: async () => { controller.abort(); throw Object.assign(new Error('未确认'), { reconciliationRequired: true }); }, run: async () => assert.fail() },
   })).done;
   assert.equal(record.status, 'reconciliation_required');
+  assert.match(record.error, /停止尚未确认/u);
 });
 
 test('候选替换自身JSON.stringify不能掩盖原地修改；普通进程无法接触观察器', async t => {
@@ -131,4 +134,11 @@ test('后续请求没有用量回执时总量保持未知，保留先前已知�
   assert.equal(record.usage.inputTokens, null);
   assert.deepEqual(record.modelCalls[0].usage, { inputTokens: 10, outputTokens: 20 });
   assert.equal(record.modelCalls[1].usage.outputTokens, null);
+});
+
+test('文件建议被拒绝也保留已经收到的模型用量', async t => {
+  const record = await (await run(t, async () => ({ files: [{ path: '../invalid.mjs', content: good }], usage: { inputTokens: 42, outputTokens: 7 } }))).done;
+  assert.equal(record.status, 'failed');
+  assert.deepEqual(record.usage, { inputTokens: 42, outputTokens: 7 });
+  assert.equal(record.candidateCommit, null);
 });
