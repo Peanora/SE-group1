@@ -30,7 +30,7 @@ function completeness(report) {
 }
 
 // These adapters only exercise infrastructure failure and cleanup. They never emulate a working business application.
-function adapters({ launchError = false, unconfirmed = false, sourceChanged = false, afterLaunch, onGoto } = {}) {
+function adapters({ launchError = false, unconfirmed = false, sourceChanged = false, runtimeExitCode = 0, runtimeStopAcknowledged = true, browserExitCode = 0, afterLaunch, onGoto } = {}) {
   const observed = { launched: 0, closed: 0, started: [], stopped: 0, contexts: [], requests: 0 };
   let connected = true;
   const session = {
@@ -60,7 +60,7 @@ function adapters({ launchError = false, unconfirmed = false, sourceChanged = fa
     },
     async close() {
       observed.closed++; connected = false;
-      return { kind: 'browser', pid: 42, status: 'stopped', terminationConfirmed: true };
+      return { kind: 'browser', pid: 42, status: 'stopped', exitCode: browserExitCode, terminationConfirmed: true };
     },
   };
   const launchBrowser = async () => {
@@ -70,7 +70,8 @@ function adapters({ launchError = false, unconfirmed = false, sourceChanged = fa
   };
   const startRuntime = async options => {
     observed.started.push(options);
-    const record = { pid: 100 + observed.started.length, status: sourceChanged ? 'failed' : 'stopped', terminationConfirmed: !unconfirmed, sourceUnchanged: !sourceChanged };
+    const record = { pid: 100 + observed.started.length, status: sourceChanged ? 'failed' : 'stopped', exitCode: runtimeExitCode,
+      stopAcknowledged: runtimeStopAcknowledged, terminationConfirmed: !unconfirmed, sourceUnchanged: !sourceChanged };
     return { url: `http://localhost:${43000 + observed.started.length}`, request: async () => { observed.requests++; throw new Error('Missing UI must never reach business APIs'); },
       async stop() { observed.stopped++; return record; } };
   };
@@ -103,6 +104,20 @@ test('cancel before launch and malformed proposals never launch a browser or can
   assert.deepEqual(await readdir(rootDir), []);
 });
 
+test('invalid cancellation signals return complete error reports without a cleanup TypeError', async t => {
+  const rootDir = await setup(t), { service, observed } = adapters();
+  for (const signal of [{}, { aborted: false }, null, 'invalid-signal', 0]) {
+    const report = await service({ rootDir, files, signal });
+    completeness(report); assert.equal(report.status, 'error');
+    assert.equal(report.checks.length, 21); assert.ok(report.checks.every(item => item.passed === false));
+    assert.match(report.error, /取消信号无效/u);
+    assert.equal(report.terminationConfirmed, true); assert.equal(report.browser.closed, true);
+    assert.deepEqual(report.processes, []);
+  }
+  assert.equal(observed.launched, 0); assert.equal(observed.started.length, 0);
+  assert.deepEqual(await readdir(rootDir), []);
+});
+
 test('fresh desktop/mobile snapshots do not accept incomplete UI or outside passed declarations', async t => {
   const rootDir = await setup(t), { service, observed } = adapters();
   const report = await service({ rootDir, files, status: 'passed', checks: [{ passed: true }] });
@@ -114,6 +129,7 @@ test('fresh desktop/mobile snapshots do not accept incomplete UI or outside pass
   assert.deepEqual(await readProjectFiles(observed.started[1].workspace), validateProjectFiles(files));
   assert.equal(report.sourceHash, hash(JSON.stringify(validateProjectFiles(files))));
   assert.equal(report.processes.length, 3); assert.equal(report.terminationConfirmed, true); assert.equal(report.browser.closed, true);
+  assert.equal(report.checks.find(item => item.id === 'BROWSER-CLOSE').passed, true, 'normal process cleanup is distinct from failed UI business checks');
   assert.ok(report.checks.filter(item => /LOGIN|BORROW|RETURN|LOGOUT|ADMIN|AUDIT|LAYOUT/u.test(item.id)).every(item => item.passed === false));
   assert.ok(observed.contexts.every(item => item.closed && item.options.serviceWorkers === 'block' && item.options.acceptDownloads === false));
   assert.deepEqual(observed.contexts.map(item => item.options.viewport), [{ width: 1365, height: 900 }, { width: 390, height: 844 }]);
@@ -186,6 +202,16 @@ test('unconfirmed termination or source changes block the final gate', async t =
   }
 });
 
+test('confirmed but abnormal runtime or Edge exits cannot pass the close check', async t => {
+  const rootDir = await setup(t);
+  for (const options of [{ runtimeExitCode: 1 }, { runtimeStopAcknowledged: false }, { browserExitCode: 1 }]) {
+    const { service } = adapters(options), report = await service({ rootDir, files });
+    completeness(report); assert.equal(report.status, 'failed');
+    assert.equal(report.terminationConfirmed, true); assert.equal(report.browser.closed, true);
+    assert.equal(report.checks.find(item => item.id === 'BROWSER-CLOSE').passed, false);
+  }
+});
+
 test('linked root directories are rejected without reading or launching candidate files', async t => {
   const root = await setup(t), actual = path.join(root, 'actual'), linked = path.join(root, 'linked');
   await mkdir(actual); await symlink(actual, linked, process.platform === 'win32' ? 'junction' : 'dir');
@@ -209,10 +235,27 @@ test('real headless Edge and MXC reject simple missing-business HTML, and cancel
   assert.ok(report.checks.filter(item => /-LOGIN$/u.test(item.id)).every(item => item.passed === false));
   assert.deepEqual(report.browser.layouts.map(item => item.width), [1365, 390], 'real isolated observers checked the labelled, focusable incomplete form in both viewports');
   assert.ok(report.processes.every(item => item.terminationConfirmed));
+  assert.equal(report.checks.find(item => item.id === 'BROWSER-CLOSE').passed, true);
   const controller = new AbortController();
   const service = createWebBrowserTestService({ startRuntime: options => startWebRuntime({ ...options, onEvent(event) { if (event.type === 'prepared') controller.abort(); } }) });
   const cancelled = await service({ rootDir, files: incomplete, signal: controller.signal, timeoutMs: 25_000 });
   completeness(cancelled); assert.equal(cancelled.status, 'cancelled');
   assert.equal(cancelled.browser.closed, true); assert.equal(cancelled.terminationConfirmed, true);
   assert.ok(cancelled.processes.every(item => item.terminationConfirmed));
+});
+
+test('real candidate close hang is terminated but cannot pass BROWSER-CLOSE', {
+  skip: process.env.TASKFLOW_TEST_REAL_SANDBOX !== '1', timeout: 40_000,
+}, async t => {
+  const rootDir = await setup(t);
+  // An unresolved Promise alone does not keep Node alive. This owned timer makes forced termination observable.
+  const incomplete = [{ path: 'src/app.mjs', content: `export async function createApp(){return {handle(){return {status:200,headers:{'content-type':'text/html'},body:'<!doctype html><html><head><title>Close hang fixture</title></head><body><h1>No business implementation</h1></body></html>'}},close(){return new Promise(()=>{setInterval(()=>{},1000)})}}}` }];
+  const report = await runWebBrowserTests({ rootDir, files: incomplete, timeoutMs: 30_000 });
+  completeness(report); assert.equal(report.status, 'failed');
+  assert.equal(report.browser.closed, true); assert.equal(report.terminationConfirmed, true);
+  assert.equal(report.checks.find(item => item.id === 'BROWSER-CLOSE').passed, false);
+  const runtimeStops = report.processes.filter(item => item.kind !== 'browser');
+  assert.equal(runtimeStops.length, 2);
+  assert.ok(runtimeStops.every(item => item.terminationConfirmed && item.sourceUnchanged && item.stopAcknowledged === false && item.exitCode !== 0));
+  assert.ok(report.processes.filter(item => item.kind === 'browser').every(item => item.terminationConfirmed && item.exitCode === 0));
 });
