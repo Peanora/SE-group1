@@ -8,6 +8,7 @@ const actionNames = { approve_spec: '确认规格', reject_spec: '退回规格',
 // This editor owns its inputs. Polling updates status without replacing live drafts or focus.
 export function createPlanningReview({ container, getState, submit, refresh, showArtifact, toast }) {
   const drafts = new Map();
+  const reviewModes = new Map();
   let viewKey = '';
   let currentDraft = null;
   let pending = false;
@@ -69,21 +70,24 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     return `<details class="review-history" data-review-details="history"><summary>确认依据与修订历史 <span>${snapshots.length} 次历史修订 / ${decisions.length} 条操作</span></summary><div class="review-approval-grid">${approval('规格确认', run.approvals?.spec, run.specRevision)}${approval('计划确认', run.approvals?.plan, run.planRevision)}</div><div class="review-history-list">${decisions.length ? [...decisions].reverse().map((item) => `<div><strong>${escape(actionNames[item.action] || '审阅操作')}</strong><time>${escape(date(item.at))}</time><p>版本 ${escape(short(item.revision))}${item.specRevision ? ` / 依据规格 ${escape(short(item.specRevision))}` : ''}</p>${item.feedback ? `<blockquote>${escape(item.feedback)}</blockquote>` : ''}</div>`).join('') : '<p class="review-help">尚无审阅操作记录。</p>'}</div>${snapshots.length ? `<h4>已替换版本</h4>${snapshots.map((item, index) => `<details class="review-snapshot" data-review-details="snapshot-${index}"><summary>${item.kind === 'spec' ? '规格' : '计划'}第 ${escape(item.version || '—')} 版 / ${escape(short(item.revision))} / ${escape(date(item.at))}</summary>${item.kind === 'spec' ? `<p>${escape(item.spec?.title || '')}</p><p>${escape(item.spec?.summary || '')}</p>${list((item.spec?.requirements || []).map((r) => `${r.id} ${r.title}：${r.description}`))}${list((item.specQuestions || []).map((q) => `${q.question}：${q.answer || '未答复'}`))}` : list((item.tasks || []).map((task) => `${task.id} ${task.title}：${task.description}`))}</details>`).join('')}` : ''}</details>`;
   }
   function rejected(run, kind, revision) { return (run.decisions || []).some((item) => item.action === `reject_${kind}` && item.revision === revision); }
+  function isSpecRevisionFromPlan(run, kind) { return run.workflowVersion === 2 && run.status === 'awaiting_review' && kind === 'spec'; }
   function syncControls() {
     const { run, busy } = getState();
     if (!run || !currentDraft) return;
     const draft = currentDraft;
     const legacy = run.workflowVersion !== 2;
-    const waiting = legacy ? run.status === 'awaiting_review' : run.status === `awaiting_${draft.kind === 'spec' ? 'spec' : 'review'}`;
+    const revisingSpec = isSpecRevisionFromPlan(run, draft.kind);
+    const waiting = legacy ? run.status === 'awaiting_review' : revisingSpec || run.status === `awaiting_${draft.kind === 'spec' ? 'spec' : 'review'}`;
     const revision = draft.kind === 'spec' ? run.specRevision : run.planRevision;
     const stale = !legacy && (draft.revision !== revision || draft.kind === 'plan' && draft.specRevision !== run.specRevision);
     const unanswered = (run.specQuestions || []).filter((q) => !String(q.answer || '').trim()).length;
     const blocked = !legacy && rejected(run, draft.kind, revision);
     const lock = busy || pending;
     $$('input, textarea, [data-suggest-answer]').forEach((element) => { element.disabled = lock || !waiting; });
+    $$('[data-review-mode]').forEach((button) => { button.disabled = lock; });
     $$('[data-review-action]').forEach((button) => {
       const action = button.dataset.reviewAction;
-      button.disabled = lock || !waiting || stale || (action === 'approve' && !legacy && (draft.dirty || blocked || draft.kind === 'spec' && unanswered > 0)) || (action === 'save' && !draft.dirty);
+      button.disabled = lock || !waiting || stale || (revisingSpec && action !== 'save') || (action === 'approve' && !legacy && (draft.dirty || blocked || draft.kind === 'spec' && unanswered > 0)) || (action === 'save' && !draft.dirty);
     });
     const status = $('#review-draft-status');
     if (status) status.textContent = stale ? `保存版本已变化。当前草稿基于 ${short(draft.revision)}，仍保留原文；请载入最新版本后重新核对。` : draft.dirty ? '有未保存的修订。先保存，再确认新版本。' : blocked ? '本版已退回。请修改并保存为新版本后再确认。' : draft.kind === 'spec' && unanswered ? `还有 ${unanswered} 个问题未答复；填写并保存后才能确认。` : '正在审阅已保存的版本。';
@@ -102,21 +106,24 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     const visible = run && (legacy ? run.status === 'awaiting_review' : !!run.specRevision);
     container.hidden = !visible;
     if (!visible) { viewKey = ''; currentDraft = null; return; }
-    const kind = legacy ? 'legacy' : run.status === 'awaiting_spec' || !run.planRevision ? 'spec' : 'plan';
+    const localMode = run.status === 'awaiting_review' && run.workflowVersion === 2 ? reviewModes.get(run.id) || 'plan' : '';
+    const kind = legacy ? 'legacy' : run.status === 'awaiting_spec' || !run.planRevision || localMode === 'spec' ? 'spec' : 'plan';
     const draft = getDraft(run, kind);
     currentDraft = draft;
-    const signature = `${run.id}:${kind}:${run.status}:${run.specRevision}:${run.planRevision}:${run.decisions?.length || 0}`;
+    const signature = `${run.id}:${kind}:${localMode}:${run.status}:${run.specRevision}:${run.planRevision}:${run.decisions?.length || 0}`;
     if (signature === viewKey) { syncControls(); return; }
     viewKey = signature;
     const focused = container.contains(document.activeElement) ? document.activeElement : null;
     const focusName = focused?.dataset.reviewField;
     const selection = focusName ? [focused.selectionStart, focused.selectionEnd] : null;
-    const active = legacy ? true : run.status === (kind === 'spec' ? 'awaiting_spec' : 'awaiting_review');
+    const revisingSpec = isSpecRevisionFromPlan(run, kind);
+    const active = legacy ? true : revisingSpec || run.status === (kind === 'spec' ? 'awaiting_spec' : 'awaiting_review');
     const revision = kind === 'spec' ? run.specRevision : run.planRevision;
     const version = kind === 'spec' ? run.specVersion : run.planVersion;
-    container.innerHTML = `<div class="review-intro"><span class="review-check" aria-hidden="true">${active ? '?' : '✓'}</span><div><h3 id="review-heading">${legacy ? '旧版记录：开发计划等待审阅' : active ? kind === 'spec' ? '先确认规格，再生成开发计划' : '开发计划已生成，请确认后导出' : '本次运行的确认与修订记录'}</h3><p>${legacy ? '这条记录沿用旧版流程；本次确认仅用于导出规划文档。' : active ? '修改与确认分开记录，每次确认只对所显示的保存版本有效。' : '这里保留真实确认依据。开发任务仍需后续编码与验收。'}</p></div><button type="button" class="text-button" data-review-document="${kind === 'spec' ? 'spec.md' : 'task.md'}">${kind === 'spec' ? '查看规格文档' : '查看任务文档'}</button></div>
+    container.innerHTML = `<div class="review-intro"><span class="review-check" aria-hidden="true">${active ? '?' : '✓'}</span><div><h3 id="review-heading">${legacy ? '旧版记录：开发计划等待审阅' : revisingSpec ? '修订已确认规格' : active ? kind === 'spec' ? '先确认规格，再生成开发计划' : '开发计划已生成，请确认后导出' : '本次运行的确认与修订记录'}</h3><p>${legacy ? '这条记录沿用旧版流程；本次确认仅用于导出规划文档。' : revisingSpec ? '保存新规格会使现有规格确认和开发计划失效。你需要重新确认规格，再生成并确认计划。' : active ? '修改与确认分开记录，每次确认只对所显示的保存版本有效。' : '这里保留真实确认依据。开发任务仍需后续编码与验收。'}</p></div><button type="button" class="text-button" data-review-document="${kind === 'spec' ? 'spec.md' : 'task.md'}">${kind === 'spec' ? '查看规格文档' : '查看任务文档'}</button></div>
+      ${localMode ? `<div class="review-plan-basis"><button type="button" class="text-button" data-review-mode="${revisingSpec ? 'plan' : 'spec'}">${revisingSpec ? '返回计划审阅' : '返回规格修订'}</button><p>${revisingSpec ? '尚未保存的规格草稿不会改变已确认规格。返回计划审阅时，两份草稿都会保留。' : '发现规格问题可返回修订。切换视图会保留尚未保存的计划和规格草稿。'}</p></div>` : ''}
       ${legacy ? '' : `<ol class="review-steps"><li class="${run.approvals?.spec?.revision === run.specRevision ? 'confirmed' : kind === 'spec' ? 'current' : ''}"><span>1</span><div><strong>确认规格</strong><small>第 ${escape(run.specVersion || 1)} 版 / ${escape(short(run.specRevision))}</small></div></li><li class="${run.approvals?.plan?.revision === run.planRevision && run.planRevision ? 'confirmed' : kind === 'plan' && active ? 'current' : ''}"><span>2</span><div><strong>确认开发计划</strong><small>${run.planRevision ? `第 ${escape(run.planVersion || 1)} 版 / ${escape(short(run.planRevision))}` : '规格确认后生成'}</small></div></li></ol><p class="review-version">${kind === 'spec' ? '规格' : '计划'}第 ${escape(version || 1)} 版 / ${escape(short(revision))}${run.sourceRevision ? ` / 需求快照 ${escape(short(run.sourceRevision))}` : ''}</p>`}
-      ${active ? `${legacy ? '' : `<div class="review-editor">${kind === 'spec' ? specEditor(run, draft) : planEditor(run, draft)}</div>`}<div class="review-feedback-area">${field('审阅意见（退回修改时必填）', 'feedback', draft.feedback, { multiline: true, rows: 2, max: 4000 })}</div><p id="review-action-error" class="inline-error" role="alert" hidden></p><div class="review-bottom"><div><p id="review-draft-status" class="review-help" aria-live="polite"></p><button type="button" id="review-load-current" class="text-button" hidden>放弃本地草稿，载入最新版本</button></div><div class="review-actions">${legacy ? '' : '<button type="button" class="button button-outline" data-review-action="reject">退回修改</button><button type="button" class="button button-outline" data-review-action="save">保存修订</button>'}<button type="button" class="button button-primary" id="approve-button" data-review-action="approve">确认</button></div></div>` : ''}
+      ${active ? `${legacy ? '' : `<div class="review-editor">${kind === 'spec' ? specEditor(run, draft) : planEditor(run, draft)}</div>`}<div class="review-feedback-area">${field(revisingSpec ? '规格修订说明（选填）' : '审阅意见（退回修改时必填）', 'feedback', draft.feedback, { multiline: true, rows: 2, max: 4000 })}</div><p id="review-action-error" class="inline-error" role="alert" hidden></p><div class="review-bottom"><div><p id="review-draft-status" class="review-help" aria-live="polite"></p><button type="button" id="review-load-current" class="text-button" hidden>放弃本地草稿，载入最新版本</button></div><div class="review-actions">${legacy ? '' : `${revisingSpec ? '' : '<button type="button" class="button button-outline" data-review-action="reject">退回修改</button>'}<button type="button" class="button ${revisingSpec ? 'button-primary' : 'button-outline'}" data-review-action="save">保存修订</button>`}${revisingSpec ? '' : '<button type="button" class="button button-primary" id="approve-button" data-review-action="approve">确认</button>'}</div></div>` : ''}
       ${legacy ? '' : history(run)}`;
     $$('[data-review-details]').forEach((details) => {
       if (draft.opened.includes(details.dataset.reviewDetails)) details.open = true;
@@ -179,6 +186,8 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     const draft = currentDraft;
     if (!run || !draft || busy || pending) return;
     const legacy = run.workflowVersion !== 2;
+    const revisingSpec = isSpecRevisionFromPlan(run, draft.kind);
+    if (revisingSpec && action !== 'save') return;
     draft.error = '';
     if (action === 'reject' && !draft.feedback.trim()) {
       draft.error = '请在审阅意见中说明需要修改的位置和原因。'; persist(draft); syncControls(); $('[data-review-field="feedback"]')?.focus(); return;
@@ -203,6 +212,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     try {
       const savedRun = await submit(apiAction, payload);
       if (action === 'save' || action === 'approve') clearDraft(draft);
+      if (revisingSpec && action === 'save') reviewModes.delete(run.id);
       viewKey = ''; render();
       toast(action === 'save' ? '修订已保存，请核对新版本后单独确认' : action === 'reject' ? '已退回，请修改并保存为新版本' : legacy || draft.kind === 'plan' ? '已确认计划，正在导出规划文档' : '已确认规格，正在生成开发计划');
       return savedRun;
@@ -212,6 +222,15 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     } finally { pending = false; syncControls(); }
   }
   container.addEventListener('click', (event) => {
+    const modeButton = event.target.closest('[data-review-mode]');
+    if (modeButton) {
+      const { run, busy } = getState();
+      if (modeButton.disabled || pending || busy || run?.workflowVersion !== 2 || run.status !== 'awaiting_review') return;
+      reviewModes.set(run.id, modeButton.dataset.reviewMode);
+      if (currentDraft) persist(currentDraft);
+      render(); $('#review-heading')?.scrollIntoView({ block: 'nearest' });
+      return;
+    }
     const button = event.target.closest('[data-review-action]');
     if (button && !button.disabled) { act(button.dataset.reviewAction); return; }
     const documentButton = event.target.closest('[data-review-document]');
