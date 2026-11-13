@@ -55,3 +55,21 @@
 临时可信探针验证了无网络MXC内的持久stdin/stdout应用进程和SQLite，宿主独立localhost随机端口HTTP代理可以转发请求，完整停止重启后数据保留；源码只读，数据库和日志/WAL等仅写.platform/tmp。该探针仅echo和消息表，不能作为借阅业务或平台全栈完成证据。
 
 下一阶段将平台固定worker与生成的src/app.mjs接口分离：候选导出createApp({databasePath})和handle(request)，平台只转发有界HTTP消息，不接受候选提出宿主命令/路径/验收结果。独立测试在另一个Git快照、独立数据库运行HTTP/浏览器断言；Review仍独立读取同版本源码。预览使用单独来源、固定CSP和头部过滤，不转发平台凭证；支持的首版为普通HTTP、非WebSocket/流式。
+
+### 里程碑2：固定全栈参考项目正向验收
+
+私有有界模型回执已实现，回执先保存再检查结构，异常结束不重试。第二次真实编码（`web-execution-NuWIDQ`）有回执证明`finishReason:length`、输入2068/输出8192，0候选/0Review，未接受截断文件。根据该证据将编码单次输出上限改为16384，Review仍4096；未改本地全局配置，也不把首轮无回执失败追认成截断。
+
+第三次真实执行（平台`702d318`，`web-execution-v5O9ne`）用1次编码产生4个源码文件和真实提交`5dc88cd31f0aa7649458a58ab386e23d3ff1e6a2`，sourceHash为`00765b4558a856cd9d6cee773c2abaf41e4c24c37aac4f5ca0ebd89221d79211`。18项HTTP/SQLite自检及18项独立检查通过；浏览器19/21，独立Review响应行号与逐字证据不一致，因此原报告保持failed。该轮编码+Review输入13444/输出9649，不删除失败历史。
+
+两项失败分别核实后修复平台：正常匿名`GET /api/me`返回401会产生浏览器网络诊断，但页面已处理并展示登录；只允许每个视口登录成功前的一次准确请求，必须由受信CDP请求编号关联真实401与原生网络日志。显式console.error、其它请求、重复401、登录后401、页面错误和日志超限仍失败。Review模型改为接收程序提供的行号与原始行文本，严格证据验证不放宽、不自动移位。两项修复均经过独立专项检查。
+
+复验组件`254be25`经独立15/15真实MXC专项及只读Review通过后，集成为`9a07615`。根控制器实际调用`node scripts/recheck-web.mjs --record <原报告> --run --model-review`：只建新快照，编码0次、Review1次，输入17628/输出510。新记录`output/web-executions/web-recheck-HSll13/execution.json`在同一原提交下重新完成自检18/18、独立HTTP/SQLite18/18、Edge21/21、新Review completed且blocking0，`accepted/taskAccepted:true`；7个应用/浏览器进程均正常停止、退出0，原报告哈希和原Git/源码保持一致。3项advisory保留：copies数字字符串处理、异常库存夹紧和管理员列表标签，未宣称所有建议已关闭。
+
+本阶段Web真实请求共5次：三次编码、两次Review；首个无回执请求用量未知，因此总用量保持未知，不能将其当成0。可核对的后4次合计输入33140/输出18351。复验继承代码来源而不重复计算旧编码费用；没有重新运行付费连通性探针。
+
+源码交付与归档组件`62c745d`及`5522f43`分别独立复验8/8真实MXC/Edge后集成。首包`s3nCQJ`包含20文件、无数据库/平台密钥/私有回执；`web:verify`对同一源码重新完成HTTP18+浏览器21。干净目录实际`npm ci --ignore-scripts --no-audit --no-fund`、`npm start`，真实浏览器完成alice登录、借阅库存减为0、归还恢复1；STOP_CONFIRMED、进程退出0、61913不再监听。截图获取失败，不把图片列为验证证据。最终交付元数据改为与planRevision严格同形的原始计划快照，另生成`output/live-web-delivery-3lVPQC/library-web-source.zip`（源码完全相同），最终包验证另见VERIFICATION。
+
+固定平台`d1169c1`首次整体测试267项中266通过：超时测试把整个准备阶段限制为80ms，满负载时在启动前已超时，却断言已启动进程必须stop，暴露测试阶段不确定性。`9594fba`仅调整可信测试计时：在指定启动/请求已进入后触发相同超时回调，额外断言确实到达该阶段；未改变生产超时或放宽停止要求。该版61脚本、真实MXC的267/267通过、0失败/取消/跳过；日志`output/verification/web-live-integrated-retest.log`。后续固定集成的独立复验待补，不将自检写成独立结论。
+
+当前验收只覆盖固定`library-web-v1`，不是任意上传需求生成、完整复杂业务、多Worker或全部E01-E09完成。网页执行服务、真实DTO面板、通用声明式验收及事务任务存储继续推进；主树仍未新增网页执行路由。未推送或部署，用户data及原服务未改。

@@ -93,3 +93,17 @@ approvals为`{spec:null|{revision,at,feedback},plan:null|{revision,specRevision,
 ### 现有规划记录
 
 规格和原始需求在运行中冻结。再次运行创建新 run_id，重试保持同一运行且递增 attempt。输出归属当前运行；只有成功的阶段发布产物。服务重启时将中断运行转为 failed，用户可重试，无自动恢复承诺。配置 `.env` 在启动时读取，密钥只保存在服务端。
+
+### 多文件Web执行、复验与源码交付
+
+以下为可信内部组件及命令入口，尚无对应网页执行HTTP路由；既有规划下载仍是文档包。
+
+- `startWebExecution({outputDir,binding,provider,reviewer,providerKind?,reviewerKind?,executable?,signal?,maxCalls?,maxReviewCalls?,timeoutMs?,onEvent?,assertCurrent?})`返回`{id,cancel,done,snapshot}`。任务固定为`library-web-v1`，调用方提供project/run/task及spec/plan版本；候选增加attempt、Git提交、sourceHash、HTTP/browser清单与Review策略哈希。CLI为`npm run web:check -- --model`，默认编码/Review各3次、共600秒。
+- 允许最多60个、单文件128KiB、合计2MiB的文本源码文件，仅开放`src/public/migrations/tests/docs`及根README。package、lock、server、runtime和平台入口由控制器保护。模型不提交Shell命令、环境或验收结论。应用仅导出受保护worker约定的`createApp/handle`；候选仅在MXC内运行，不在宿主导入。
+- 新候选先完成18项HTTP/SQLite自检，再并行运行全新独立HTTP/SQLite、21项Edge和Review。每次修复形成新Git提交并重检。`isWebTaskAccepted`统一检查当前身份、完整清单、数据库观察、正常进程停止和Review阻塞；fixture/diagnostic不能通过真实验收。
+- 编码和Review适配器支持私有`onReceipt({model,finishReason,usage,content})`。回执在结构检查前保存并有大小限制；异常结束、凭据回显、存储失败不升级为有效建议。仅纯格式错误允许在原次数预算内纠正一次；未知用量保持null。Review接收平台生成的逐行编号，返回行号及逐字证据必须一致。
+- `inspectWebRecheckSource({executionRoot,sourceReportPath,signal?})`只读核对可信根内原`web-execution-*`记录、模型回执、当前Git blob/HEAD/干净状态、源码及保护外壳。`startWebRecheck({...上述来源,reviewer,reviewerKind?,executable?,signal?,timeoutMs?,maxReviewCalls?,onEvent?,assertCurrent?})`只建同源新快照，不改原Git或原报告；编码调用0，模型用量只计本次新Review。所有检查重新运行，最后仍调用同一完整门禁。命令默认为只读，付费模式须同时`--run --model-review`。详见[复验协议](tasks/web-recheck.md)。
+- `createWebDelivery({files,binding,report,requirements,spec,plan})`只接受当前同版本完整通过结论，返回`{zip,manifest}`。包包含源码、保护外壳、需求/规格/计划及白名单验收摘要；排除数据库、真实.env、原始模型回执和私有日志。manifest逐文件哈希，不把归档历史声明当作新验收。
+- `inspectWebArchive(bytes)`有界检查平台ZIP格式、路径、CRC、清单与当前保护外壳；不在宿主导入包内代码。`revalidateWebArchive({archiveFile,outputDir,executable?,signal?,timeoutMs?})`在新副本执行固定HTTP/SQLite与Edge，默认120秒、上限600秒。成功为`checks_passed/taskAccepted:false/historicalAcceptanceVerified:false`，表示本次检查通过，未获得新的模型Review。命令为`npm run web:verify -- --archive <路径>`。
+
+停止请求与停止确认分开：源变化、预算耗尽或取消停止新阶段；未确认进程退出时保留PID和控制/预检目录，标为`reconciliation_required`。当前CLI仍无多Worker认领、后台恢复或任意需求执行承诺。

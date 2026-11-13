@@ -127,3 +127,17 @@ passed只表示固定`library-borrow-v1`在当前清单和Review规则下通过�
 - 只读Review对同版本复核三项原阻塞问题，无新增阻塞。初始`136981c`虽98项通过，仍被独立检查驳回，保留于任务记录。
 - 真实桌面/390×844浏览器：规格与计划各自驳回/修订/确认、非法依赖错误、草稿重载与两表单切换、从计划回修规格使旧确认失效、旧计划草稿版本拦截、实际下载7文件文档包。控制台无错误/警告，窄屏无横向溢出。
 - 本轮未运行真实模型，未访问用户data；仅临时验收数据和下载在忽略的output下，所有临时服务已停止。当前文档ZIP仍是规划包，不是目标软件源码交付。
+
+## 2026年11月14日：固定全栈参考项目与实际源码交付
+
+具体所有尝试及修复理由见[tasks/platform-completion.md](tasks/platform-completion.md)。平台先后出现无有效JSON、输出8192截断、正常匿名401误报及Review行号无效；全部保留原失败记录，没有把旧失败改成通过。第三次真实编码生成的原提交为`5dc88cd31f0aa7649458a58ab386e23d3ff1e6a2`，四个源码文件由模型提出，经受控工作区应用及固定Git提交。
+
+平台`9a07615`重新检查该原提交，新记录`output/web-executions/web-recheck-HSll13/execution.json`：自检18/18、独立HTTP/SQLite18/18、实际Edge浏览器21/21，独立模型Review完成、blocking0/advisory3，统一门禁accepted/taskAccepted:true。该次编码0/Review1，17628输入/510输出；原模型来源与旧用量只保存在provenance，不重复计量。所有实际应用及浏览器进程均正常停止。复验组件固定`254be25`曾由另一Agent独立运行15/15真实MXC专项及只读来源核对，未调用付费模型。
+
+平台`9594fba`自检：`npm run check`61脚本；显式启用真实MXC的`npm test`267/267通过，fail/cancel/skip均0，60671.6563ms。前一固定集成`d1169c1`267项有1项测试失败，已按实际阶段修复可信超时测试，不改生产验收器或业务断言。原日志及复测日志分别为`output/verification/web-live-integrated-test.log`和`web-live-integrated-retest.log`。
+
+实际源码包包含20文件及当前保护外壳，spec使用原webProfile.task对象，plan使用`{profileId,web,browser}`原始对象，与两个绑定hash一致。记录不包含真实密钥、用户数据库、私有绝对路径日志或原模型回执。首包`s3nCQJ`的源码已重新通过HTTP18/18与浏览器21/21，干净解压后安装和npm start退出0，真实浏览器登录→借阅→归还成功；停止得到STOP_CONFIRMED，端口61913无监听。该包计划元数据后来收敛为原始计划对象，最终包`output/live-web-delivery-3lVPQC/library-web-source.zip`，SHA256为`435f9d4fa02cb5edf31f68166a5cd064e4db7fdf3d3daf4c08c090124bedf682`；源码hash仍为`00765b4558a856cd9d6cee773c2abaf41e4c24c37aac4f5ca0ebd89221d79211`。
+
+最终包实际`npm run web:verify -- --archive <路径>`再次HTTP18/18、Edge21/21通过，报告`output/delivery-verification/delivery-revalidation-e5rxxp/revalidation.json`。解压到新的clean-start目录，npm ci不运行安装脚本；npm start使用交付保护入口，7项实际检查通过：全部交付文件bytes/hash、规格/计划hash、HTML入口、alice登录、借阅库存减为0、归还恢复1、登出使会话401。记录`output/live-web-delivery-3lVPQC/clean-start-smoke.json`。输入STOP后STOP_CONFIRMED且启动进程退出0，端口49721不再监听；测试数据库仅留该忽略目录。未将目标模块导入宿主，未请求外网或新增模型调用。
+
+归档复验命令不调用模型，`checks_passed/taskAccepted:false/historicalAcceptanceVerified:false`仅表示新检查，不相信ZIP中的历史通过声明，也不产生新Review。当前仍是固定图书借阅参考范围，不宣称通用执行、需求变更、多Agent集成或全部PRD完成。
