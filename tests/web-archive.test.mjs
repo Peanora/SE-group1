@@ -4,9 +4,11 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 import { createZip } from '../lib/zip.mjs';
 import { inspectWebArchive, revalidateWebArchive } from '../lib/web-archive.mjs';
-import { getWebShellFiles } from '../lib/web-delivery.mjs';
+import { createWebDelivery, getWebShellFiles } from '../lib/web-delivery.mjs';
+import { webProfile } from '../lib/web-profile.mjs';
 import { webManifest, databaseObserverHash } from '../lib/web-tests.mjs';
 import { browserManifest } from '../lib/web-browser-tests.mjs';
 import { projectReviewPolicy } from '../lib/project-review-model.mjs';
@@ -39,6 +41,20 @@ async function temporary(t) {
   return directory;
 }
 
+async function productionPackage(content) {
+  const input = await fixture(), files = input.files.map(file => file.path === 'src/app.mjs' ? { ...file, content } : file);
+  const binding = { ...input.manifest.binding, sourceHash: hash(JSON.stringify(files)) };
+  const runtime = { status: 'stopped', terminationConfirmed: true, sourceUnchanged: true, exitCode: 0, stopAcknowledged: true };
+  // Synthetic trusted receipts exercise archive encoding only, never business acceptance.
+  const result = manifest => ({ status: 'passed', profileId: webProfile.id, sourceHash: binding.sourceHash, manifestHash: manifest.hash,
+    binding: { ...binding }, checks: manifest.checks.map(check => ({ ...check, passed: true })), terminationConfirmed: true, processes: [runtime, runtime] });
+  return createWebDelivery({ files, binding, requirements: '# Encoding round trip only', spec: { title: 'encoding test' }, plan: { tasks: ['encoding'] },
+    report: { status: 'passed', binding: { ...binding }, test: { ...result(webManifest), databasePreflights: [], databaseCommands: [0, 1].map(() => ({
+      kind: 'database_observation', runnerHash: databaseObserverHash, sourceHash: binding.sourceHash, exitCode: 0, terminationConfirmed: true, stopReason: null, truncated: false,
+    })) }, browser: { ...result(browserManifest), browser: { version: '157.0.4341.46', closed: true }, processes: [runtime, runtime, { kind: 'browser', status: 'stopped', terminationConfirmed: true, exitCode: 0 }] },
+      review: { status: 'completed', binding: { ...binding }, policyHash: projectReviewPolicy.hash, openBlockingIssues: 0 } } });
+}
+
 test('archive integrity never elevates an archived passed claim to trusted acceptance', async () => {
   const input = await fixture(), bytes = input.pack(), result = await inspectWebArchive(bytes);
   assert.equal(result.integrityVerified, true); assert.equal(result.historicalAcceptanceVerified, false);
@@ -55,6 +71,18 @@ test('archive checks CRC, complete manifest hashes, source identity and protecte
   hostile.find(file => file.path === 'server.mjs').content = 'throw new Error("hostile launcher");';
   data.files = hostile.map(file => ({ path: file.path, bytes: Buffer.byteLength(file.content), sha256: hash(file.content) }));
   await assert.rejects(inspectWebArchive(input.pack(hostile, data)), /保护外壳/);
+});
+
+test('production archive round trip preserves a legal source BOM and rejects BOM-masked launcher names or bytes', async () => {
+  const source = `\uFEFF${sources()[0].content}`, created = await productionPackage(source);
+  const decoded = await inspectWebArchive(created.zip);
+  assert.equal(decoded.files.find(file => file.path === 'src/app.mjs').content, source);
+  const input = await fixture();
+  const renamed = input.payload.map(file => file.path === 'server.mjs' ? { ...file, path: '\uFEFFserver.mjs' } : file);
+  await assert.rejects(inspectWebArchive(input.pack(renamed)));
+  const changed = input.payload.map(file => file.path === 'server.mjs' ? { ...file, content: `\uFEFF${file.content}` } : file), manifest = structuredClone(input.manifest);
+  manifest.files = changed.map(file => ({ path: file.path, bytes: Buffer.byteLength(file.content), sha256: hash(file.content) }));
+  await assert.rejects(inspectWebArchive(input.pack(changed, manifest)), /保护外壳/);
 });
 
 test('archive rejects unsupported compression, symlink attributes, trailing data and ambiguous paths', async () => {
@@ -86,6 +114,36 @@ test('cancelled archive verification creates no snapshots and linked output pare
   await symlink(target, path.join(root, 'alias'), process.platform === 'win32' ? 'junction' : 'dir');
   await assert.rejects(revalidateWebArchive({ archiveFile, outputDir: path.join(root, 'alias', 'must-not-exist') }), /链接/);
   assert.deepEqual(await readdir(target), []);
+});
+
+test('preparation shares the total deadline and a late shell lookup cannot start checks or create output', async t => {
+  const root = await temporary(t), input = await fixture(), archiveFile = path.join(root, 'fixture.zip');
+  await writeFile(archiveFile, input.pack());
+  const script = `
+    import {mock} from 'node:test';import {access} from 'node:fs/promises';
+    const deliveryUrl=${JSON.stringify(new URL('../lib/web-delivery.mjs', import.meta.url).href)};
+    const testsUrl=${JSON.stringify(new URL('../lib/web-tests.mjs', import.meta.url).href)};
+    const browserUrl=${JSON.stringify(new URL('../lib/web-browser-tests.mjs', import.meta.url).href)};
+    const shell=await (await import(deliveryUrl)).getWebShellFiles(),actualTests=await import(testsUrl),actualBrowser=await import(browserUrl);
+    let calls=0;const output=${JSON.stringify(path.join(root, 'must-not-exist'))};
+    mock.module(deliveryUrl,{namedExports:{getWebShellFiles:async()=>{await new Promise(resolve=>setTimeout(resolve,200));return shell;}}});
+    mock.module(testsUrl,{namedExports:{webManifest:actualTests.webManifest,databaseObserverHash:actualTests.databaseObserverHash,runWebTests:async()=>{calls++;return {status:'passed',terminationConfirmed:true};}}});
+    mock.module(browserUrl,{namedExports:{browserManifest:actualBrowser.browserManifest,runWebBrowserTests:async()=>{calls++;return {status:'passed',terminationConfirmed:true};}}});
+    const {revalidateWebArchive}=await import(${JSON.stringify(new URL('../lib/web-archive.mjs', import.meta.url).href)});
+    const started=Date.now();let code;try{await revalidateWebArchive({archiveFile:${JSON.stringify(archiveFile)},outputDir:output,timeoutMs:20});}catch(error){code=error.code;}
+    const duration=Date.now()-started;await new Promise(resolve=>setTimeout(resolve,250));let exists=true;try{await access(output);}catch{exists=false;}
+    process.stdout.write(JSON.stringify({code,calls,duration,exists}));
+  `;
+  const result = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--experimental-test-module-mocks', '--input-type=module'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    const timer = setTimeout(() => { child.kill(); reject(new Error('trusted preparation probe timed out')); }, 5000);
+    child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
+    child.on('error', reject); child.on('close', code => { clearTimeout(timer); if (code !== 0) reject(new Error(stderr)); else { try { resolve(JSON.parse(stdout)); } catch { reject(new Error(stderr + stdout)); } } });
+    child.stdin.end(script);
+  });
+  assert.equal(result.code, 'timed_out'); assert.equal(result.calls, 0); assert.equal(result.exists, false);
+  assert.ok(result.duration < 190);
 });
 
 test('real clean-snapshot archive checks reject wrong business despite forged archived passed and npm tests', {
