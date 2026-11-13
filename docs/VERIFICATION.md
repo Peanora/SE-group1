@@ -88,3 +88,15 @@
 候选`49acfc9`同版本独立测试25个脚本、52/52通过，独立静态Review确认原P1关闭且无新增阻塞问题。末轮同时落实两项非阻塞建议：取消后停止尚未确认的文字保持待协调，模型文件建议无效时也保留已收到的用量。主Agent在真实MXC测试开启时复验53/53通过、0失败/跳过。
 
 最终代码提交`eb2ee9fb004ac83202609e2c138042d63fac49fa`：独立测试再次运行`npm run check`及显式真实MXC的`npm test`，25个脚本、53/53测试通过、0跳过，`git diff --check`通过；同版本静态Review通过，无阻塞项。两方检查期间及结束时工作区干净。随后仅提交验证记录，无源码变化；未再次调用付费模型。
+
+## 同候选版本独立测试与Review门禁
+
+2026年11月14日，基于`05cd2a0`继续固定纯函数任务的正式验收门禁，未改变浏览器规划HTTP/界面。
+
+主Agent执行`npm run check`：31个脚本通过；显式启用真实MXC后`npm test`：85/85通过、0失败/跳过。新回归覆盖独立测试重新执行、双副本与同候选绑定、缺失/错误Review、两分支全部收尾、候选/快照失效、取消及停止未确认、历史问题必须明确复验、新提交重跑两方、当前规则/角色校验、共享预算与未知用量。普通测试不请求付费服务；三个MXC测试为显式集成测试。
+
+`npm run execution:check -- --fixture`真实执行固定候选，自检与独立测试通过，模拟Review诊断通过但taskAccepted:false。真实MXC回归另验证两候选返工、旧问题显式复验及测试/Review重新检查，仍标诊断。
+
+`npm run execution:check -- --model`真实联调完成：1次编码、1次独立Review请求，候选提交`d905ed0776887f745eca85ce8c942dcd6bb1c282`，自检13/13、独立测试13/13，Review无阻塞意见，accepted/passed、taskAccepted:true。执行记录为本地`output/executions/execution-Fs5URC/execution.json`；两方独立结论为`acceptance/validation-g9YhCH/acceptance.json`，使用同一candidate binding和不同快照目录。此轮共2次真实模型请求，未重新调用model:check。
+
+passed只表示固定`library-borrow-v1`在当前清单和Review规则下通过。测试侧是固定验证服务，不是自主生成测试的Agent；没有验证任意仓库、完整全栈、集成提交交付或多Worker恢复。浏览器无修改，未重复浏览器操作；无新增依赖、无数据迁移、未推送/部署。独立源码审查和提交后的复验另见本轮任务记录。

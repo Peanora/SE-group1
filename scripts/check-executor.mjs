@@ -5,6 +5,8 @@ import { loadEnv } from '../server.mjs';
 import { createCodeModel } from '../lib/code-model.mjs';
 import { createWindowsSandbox } from '../lib/windows-sandbox.mjs';
 import { startTaskExecution } from '../lib/task-executor.mjs';
+import { createReviewModel } from '../lib/review-model.mjs';
+import { isTaskAccepted } from '../lib/candidate-acceptance.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -16,9 +18,10 @@ if (args.length !== 1 || !['--model', '--fixture'].includes(args[0])) {
   const fixture = args[0] === '--fixture';
   const provider = fixture ? async () => ({ files: [{ path: 'src/borrow.mjs', content: await readFile(path.join(root, 'examples/library-borrow.fixture.mjs'), 'utf8') }], usage: { inputTokens: null, outputTokens: null } }) : createCodeModel();
   const sandbox = createWindowsSandbox();
+  const reviewer = fixture ? async () => ({ summary: '可信固定Review诊断；不代表真实模型审查。', issues: [], resolutions: [], model: 'diagnostic', usage: {} }) : createReviewModel();
   const execution = startTaskExecution({
     outputDir: path.resolve(process.env.EXECUTION_OUTPUT_DIR || path.join(root, 'output', 'executions')),
-    provider, sandbox, providerKind: fixture ? 'trusted_fixture' : 'model', maxCalls: fixture ? 1 : 2, timeoutMs: 180_000,
+    provider, sandbox, reviewer, reviewerKind: fixture ? 'diagnostic' : 'model', providerKind: fixture ? 'trusted_fixture' : 'model', maxCalls: fixture ? 1 : 2, timeoutMs: 180_000,
     onEvent: item => console.log(`[${item.sequence}] ${item.message}`),
   });
   const stop = () => { console.log('已请求停止，等待执行退出确认。'); execution.cancel(); };
@@ -26,10 +29,11 @@ if (args.length !== 1 || !['--model', '--fixture'].includes(args[0])) {
   try {
     const record = await execution.done;
     // This evidence label distinguishes model execution from trusted diagnostic fixtures.
-    console.log(JSON.stringify({ mode: fixture ? 'trusted_fixture' : 'model', status: record.status, calls: record.calls,
+    console.log(JSON.stringify({ mode: fixture ? 'trusted_fixture' : 'model', status: record.status, calls: record.calls, reviewCalls: record.reviewCalls, totalModelCalls: record.totalModelCalls,
       baseCommit: record.baseCommit, candidateCommit: record.candidateCommit, report: record.reportPath,
       checksPassed: record.versions.at(-1)?.check?.checks.filter(item => item.passed).length ?? 0,
-      checksTotal: record.validationManifest.count, acceptanceStatus: record.acceptanceStatus, error: record.error }, null, 2));
-    if (record.status !== 'executed') process.exitCode = 1;
+      checksTotal: record.validationManifest.count, acceptanceStatus: record.acceptanceStatus, taskAccepted: isTaskAccepted(record),
+      acceptanceReport: record.versions.at(-1)?.acceptance?.reportPath, error: record.error }, null, 2));
+    if (!(fixture ? record.acceptanceStatus === 'diagnostic_passed' : isTaskAccepted(record))) process.exitCode = 1;
   } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
 }
