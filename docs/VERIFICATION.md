@@ -118,7 +118,7 @@ passed只表示固定`library-borrow-v1`在当前清单和Review规则下通过�
 独立检查136981c虽然98/98通过，另58项真实HTTP检查也通过，但新复现证明执行中提前确认409会替换stage引用并导致后续失败，Review另发现删掉未答问题可绕过门禁和计划页缺少规格回修入口，因此该版未放行。修复仅在静止阶段保存回滚快照、禁止删改未答问题、增加规格回修表单路径。补在途HTTP和问题删除回归后，主Agent34个脚本语法及显式真实MXC的100/100测试通过。
 
 修复后的浏览器第二运行：计划审阅返回规格修订时只有保存动作，两类草稿往返保留；保存后规格确认清空且旧计划失效；重新确认规格并生成新计划后，本地旧计划草稿禁止确认，载入新版本后才可确认导出。原已完成运行和历史保持可查看，控制台error/warn为空，没有新增模型调用。新提交独立复验结果见持续任务记录。
-# 2026年11月14日：规格和计划双确认验收
+## 2026年11月14日：规格和计划双确认验收
 
 固定代码版本：`456cb1a944bf5833a18e7098339f3748588d2c17`，`codex/platform-completion`，Node v22.21.0。检查期间未改候选，起止工作区干净。
 
@@ -143,3 +143,11 @@ passed只表示固定`library-borrow-v1`在当前清单和Review规则下通过�
 归档复验命令不调用模型，`checks_passed/taskAccepted:false/historicalAcceptanceVerified:false`仅表示新检查，不相信ZIP中的历史通过声明，也不产生新Review。当前仍是固定图书借阅参考范围，不宣称通用执行、需求变更、多Agent集成或全部PRD完成。
 
 固定主集成`a3e7de653d6d75adf0bba3345c28bfe9a06ca80e`独立复验完成：另一Agent运行61脚本语法检查、显式真实MXC的267/267测试，0失败/取消/跳过，60931.9237ms；只读Review检查新模块和计时回归，无新增阻塞。独立核对新accepted记录、私有Review正文及哈希、原Git准入和ZIP源码绑定，并再次在新副本实际执行HTTP18/18、Edge21/21，全部停止确认。检查前后HEAD一致、工作区干净；未付费调用或修改用户数据。完整本地记录`output/verification/independent-integration-a3e7de6-20261114/RESULT.md`。
+
+## 2026年11月14日：网页固定参考执行接入及首轮真实试用
+
+固定代码`23650670e2bb4775273abe54069b22683d0df515`：主Agent与另一独立Agent各自检查77脚本、显式真实MXC的401/401测试，fail/cancel/skip均0，耗时分别78030.9891ms和78177.3477ms。独立记录`output/verification/independent-execution-integration-2365067-20261114/RESULT.md`。原`f9f9561`独立400/401的归档停止待核对失败仍保留；测试文件并发上限4及失败完整报告保留已验证，不声称已确定或修复24并发下未知停止的根因。网页在途选择竞态等初始阻塞及修复见[tasks/web-execution-integration.md](tasks/web-execution-integration.md)。
+
+真实网页首轮采用隔离数据`output/reference-web-ui-FYeJdW/data`，完成规格答复/修订/确认及计划确认，并在核对固定参考范围与预算后启动执行。服务执行`7fdca9cc-edad-4539-b706-efae65f5210c`，编码1次、Review1次，共17510输入/8566输出。模型生成4文件，固定候选`bcec69b2d700457398a997a9370cf98543b3e1b8`、源码hash`3c3cfa5f34432544b1771033dfe4d957762fc58109caeea9a6ebc1bcbdb01804`。自检18/18、独立HTTP/SQLite18/18及真实Edge21/21通过，但Review的JSON意见缺少必需evidence字段，严格校验拒绝；failed/taskAccepted:false，网页未开放预览/下载。该缺失不是格式通过或已解决的阻塞问题。原报告、Review回执及源码保留；随后只读核对原Git HEAD一致、status为空，没有修改原候选。
+
+试用平台服务在localhost临时端口运行，结束收到QA_STOP_CONFIRMED、进程退出0；未重启用户已有4317服务，未写用户data。下一步在产品内提供保持原提交的新检查尝试，不将现有失败改为通过，也不重复计入旧编码用量。历史`5dc88cd`的通过只属于当时版本；凭据保护规则升级后的当前门禁不能直接沿用旧结论。
