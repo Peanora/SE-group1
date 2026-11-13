@@ -1,14 +1,16 @@
+import { createPlanningReview } from './planning-review.js';
+
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const escape = (value = '') => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const state = { health: null, projects: [], project: null, run: null, stageId: 'spec', taskId: null, artifactName: 'task.md', tab: 'events', raw: false, busy: false, epoch: 0, pollTimer: null, feedback: '', importFile: null, filename: 'requirements.md' };
-const ACTIVE = new Set(['running', 'paused', 'awaiting_review']);
-const STATUS = { pending: '待执行', running: '执行中', paused: '已暂停', succeeded: '已完成', failed: '执行失败', blocked: '被阻塞', awaiting_review: '等待审阅', idle: '尚未开始' };
+const ACTIVE = new Set(['running', 'paused', 'awaiting_spec', 'awaiting_review']);
+const STATUS = { pending: '待执行', running: '执行中', paused: '已暂停', succeeded: '已完成', failed: '执行失败', blocked: '被阻塞', awaiting_spec: '等待规格确认', awaiting_review: '等待计划确认', idle: '尚未开始' };
 const STAGES = [
   { id: 'intake', title: '需求接收', dependsOn: [], x: 1.5, y: 110, description: '读取原始需求，保留本次运行的输入快照，检查文档是否可处理。', output: '需求文本与运行快照' },
   { id: 'spec', title: '规格整理', dependsOn: ['intake'], x: 20, y: 110, description: '整理项目目标、功能要求、约束与待确认事项，并为需求建立可追踪的编号。', output: 'spec.md' },
-  { id: 'architecture', title: '架构设计', dependsOn: ['spec'], x: 40, y: 30, description: '根据需求形成模块职责、数据流和技术方案建议，供开发前讨论。', output: 'architecture.md' },
-  { id: 'tasks', title: '任务拆解', dependsOn: ['spec'], x: 40, y: 190, description: '将需求转换为带有依赖、验收条件和来源编号的开发任务。', output: 'task.md' },
+  { id: 'architecture', title: '架构设计', dependsOn: ['spec'], x: 40, y: 30, description: '规格确认后，根据确认版本形成模块职责、数据流和技术方案建议。', output: 'architecture.md' },
+  { id: 'tasks', title: '任务拆解', dependsOn: ['spec'], x: 40, y: 190, description: '规格确认后，将需求转换为带有依赖、验收条件和来源编号的开发任务。', output: 'task.md' },
   { id: 'review', title: '计划校验', dependsOn: ['architecture', 'tasks'], x: 62, y: 110, description: '检查任务依赖与需求覆盖，汇总需要人工检查的内容。校验后等待你确认。', output: 'review.md' },
   { id: 'export', title: '文档导出', dependsOn: ['review'], x: 82, y: 110, description: '在你确认后生成开发交接说明，并准备包含全部产物的文档包。', output: 'handoff.md / plan.json' },
 ];
@@ -107,6 +109,16 @@ function replacePreservingFocus(container, html) {
 function sortedRuns(project = state.project) { return [...(project?.runs || [])].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)); }
 function stageOf(id) { return state.run?.stages?.find((stage) => stage.id === id); }
 function stageTitle(id) { return stageOf(id)?.title || STAGES.find((stage) => stage.id === id)?.title || '运行'; }
+const planningReview = createPlanningReview({
+  container: $('#review-banner'), getState: () => state, submit: reviewAction,
+  refresh: async () => {
+    const id = state.run?.id; const epoch = state.epoch;
+    const { run } = await api(basePath());
+    if (id === state.run?.id && epoch === state.epoch) { updateRun(run); schedulePoll(); }
+  },
+  showArtifact: (name) => { showArtifact(name); $('#records-body').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); },
+  toast,
+});
 
 function renderProjects() {
   $('#project-count').textContent = state.projects.length;
@@ -120,7 +132,7 @@ function renderHeader() {
   $('#onboarding').hidden = !!state.project;
   const runs = sortedRuns();
   const select = $('#run-select');
-  select.innerHTML = runs.length ? runs.map((run, i) => `<option value="${escape(run.id)}" ${run.id === state.run?.id ? 'selected' : ''}>运行 ${String(runs.length - i).padStart(2, '0')}　${escape(formatTime(run.createdAt, true))}</option>`).join('') : '<option>尚无运行记录</option>';
+  select.innerHTML = runs.length ? runs.map((run, i) => `<option value="${escape(run.id)}" ${run.id === state.run?.id ? 'selected' : ''}>运行 ${String(runs.length - i).padStart(2, '0')}　${escape(formatTime(run.createdAt, true))}　${escape(STATUS[run.status] || run.status)}${run.workflowVersion === 2 ? '' : '（旧版记录）'}</option>`).join('') : '<option>尚无运行记录</option>';
   select.disabled = !runs.length || state.busy;
 }
 function renderControls() {
@@ -133,18 +145,18 @@ function renderControls() {
   $('#pause-button').hidden = !['running', 'paused'].includes(run?.status);
   $('#pause-button').textContent = run?.status === 'paused' ? '恢复执行' : '暂停';
   $('#pause-button').disabled = state.busy;
-  $('#approve-button').disabled = state.busy;
+  $('#refresh-button').disabled = state.busy;
   $('#run-select').disabled = !state.project?.runs?.length || state.busy;
   $('#download-bundle').hidden = run?.status !== 'succeeded';
   if (run?.status === 'succeeded') $('#download-bundle').href = `${basePath()}/download`;
   const status = run?.status || 'idle';
-  $('#run-status').textContent = STATUS[status] || status;
+  $('#run-status').textContent = `${STATUS[status] || status}${run && run.workflowVersion !== 2 ? ' / 旧版记录' : ''}`;
   $('#run-status').className = `status-tag status-${status}`;
   const count = run?.stages?.filter((stage) => stage.status === 'succeeded').length || 0;
   $('#run-progress').textContent = run ? `${count} / ${run.stages.length} 个阶段已完成${run.status === 'paused' ? '，当前任务完成后暂停' : ''}` : '导入需求后开始';
-  $('#workflow-subtitle').textContent = run ? `${run.mode === 'model' ? '模型规划' : '本地规则规划'}　运行 ${run.id.slice(-8)}` : '六个阶段，一份可追踪的开发计划';
-  $('#review-banner').hidden = run?.status !== 'awaiting_review';
-  if (run?.status === 'awaiting_review') $('#review-summary').textContent = `已整理 ${run.spec?.requirements?.length || 0} 项需求、${run.tasks?.length || 0} 个开发任务。请检查文档与验收条件后确认。`;
+  $('#workflow-subtitle').textContent = run ? `${run.mode === 'model' ? '模型规划' : '本地规则规划'}　运行 ${run.id.slice(-8)}${run.workflowVersion === 2 ? '　两次人工确认' : '　旧版流程'}` : '六个阶段，两次确认，保留每版依据';
+  $('#workflow-confirmation-legend').textContent = run && run.workflowVersion !== 2 ? '旧版流程：导出前确认' : '先确认规格，再确认计划';
+  planningReview.render();
   $('#event-count').textContent = run?.events?.length || 0;
   $('#task-count').textContent = run?.tasks?.length || 0;
   $('#artifact-count').textContent = run?.artifacts?.length || 0;
@@ -154,8 +166,8 @@ function renderWorkflow() {
   const markers = ['pending', 'running', 'succeeded', 'failed', 'blocked'].map((status) => `<marker id="arrow-${status}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L8 4L0 8Z" fill="${({ running: '#6480e5', succeeded: '#7aaea1', failed: '#d4a4ac', blocked: '#d4a4ac' })[status] || '#c4cfdf'}"/></marker>`).join('');
   const html = `<svg class="flow-edges" viewBox="0 0 1000 292" preserveAspectRatio="none" aria-hidden="true"><defs>${markers}</defs>${edge('intake', 'spec', 'M165 149H200')}${edge('spec', 'architecture', 'M350 149H375V69H400')}${edge('spec', 'tasks', 'M350 149H375V229H400')}${edge('architecture', 'review', 'M550 69H590V149H620')}${edge('tasks', 'review', 'M550 229H590V149')}${edge('review', 'export', 'M770 149H820')}</svg>${STAGES.map((fallback, i) => {
     const stage = stageOf(fallback.id) || { ...fallback, status: 'pending', attempt: 0 };
-    const waiting = fallback.id === 'export' && state.run?.status === 'awaiting_review';
-    return `<button class="flow-node ${escape(stage.status)} ${state.stageId === stage.id ? 'selected' : ''}" style="--x:${fallback.x}%;--y:${fallback.y}px" data-stage="${escape(stage.id)}" data-focus-key="stage-${escape(stage.id)}" aria-pressed="${state.stageId === stage.id}" aria-label="${escape(stage.title)}，${escape(waiting ? '等待人工确认' : STATUS[stage.status] || stage.status)}"><span class="node-top"><span class="node-number">${String(i + 1).padStart(2, '0')}</span><span class="node-status-dot">${stage.status === 'succeeded' ? '✓' : ''}</span></span><h3>${escape(stage.title)}</h3><span class="node-meta">${escape(waiting ? '等待人工确认' : STATUS[stage.status] || stage.status)}${stage.attempt > 1 ? ` / 第 ${stage.attempt} 次` : ''}</span></button>`;
+    const waiting = fallback.id === 'export' && state.run?.status === 'awaiting_review' ? '等待计划确认' : ['architecture', 'tasks'].includes(fallback.id) && state.run?.status === 'awaiting_spec' ? '等待规格确认' : '';
+    return `<button class="flow-node ${escape(stage.status)} ${waiting ? 'awaiting-confirmation' : ''} ${state.stageId === stage.id ? 'selected' : ''}" style="--x:${fallback.x}%;--y:${fallback.y}px" data-stage="${escape(stage.id)}" data-focus-key="stage-${escape(stage.id)}" aria-pressed="${state.stageId === stage.id}" aria-label="${escape(stage.title)}，${escape(waiting || STATUS[stage.status] || stage.status)}"><span class="node-top"><span class="node-number">${String(i + 1).padStart(2, '0')}</span><span class="node-status-dot">${stage.status === 'succeeded' ? '✓' : ''}</span></span><h3>${escape(stage.title)}</h3><span class="node-meta">${escape(waiting || STATUS[stage.status] || stage.status)}${stage.attempt > 1 ? ` / 第 ${stage.attempt} 次` : ''}</span></button>`;
   }).join('')}`;
   replacePreservingFocus($('#workflow-graph'), html);
 }
@@ -163,7 +175,7 @@ function renderInspector() {
   const fallback = STAGES.find((stage) => stage.id === state.stageId) || STAGES[0];
   const stage = stageOf(fallback.id) || { ...fallback, status: 'pending', attempt: 0 };
   const artifacts = state.run?.artifacts?.filter((artifact) => artifact.stageId === stage.id) || [];
-  const note = stage.id === 'export' && state.run?.status === 'awaiting_review' ? '检查下方文档后，点击“确认并导出”继续。' : stage.status === 'blocked' ? '前置阶段尚未成功。解决失败并重试后，编排器会重新检查依赖。' : stage.status === 'succeeded' ? '本阶段结果已保存。后续重试会保留成功分支。' : '每个阶段成功后发布产物；下游只读取已成功的结果。';
+  const note = state.run?.status === 'awaiting_spec' && ['spec', 'architecture', 'tasks'].includes(stage.id) ? '请在下方答复待确认问题并保存修订；确认规格后才会生成架构和任务。' : stage.id === 'export' && state.run?.status === 'awaiting_review' ? `检查下方计划后，点击“${state.run?.workflowVersion === 2 ? '确认计划并导出' : '确认并导出'}”继续。` : stage.status === 'blocked' ? '前置阶段尚未成功。解决失败并重试后，编排器会重新检查依赖。' : stage.status === 'succeeded' ? '本阶段结果已保存。后续重试会保留成功分支。' : '每个阶段成功后发布产物；下游只读取已成功的结果。';
   const html = `<div class="inspector-eyebrow"><span>阶段详情</span><span class="status-tag status-${escape(stage.status)}">${escape(STATUS[stage.status] || stage.status)}</span></div><h3 class="inspector-title">${escape(stage.title)}</h3><p class="inspector-description">${escape(fallback.description)}</p><dl class="inspector-info"><dt>前置依赖</dt><dd>${stage.dependsOn.length ? stage.dependsOn.map((id) => escape(stageTitle(id))).join('、') : '无，可直接启动'}</dd><dt>尝试次数</dt><dd>${stage.attempt || '尚未执行'}</dd><dt>执行用时</dt><dd>${duration(stage)}</dd><dt>输出产物</dt><dd>${artifacts.length ? artifacts.map((artifact) => `<button class="inspector-artifact-link" data-artifact="${escape(artifact.name)}" data-focus-key="inspector-${escape(artifact.name)}">${escape(artifact.name)}</button>`).join('') : escape(fallback.output)}</dd></dl>${stage.error ? `<div class="stage-error">${escape(stage.error)}${state.run?.status === 'failed' && stage.status === 'failed' ? `<button class="button button-outline" data-retry="${escape(stage.id)}" data-focus-key="retry-${escape(stage.id)}" ${state.busy ? 'disabled' : ''}>重试此阶段</button>` : ''}</div>` : ''}<p class="inspector-note">${escape(note)}</p>`;
   replacePreservingFocus($('#stage-inspector'), html);
 }
@@ -287,19 +299,19 @@ async function pollRun() {
   catch (error) { if (epoch !== state.epoch) return; showError(error); state.pollTimer = setTimeout(pollRun, 2500); }
 }
 async function refreshProjects() { const { projects } = await api('/api/projects'); state.projects = projects; renderProjects(); }
-async function selectProject(id) {
+async function selectProject(id, { runId } = {}) {
   clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   try {
     const { project } = await api(`/api/projects/${encodeURIComponent(id)}`);
     if (epoch !== state.epoch) return;
-    state.project = { ...project, runs: project.runs || [] }; state.run = sortedRuns()[0] || null;
+    state.project = { ...project, runs: project.runs || [] }; state.run = state.project.runs.find((run) => run.id === runId) || sortedRuns()[0] || null;
     state.stageId = state.run?.status === 'failed' ? state.run.stages.find((stage) => stage.status === 'failed')?.id || 'spec' : 'spec';
-    state.taskId = null; state.artifactName = 'task.md'; state.feedback = ''; $('#review-feedback').value = ''; clearError(); renderAll(); schedulePoll();
+    state.taskId = null; state.artifactName = 'task.md'; clearError(); renderAll(); schedulePoll();
   } catch (error) { if (epoch === state.epoch) showError(error); }
 }
 async function selectRun(id) {
   clearTimeout(state.pollTimer); const epoch = ++state.epoch;
-  try { const { run } = await api(`/api/projects/${encodeURIComponent(state.project.id)}/runs/${encodeURIComponent(id)}`); if (epoch !== state.epoch) return; state.feedback = ''; $('#review-feedback').value = ''; state.artifactName = 'task.md'; state.taskId = null; updateRun(run); renderHeader(); schedulePoll(); }
+  try { const { run } = await api(`/api/projects/${encodeURIComponent(state.project.id)}/runs/${encodeURIComponent(id)}`); if (epoch !== state.epoch) return; state.artifactName = 'task.md'; state.taskId = null; updateRun(run); renderHeader(); schedulePoll(); }
   catch (error) { if (epoch === state.epoch) showError(error); }
 }
 async function startRun() {
@@ -309,7 +321,7 @@ async function startRun() {
     const options = { mode: $('#mode-select').value }; if ($('#failure-select').value) options.failOnceStage = $('#failure-select').value;
     const { run } = await api(`/api/projects/${encodeURIComponent(state.project.id)}/runs`, { method: 'POST', body: JSON.stringify(options) });
     if (epoch !== state.epoch) return;
-    state.stageId = 'intake'; state.feedback = ''; $('#review-feedback').value = ''; state.taskId = null; state.artifactName = 'task.md'; state.tab = 'events';
+    state.stageId = 'intake'; state.taskId = null; state.artifactName = 'task.md'; state.tab = 'events';
     updateRun(run); renderHeader(); schedulePoll(); toast('编排已启动，可以点击节点查看过程');
   } catch (error) { if (epoch === state.epoch) showError(error); }
   finally { setBusy(false); }
@@ -324,6 +336,17 @@ async function runAction(action, stageId) {
     toast(({ pause: '已请求暂停，当前阶段完成后暂停推进', resume: '已恢复执行', retry: '已重试失败阶段，成功分支将保留', approve: '已确认计划，正在生成交接文档' })[action]);
   } catch (error) { if (epoch === state.epoch) { showError(error); schedulePoll(); } }
   finally { setBusy(false); renderInspector(); }
+}
+
+async function reviewAction(action, payload) {
+  if (!state.run || state.busy) throw new Error('上一项操作尚未结束，请稍后重试。');
+  setBusy(true); clearError(); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
+  try {
+    const { run } = await api(`${basePath()}/action`, { method: 'POST', body: JSON.stringify({ action, ...payload }) });
+    if (epoch !== state.epoch) throw new Error('当前运行已切换。草稿已保留，请重新核对所选记录。');
+    updateRun(run); renderHeader(); schedulePoll();
+    return run;
+  } finally { setBusy(false); }
 }
 
 function openProjectDialog({ sample = false, revise = false } = {}) {
@@ -378,9 +401,6 @@ $('#file-input').addEventListener('change', (event) => importFile(event.target.f
 $('#clear-file').addEventListener('click', resetFile);
 $('#start-run').addEventListener('click', startRun);
 $('#pause-button').addEventListener('click', () => runAction(state.run?.status === 'paused' ? 'resume' : 'pause'));
-$('#approve-button').addEventListener('click', () => runAction('approve'));
-$('#review-feedback').addEventListener('input', (event) => { state.feedback = event.target.value; });
-$('#review-documents').addEventListener('click', () => { showArtifact('task.md'); $('#records-body').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); });
 $('#run-select').addEventListener('change', (event) => selectRun(event.target.value));
 $('#dismiss-error').addEventListener('click', clearError);
 $('#help-button').addEventListener('click', () => $('#help-dialog').showModal());
@@ -408,6 +428,7 @@ $('#drop-zone').addEventListener('drop', (event) => { event.preventDefault(); $(
 for (const type of ['dragover', 'drop']) window.addEventListener(type, (event) => { if ([...(event.dataTransfer?.types || [])].includes('Files')) event.preventDefault(); });
 
 async function initialize() {
+  if (state.busy) return;
   clearError();
   renderAll();
   try {
@@ -416,7 +437,11 @@ async function initialize() {
     $('#connection-status').className = 'connection-status connected'; $('#connection-status').innerHTML = '<span></span>服务已连接';
     const modelOption = $('#mode-select option[value=model]'); modelOption.disabled = !model?.configured; modelOption.textContent = model?.configured ? `模型模式（${model.model || '已配置'}）` : '模型模式（未配置）';
     renderProjects();
-    if (projects.length && !state.project) await selectProject(projects[0].id); else if (state.project) await selectProject(state.project.id);
+    if (projects.length && !state.project) await selectProject(projects[0].id);
+    else if (state.project) {
+      const selectedRun = state.run?.id;
+      await selectProject(state.project.id, { runId: selectedRun });
+    }
   } catch (error) { $('#connection-status').className = 'connection-status disconnected'; $('#connection-status').innerHTML = '<span></span>服务未连接'; showError(new Error(`无法连接本地服务。请确认项目已启动，然后点击右上角刷新。${error.message ? `（${error.message}）` : ''}`)); }
 }
 $('#refresh-button').addEventListener('click', initialize);

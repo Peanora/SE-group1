@@ -41,7 +41,7 @@
 
       <section id="onboarding" class="onboarding" aria-labelledby="onboarding-title">
         <div class="document-illustration" aria-hidden="true"><svg viewBox="0 0 64 76"><path d="M12 2h28l14 15v55H12Z"/><path d="M40 2v17h14M22 32h22M22 43h22M22 54h14"/></svg><span>.md</span></div>
-        <div class="onboarding-copy"><h2 id="onboarding-title">从一份软件需求开始</h2><p>上传文档或粘贴文字。编排器会整理规格、拆解任务，并在导出前等待你的审阅。</p><div class="onboarding-actions"><button class="button button-primary" id="onboarding-import">导入需求文档</button><button class="text-button" id="onboarding-sample">载入示例需求</button></div></div>
+        <div class="onboarding-copy"><h2 id="onboarding-title">从一份软件需求开始</h2><p>上传文档或粘贴文字。先核对并确认规格，再审阅开发计划，确认后导出文档。</p><div class="onboarding-actions"><button class="button button-primary" id="onboarding-import">导入需求文档</button><button class="text-button" id="onboarding-sample">载入示例需求</button></div></div>
         <div class="onboarding-formats"><strong>支持 Markdown、TXT、Word</strong><span>本地规则模式无需配置密钥</span></div>
       </section>
 
@@ -52,13 +52,10 @@
         </header>
         <div class="run-status-line"><div class="run-status-left"><span class="status-tag status-idle" id="run-status">尚未开始</span><span id="run-progress">导入需求后开始</span></div><details class="demo-options"><summary>演示选项</summary><div class="demo-options-content"><label for="failure-select">注入一次性故障</label><select id="failure-select"><option value="">关闭</option><option value="tasks">任务拆解阶段</option><option value="architecture">架构设计阶段</option><option value="review">计划校验阶段</option></select><p>仅用于展示失败与重试。再次尝试该阶段时恢复正常。</p></div></details></div>
         <div class="flow-workspace">
-          <div class="flow-canvas"><div class="canvas-label">工作流依赖图 <span>点击节点查看详情</span></div><div class="workflow-graph-scroll"><div id="workflow-graph" class="workflow-graph" aria-label="规划工作流"></div></div><div class="canvas-footer"><span><i class="legend-dot legend-parallel"></i>架构与任务可并行生成</span><span><i class="legend-dot legend-review"></i>导出前由你确认</span></div></div>
+          <div class="flow-canvas"><div class="canvas-label">工作流依赖图 <span>点击节点查看详情</span></div><div class="workflow-graph-scroll"><div id="workflow-graph" class="workflow-graph" aria-label="规划工作流"></div></div><div class="canvas-footer"><span><i class="legend-dot legend-parallel"></i>规格确认后，架构与任务可并行生成</span><span><i class="legend-dot legend-review"></i><span id="workflow-confirmation-legend">先确认规格，再确认计划</span></span></div></div>
           <aside id="stage-inspector" class="stage-inspector" aria-label="阶段详情"></aside>
         </div>
-        <section id="review-banner" class="review-banner" aria-labelledby="review-heading" hidden>
-          <div class="review-intro"><span class="review-check" aria-hidden="true">✓</span><div><h3 id="review-heading">开发计划已生成，等待你的审阅</h3><p id="review-summary">检查规格、任务和验收条件后，确认导出文档。</p></div><button class="text-button" id="review-documents">查看 task.md</button></div>
-          <div class="review-controls"><label class="visually-hidden" for="review-feedback">审阅意见</label><textarea id="review-feedback" rows="2" maxlength="4000" placeholder="审阅意见（选填），将写入开发交接文档"></textarea><button class="button button-primary" id="approve-button">确认并导出</button></div>
-        </section>
+        <section id="review-banner" class="review-banner" aria-labelledby="review-heading" hidden></section>
       </section>
 
       <section class="records-panel" aria-label="运行详情">
@@ -79,7 +76,7 @@
 
   <dialog id="source-dialog" class="source-dialog" aria-labelledby="source-title"><header class="dialog-header"><div><p class="page-context">原始需求快照</p><h2 id="source-title">需求文档</h2></div><button class="icon-button" data-close-dialog aria-label="关闭"><span class="close-symbol">×</span></button></header><div class="source-dialog-body"><pre id="source-content"></pre></div><footer class="dialog-footer"><button class="button button-outline" data-close-dialog>关闭</button><button class="button button-primary" id="revise-source">修改并新建项目</button></footer></dialog>
 
-  <dialog id="help-dialog" class="help-dialog" aria-labelledby="help-title"><header class="dialog-header"><h2 id="help-title">如何使用需求编排台</h2><button class="icon-button" data-close-dialog aria-label="关闭"><span class="close-symbol">×</span></button></header><div class="dialog-body help-content"><ol><li><strong>导入软件需求。</strong>上传 Markdown、TXT、Word，或直接粘贴正文。首次体验可以载入工单系统示例。</li><li><strong>开始编排。</strong>本地规则模式无需密钥，按文档结构提取需求并生成计划。模型模式需在服务端配置。</li><li><strong>观察执行。</strong>点击流程节点查看依赖、状态与日志；可在阶段边界暂停，或在运行失败后重试失败节点。</li><li><strong>审阅开发任务。</strong>查看 task.md、需求覆盖和任务依赖。确认后导出 Markdown 文档包。</li></ol><p>工作流节点表示规划文档的生成过程。“开发任务”是交给开发者或编码工具继续执行的计划，这一版不会自动写入目标项目的代码。</p><h3>规划模式</h3><p>本地规则模式适合结构清晰的需求，结果需要人工审阅。要启用模型模式，可在项目 <code>.env</code> 配置 <code>LLM_BASE_URL</code>、<code>LLM_MODEL</code> 和 <code>LLM_API_KEY</code>，再重启服务。密钥只留在服务端。</p></div><footer class="dialog-footer"><button class="button button-primary" data-close-dialog>开始使用</button></footer></dialog>
+  <dialog id="help-dialog" class="help-dialog" aria-labelledby="help-title"><header class="dialog-header"><h2 id="help-title">如何使用需求编排台</h2><button class="icon-button" data-close-dialog aria-label="关闭"><span class="close-symbol">×</span></button></header><div class="dialog-body help-content"><ol><li><strong>导入软件需求。</strong>上传 Markdown、TXT、Word，或直接粘贴正文。首次体验可以载入工单系统示例。</li><li><strong>开始编排。</strong>本地规则模式无需密钥，按文档结构提取需求并生成计划。模型模式需在服务端配置。</li><li><strong>观察执行。</strong>点击流程节点查看依赖、状态与日志；可在阶段边界暂停，或在运行失败后重试失败节点。</li><li><strong>确认规格。</strong>核对需求和验收条件，逐项回答待确认问题并保存修订。确认规格后，编排器才生成架构和开发计划。</li><li><strong>确认开发计划。</strong>核对任务、依赖和需求来源；修改后保存并重新确认。退回修改须填写意见。确认计划后导出 Markdown 文档包。</li></ol><p>工作流节点表示规划文档的生成过程。“开发任务”是交给开发者或编码工具继续执行的计划，这一版不会自动写入目标项目的代码。</p><h3>规划模式</h3><p>本地规则模式适合结构清晰的需求，结果需要人工审阅。要启用模型模式，可在项目 <code>.env</code> 配置 <code>LLM_BASE_URL</code>、<code>LLM_MODEL</code> 和 <code>LLM_API_KEY</code>，再重启服务。密钥只留在服务端。</p></div><footer class="dialog-footer"><button class="button button-primary" data-close-dialog>开始使用</button></footer></dialog>
   <div id="toast" class="toast" role="status" hidden></div>
 </body>
 </html>
