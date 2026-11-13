@@ -53,7 +53,7 @@
 `startTaskExecution({outputDir, provider, sandbox, providerKind?, signal?, maxCalls?, timeoutMs?, onEvent?})` 返回 `{id, cancel(), done}`，`done` 解析为持久化执行记录。该接口供平台可信代码调用，尚不接受网页上传任务或任意仓库。调用方不得把适配器注入接口直接暴露给客户端。
 
 - 任务固定为 `library-borrow-v1`；模型只返回 `src/borrow.mjs` 的完整替换建议，不能设置命令、路径根、环境、验收和版本。
-- 每次执行记录 taskId、attemptId、specRevision、planRevision、基础/候选提交、验证清单版本/哈希、每次候选检查、命令结果和用量。未知 token 数为 null。
+- 每次执行记录 taskId、attemptId、specRevision、planRevision、基础/候选提交、验证清单版本/用例及观察器哈希、平台源码标识/Node版本、每次候选检查、命令结果和用量。未知 token 数为 null。
 - 状态为 preparing、checking_environment、generating、validating，以及终态 executed、failed、stopped、timed_out、reconciliation_required。执行完成不等于软件验收通过。
 - `cancel()` 幂等请求取消；候选进程是否停止依据适配器确认，无法确认时保持 reconciliation_required。
 - 代码输出限制32KiB、模型响应128KiB、进程输出64KiB；最多3次模型请求、总时长最多600秒。命令入口默认2次、180秒，单次候选执行最多15秒。

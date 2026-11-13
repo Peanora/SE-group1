@@ -150,6 +150,8 @@ npm run execution:check -- --model
 
 记录保存在 `output/executions/`，由 Git 忽略。`executed` 只表示该固定任务产生实际修改并通过固定业务检查，`acceptanceStatus` 仍为 `not_reviewed`。`--fixture` 的通过不能证明真实模型编码。它还不包含测试/Review 双 Agent、规划任务自动执行、依赖安装、任意仓库、完整全栈软件或软件交付验收。
 
+该任务限同步纯函数，候选在独立JavaScript上下文执行，无法使用Node进程、文件、网络或导入依赖。可信观察器不使用候选可修改的JSON函数，不执行返回值的getter/toJSON/thenable。MXC仍是系统执行边界；JavaScript上下文不代替系统隔离。验收清单同时记录用例和观察器哈希，执行记录附平台源码标识与Node版本。
+
 ## 项目结构
 
 ```text

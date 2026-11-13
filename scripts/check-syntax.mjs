@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 const files = ['server.mjs'];
 for (const directory of ['lib', 'scripts', 'public', 'tests', 'examples']) {
   for (const file of await readdir(new URL(`../${directory}/`, import.meta.url))) {
-    if (/\.(?:mjs|js)$/u.test(file)) files.push(`${directory}/${file}`);
+    if (/\.(?:mjs|cjs|js)$/u.test(file)) files.push(`${directory}/${file}`);
   }
 }
 for (const file of files) {

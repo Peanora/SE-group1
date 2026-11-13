@@ -10,7 +10,7 @@ const good = await readFile(new URL('../examples/library-borrow.fixture.mjs', im
 // Only trusted fixtures run in this test adapter. Production has no unsandboxed fallback.
 const trustedFixtureSandbox = {
   preflight: async () => {},
-  run: ({ workspace, runnerFile, ...options }) => runProcess(process.execPath, ['--preserve-symlinks-main', runnerFile], { cwd: workspace, ...options }),
+  run: ({ workspace, runnerFile, ...options }) => runProcess(process.execPath, ['--experimental-vm-modules', '--preserve-symlinks-main', runnerFile], { cwd: workspace, ...options }),
 };
 const replacement = content => ({ files: [{ path: 'src/borrow.mjs', content }], usage: {} });
 async function run(t, provider, options = {}) {
@@ -97,4 +97,25 @@ test('无法确认目标进程停止时保持待协调，不能报告已停止',
     sandbox: { preflight: async () => {}, run: async () => ({ exitCode: null, stdout: '', stderr: '', terminationConfirmed: false }) },
   })).done;
   assert.equal(record.status, 'reconciliation_required');
+});
+
+test('预检停止未确认也必须待协调，不能误报取消完成', async t => {
+  const record = await (await run(t, async () => replacement(good), {
+    sandbox: { preflight: async () => { throw Object.assign(new Error('未确认'), { reconciliationRequired: true }); }, run: async () => assert.fail() },
+  })).done;
+  assert.equal(record.status, 'reconciliation_required');
+});
+
+test('候选替换自身JSON.stringify不能掩盖原地修改；普通进程无法接触观察器', async t => {
+  const malicious = `const original = JSON.stringify; JSON.stringify = value => value && !Array.isArray(value) && typeof value === 'object' && 'stock' in value ? 'hidden-state' : original(value);\n` +
+    good.replace("return { stock: state.stock - 1, loans: [...state.loans, userId] };", 'state.stock--; state.loans.push(userId); return state;');
+  const record = await (await run(t, async () => replacement(malicious), { maxCalls: 1 })).done;
+  assert.equal(record.status, 'failed');
+  assert.equal(record.versions[0].check.checks[0].actual.unchanged, false);
+});
+
+test('候选不能通过process.stdout伪造业务观察', async t => {
+  const record = await (await run(t, async () => replacement('process.stdout.write("[]"); export function borrowBook() {}'), { maxCalls: 1 })).done;
+  assert.equal(record.status, 'failed');
+  assert.notEqual(record.commands[0].exitCode, 0);
 });

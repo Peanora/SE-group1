@@ -72,3 +72,13 @@
 本轮真实模型共3次请求，未重复原有`model:check`；token记录来自服务响应，未知用量保留null，不推断费用。没有浏览器交互改动，因此未重复浏览器检查。没有验证完整目标软件、数据库、双Agent验收、多Worker恢复或全栈交付。
 
 源码提交与同版本独立检查结论见`docs/tasks/execution-foundation.md`。本地`.env`补充执行器路径；不新增运行依赖，不迁移用户data，不推送或部署。
+
+### 独立检查后的返工
+
+候选`fb46a92`通过独立测试的48项检查，但Review真实复现了“候选替换JSON.stringify并原地修改输入，仍13/13通过”的P1问题。因此未放行该候选。
+
+修复将同步纯函数候选置于独立JavaScript上下文，不授予Node进程、文件、网络、控制台或导入能力；宿主可信观察器通过属性描述符复制普通数据，不执行候选getter、toJSON或thenable。MXC仍是系统边界，JavaScript上下文不作为系统隔离替代。清单v2绑定用例与观察器哈希，记录平台源码标识和Node版本；预检停止未确认也保留待协调状态。
+
+主Agent修复自检：25个脚本语法通过，51项自动化检查通过（显式启用真实MXC）。使用真实MXC重新执行先前实际模型产出的代码，13/13通过，记录`output/executions/execution-vfZiuu/execution.json`；独立Review所用的原地修改攻击现判失败、10/13，记录`output/executions/execution-63ZXYA/execution.json`。此次回放没有新增付费模型调用。
+
+另有临时真实进程探针证明：detached且stdio ignore的后代进程在取消CLI、runner主动exit0两种场景都停止心跳，600ms后PID不存在。本机该受管执行方式未发现停止确认误报；不外推为其他Worker的可靠恢复。
