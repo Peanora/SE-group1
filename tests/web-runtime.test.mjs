@@ -139,7 +139,7 @@ test('real web runtime proxies HTTP, preserves stdin and SQLite across restart, 
   assert.equal(observed.headers['content-security-policy'], undefined);
   const httpGet = await call(runtime, 'GET', '/messages');
   assert.equal(httpGet.headers['access-control-allow-origin'], undefined);
-  assert.equal(httpGet.headers['x-content-type-options'], 'nosniff'); assert.ok(httpGet.headers['set-cookie'][0].startsWith('app_'));
+  assert.equal(httpGet.headers['x-content-type-options'], 'nosniff'); assert.match(httpGet.headers['set-cookie'][0], /^tf_[a-f0-9]{48}_app_echo=/u);
   assert.equal((await call(runtime, 'GET', '/', { host: 'attacker.example' })).status, 403);
   assert.equal((await call(runtime, 'POST', '/', { origin: 'https://attacker.example' })).status, 403);
   assert.equal((await call(runtime, 'GET', '/messages', { origin: runtime.url })).status, 200);
@@ -229,4 +229,45 @@ export async function createApp({databasePath}){const file=path.join(path.dirnam
   const stopped = await readFile(heartbeat, 'utf8');
   await new Promise(resolve => setTimeout(resolve, 250));
   assert.equal(await readFile(heartbeat, 'utf8'), stopped, 'no descendant writes after confirmed stop');
+});
+
+test('real simultaneous previews isolate browser cookies across localhost ports and restarts', real, async t => {
+  const source = `export async function createApp(){return {handle(req){
+ if(req.path==='/login')return {status:200,headers:{'set-cookie':'app_session='+req.body+'; HttpOnly; Path=/; SameSite=Strict'},body:'ok'};
+ return {status:200,headers:{'content-type':'application/json'},body:JSON.stringify({cookie:req.headers.cookie??null,headers:req.headers})};
+}}}`;
+  const first = await fixture(t, source), second = await fixture(t, source);
+  let [a, b] = await Promise.all([startWebRuntime(options(first.workspace)), startWebRuntime(options(second.workspace))]);
+  t.after(async () => { await Promise.all([a.stop(), b.stop()]); });
+  const loginA = await call(a, 'POST', '/login', { body: 'A' });
+  const loginB = await call(b, 'POST', '/login', { body: 'B' });
+  assert.equal(loginA.status, 200); assert.equal(loginB.status, 200);
+  const cookieA = loginA.headers['set-cookie'][0].split(';')[0];
+  const cookieB = loginB.headers['set-cookie'][0].split(';')[0];
+  assert.match(cookieA, /^tf_[a-f0-9]{48}_app_session=A$/u);
+  assert.match(cookieB, /^tf_[a-f0-9]{48}_app_session=B$/u);
+  assert.notEqual(cookieA.split('=')[0], cookieB.split('=')[0]);
+  assert.match(loginA.headers['set-cookie'][0], /; HttpOnly;/u);
+  assert.doesNotMatch(loginA.headers['set-cookie'][0], /Domain=/iu);
+  const observe = async (runtime, cookie) => JSON.parse((await call(runtime, 'GET', '/who', {
+    headers: { cookie, authorization: 'platform-secret', 'x-platform-token': 'platform-secret' },
+  })).body);
+  assert.deepEqual((await observe(a, cookieA)).headers, { cookie: 'app_session=A' });
+  assert.equal((await observe(b, cookieA)).cookie, null);
+  assert.equal((await observe(a, cookieB)).cookie, null);
+  const combined = `${cookieA}; ${cookieB}; session=platform-secret; app_session=unscoped-secret`;
+  assert.deepEqual((await observe(a, combined)).headers, { cookie: 'app_session=A' });
+  assert.deepEqual((await observe(b, combined)).headers, { cookie: 'app_session=B' });
+  const trusted = await a.request({ method: 'GET', path: '/who', headers: { cookie: 'app_session=trusted; session=platform' } });
+  assert.equal(JSON.parse(trusted.body).cookie, 'app_session=trusted');
+  const trustedLogin = await a.request({ method: 'POST', path: '/login', body: 'trusted' });
+  assert.equal(trustedLogin.headers['set-cookie'][0], 'app_session=trusted; HttpOnly; Path=/; SameSite=Strict');
+  assert.equal((await a.stop()).terminationConfirmed, true);
+  a = await startWebRuntime(options(first.workspace));
+  assert.equal((await observe(a, combined)).cookie, null, 'a restarted preview requires a fresh browser login');
+  assert.equal((await observe(b, combined)).cookie, 'app_session=B', 'the other live preview is unaffected');
+  const nextCookie = (await call(a, 'POST', '/login', { body: 'A2' })).headers['set-cookie'][0].split(';')[0];
+  assert.notEqual(nextCookie.split('=')[0], cookieA.split('=')[0]);
+  assert.equal((await observe(a, nextCookie)).cookie, 'app_session=A2');
+  assert.ok((await Promise.all([a.stop(), b.stop()])).every(result => result.terminationConfirmed));
 });
