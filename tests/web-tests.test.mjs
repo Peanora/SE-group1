@@ -45,6 +45,18 @@ async function mocked(t, mode) {
     let calls=0, stops=0, requestCount=0;
     const runtimeUrl = ${JSON.stringify(new URL('../lib/web-runtime.mjs', import.meta.url).href)};
     const rootDir=${JSON.stringify(rootDir)}, mode=${JSON.stringify(mode)};
+    // Trigger the trusted deadline only after the intended in-flight boundary.
+    // An 80ms wall clock can expire while creating the snapshot on a busy host,
+    // which tests preparation cancellation instead of startup/request timeout.
+    const timeoutScenario=mode==='startup-timeout'||mode==='request-timeout';
+    let fireDeadline,deadlineTriggered=false;
+    if(timeoutScenario){
+      const nativeSetTimeout=globalThis.setTimeout;
+      mock.method(globalThis,'setTimeout',(callback,delay,...args)=>{
+        if(delay===80&&!fireDeadline){fireDeadline=()=>{deadlineTriggered=true;callback(...args);};return nativeSetTimeout(callback,5000,...args);}
+        return nativeSetTimeout(callback,delay,...args);
+      });
+    }
     const realObserver=mode.endsWith('-mxc');
     const files=${JSON.stringify(files)};
     if(mode.startsWith('valid'))files.push({path:'public/app.js',content:'document.title="Trusted test stub";'}, {path:'public/app.css',content:'body {color: black;}'},{path:'public/index.html',content:'<!doctype html><form><input name="username"><input name="password" type="password"></form><script src="/app.js"></script><link rel="stylesheet" href="/app.css">'});
@@ -127,12 +139,12 @@ async function mocked(t, mode) {
           db.exec('CREATE TABLE loans(id TEXT,book_id TEXT,user_id TEXT,status TEXT);CREATE TABLE audit_events(action TEXT,actor_id TEXT,target_id TEXT,at TEXT);'+booksSql);
           db.close();}
       }
-      if(mode==='startup-timeout') await new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('stopped'),{code:'cancelled'})),{once:true}));
+      if(mode==='startup-timeout') await new Promise((resolve,reject)=>{options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('stopped'),{code:'cancelled'})),{once:true});queueMicrotask(fireDeadline);});
       if(mode==='tampered') await writeFile(options.workspace+'/src/app.mjs','source externally changed');
       return {pid:123456,url:'http://localhost:1',request:async input=>{
         requestCount++;
         if(mode.startsWith('valid'))return testRequest(input);
-        if(mode==='request-timeout') return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('stopped'),{code:'cancelled'})),{once:true}));
+        if(mode==='request-timeout') return new Promise((resolve,reject)=>{options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('stopped'),{code:'cancelled'})),{once:true});queueMicrotask(fireDeadline);});
         return {status:200,headers:{'content-type':'application/json'},body:Buffer.from('{"passed":true,"status":"accepted","checks":[{"passed":true}]}')};
       },stop:async()=>{stops++;if(mode.startsWith('valid'))saveTestDatabase(options.workspace);return {...record,pid:123456+calls,startedAt:'mock-'+calls,...(mode==='unconfirmed'?{status:'reconciliation_required',terminationConfirmed:false}:{}),...(mode==='tampered'?{sourceUnchanged:false}:{})};}};
     }}});
@@ -146,7 +158,7 @@ async function mocked(t, mode) {
         observationStarting=true;setTimeout(()=>{heartbeatBeforeAbort=observationPulse;cancelledObservation=true;controller.abort();},80);
       }
     }});
-    clearInterval(pulse);process.stdout.write(JSON.stringify({report,calls,stops,requestCount,observationStarting,heartbeatBeforeAbort,cancelledObservation}));
+    clearInterval(pulse);process.stdout.write(JSON.stringify({report,calls,stops,requestCount,observationStarting,heartbeatBeforeAbort,cancelledObservation,deadlineTriggered}));
   `;
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--experimental-test-module-mocks', '--input-type=module'], { cwd: fileURLToPath(new URL('..', import.meta.url)), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -218,7 +230,9 @@ test('运行中取消及时停止进程并保留完整失败清单', async t => 
 
 test('启动及请求超时都保留固定清单，且停止已启动进程', async t => {
   for (const mode of ['startup-timeout', 'request-timeout']) {
-    const { report, stops } = await mocked(t, mode); complete(report); assert.equal(report.status, 'timed_out');
+    const { report, stops, calls, requestCount, deadlineTriggered } = await mocked(t, mode); complete(report); assert.equal(report.status, 'timed_out');
+    assert.equal(deadlineTriggered, true); assert.equal(calls, 1);
+    assert.equal(requestCount, mode === 'request-timeout' ? 1 : 0);
     assert.equal(stops, mode === 'request-timeout' ? 1 : 0);
   }
 });
