@@ -1,14 +1,29 @@
 # 固定模型候选重新检查
 
+## 本轮上下文与独立输出契约（基线2365067）
+
+仅修改本记录、`lib/web-recheck.mjs`、`tests/web-recheck.test.mjs`。不改CLI、服务、UI、模型适配器或原执行数据，不调用付费模型。
+
+- `inspectWebRecheckSource`和`startWebRecheck`增加可选`sourceBinding`，只接受五个自有、可枚举的数据字符串字段：`projectId/runId/taskId/specRevision/planRevision`。编号和SHA256格式严格校验，taskId须为library-web-v1，每项精确匹配原报告；首次await前复制绑定，拒绝getter、符号及额外字段，新选项自身的getter也不执行。不接受sourceRevision：上传快照版本由服务关联，这五字段元数据不是人工审批凭证，服务仍须提供可信当前规划与原持久row。
+- 无sourceBinding时保留原canonical规格及新currentPlan逻辑。提供时新记录继承真实来源的五字段，新attemptId、当前HTTP/browser/Review policy绑定和全部fresh检查不变。
+- `startWebRecheck`增加可选`outputDir`，默认executionRoot。先准入原来源并检查当前归属，再校验/创建独立输出根的完整无链接父链；拒绝文件系统根、原来源记录目录及工作区内的目标。新根下独占web-recheck-*内容快照不含.git，原真实commit、报告、Git和回执不写入。取消前后均检查信号。
+- Inspector的summary增加sourceExecutionRoot和sourceBinding，连同已有原report路径/hash、sourceWorkspace/commit/hash、codingReceipts及files，供可信服务重核原来源与fresh快照；不把快照伪造成新Git仓库。
+
+验收覆盖默认兼容、精确绑定与畸形输入、独立两根、路径链接/原workspace拒绝、来源不变、两根取消/未知停止和真实MXC错误候选。实现自检固定提交后交另一Agent独立审查；真实模型正向由根控制器另行授权执行。
+
+返回结构明确为`inspect -> {source, summary, files}`，其中source是原报告副本、files是准入后的允许源码文本数组。summary包含`sourceExecutionRoot/sourceBinding/sourceExecutionId/sourceReport/sourceReportHash/sourceWorkspace/sourceCommit/sourceHash/sourceUsage/sourceCodingCalls/sourceModelCalls/codingReceipts/sourceShellHash`；codingReceipts各项为`{attempt, receiptPath, receiptHash, model}`。start新记录的provenance与此summary一致，record.workspace只指向新的无.git快照，candidateCommit仍为sourceCommit。服务应从其受控持久row与当前规划提供绑定，重跑inspect并比较来源报告hash、提交、源码和shell，再核对新快照；本接口不验证宿主目录所有权或代替未来跨进程认证。
+
+本轮自检：`npm run check` 77脚本通过；显式真实MXC的`node --test --test-concurrency=4 tests/web-recheck.test.mjs`最终22/22通过，0失败/取消/跳过，73565.3128ms，含原默认与新独立两root真实错误候选各一项。另只读核对真实网页原候选`bcec69b2d700457398a997a9370cf98543b3e1b8`：默认canonical拒绝，精确上下文准入成功，4个允许源码文件及Git/blob/回执/停止证据通过；原报告仍failed、SHA256前后相同，无本轮Review。证据留在本地主工作区忽略的`output/verification/web-recheck-context/`。未运行付费模型、未修改原业务/QA数据、未运行全仓401回归，服务/UI接入与独立验收另行完成。
+
 本组件只重新检查控制器已有的 `library-web-v1` 模型候选，不生成或修复代码、不继承旧成功或失败结论，也尚未接入浏览器规划服务。旧执行报告、原 Git 仓库、原模型用量全部保持原样。本轮实现和普通测试不调用真实模型。
 
 ## 可信入口与来源
 
-`inspectWebRecheckSource({executionRoot, sourceReportPath, signal?})` 只读返回 `{source, summary, files}`。根目录须为可信服务拥有的现存绝对目录，记录必须是其下 `web-execution-*/execution.json`。首版不接受客户端报告对象、ZIP 或递归 recheck 链。宿主目录所有者主动伪造私有历史不在本组件威胁模型内；普通 JSON 的 `providerKind` 本身不是认证。
+`inspectWebRecheckSource({executionRoot, sourceReportPath, sourceBinding?, signal?})` 只读返回 `{source, summary, files}`。根目录须为可信服务拥有的现存绝对目录，记录必须是其下 `web-execution-*/execution.json`。首版不接受客户端报告对象、ZIP 或递归 recheck 链。宿主目录所有者主动伪造私有历史不在本组件威胁模型内；普通 JSON 的 `providerKind` 本身不是认证。
 
 来源必须保留至少一次编码模型请求的四字段私有回执、实际内容哈希、正常结束与对应文件建议。校验原工作区是报告同级 `workspace`，当前 HEAD、干净状态、允许源码哈希、原提交的逐文件 Git blob 以及当前保护外壳完全匹配。所有路径父链、文件/目录拒绝链接与硬链接，读取有大小上限。Git 只读检查禁用可选锁、hooks、fsmonitor、系统和用户配置，不刷新原索引。来源运行必须已终止且保存了真实停止证据；未知停止不能复验。
 
-`startWebRecheck({executionRoot, sourceReportPath, reviewer, reviewerKind='model', executable=process.env.EXECUTION_SANDBOX_EXE, signal, timeoutMs=180000, maxReviewCalls=2, onEvent, assertCurrent})` 返回 `{id, cancel, done, snapshot}`。配置必须来自可信控制器。`assertCurrent(binding)` 在各阶段前后检查当前归属；它不是候选回调。总预算最大600秒，Review最多两次。
+`startWebRecheck({executionRoot, sourceReportPath, sourceBinding?, outputDir=executionRoot, reviewer, reviewerKind='model', executable=process.env.EXECUTION_SANDBOX_EXE, signal, timeoutMs=180000, maxReviewCalls=2, onEvent, assertCurrent})` 返回 `{id, cancel, done, snapshot}`。配置必须来自可信控制器。`assertCurrent(binding)` 在各阶段前后检查当前归属；它不是候选回调。总预算最大600秒，Review最多两次。
 
 ## 新记录与版本
 
@@ -16,7 +31,7 @@
 
 本次 `providerKind:'model'` 表示代码继承真实模型来源；`calls:0` 明确本次没有编码请求。`modelCalls`、`reviewCalls`、`totalModelCalls` 和 `usage` 只记录新 Review。未知 token 为 `null`，不记为零。原用量仅在 provenance，不能重复计量。
 
-specRevision 绑定当前 `webProfile.task` 的 JSON SHA256，必须与来源相同；planRevision 绑定当前 HTTP/browser 清单。所有新分支绑定相同 project/run/task、新 attempt、原提交、sourceHash、spec/plan、HTTP/browser manifest 和 Review policy。每阶段前后重新检查原报告、原 Git、原源码、快照和外壳。新源码不写原仓库；新验收文件只保存在新目录。
+默认specRevision绑定当前`webProfile.task`的JSON SHA256，必须与来源相同；新planRevision绑定当前HTTP/browser清单。可信控制器明确提供sourceBinding时，spec/plan沿用精确匹配的原规划上下文。两种模式的所有新分支均绑定相同project/run/task、新attempt、原提交、sourceHash、spec/plan、当前HTTP/browser manifest和Review policy。每阶段前后重新检查原报告、原Git、原源码、快照和外壳。新源码不写原仓库；新验收文件只保存在新目录。
 
 ## 重新验收与停止
 
@@ -42,7 +57,7 @@ node scripts/recheck-web.mjs --record <绝对execution.json> --execution-root <�
 
 CLI 输出新结论、新 Review 用量与原来源说明，不输出源码或私有回执正文。真实模型正向复验仅由根控制器明确触发；普通测试的可信替身只验证控制器判定，不证明业务软件通过验收。
 
-## 本轮检查
+## 原组件历史检查
 
 基于 `702d318`，依赖已固定的 Review 编号行策略 `bef5d66` 与浏览器匿名诊断修复 `f709edc`。本组件只新增本记录及三个授权入口/测试文件。
 

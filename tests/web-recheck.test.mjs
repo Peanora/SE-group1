@@ -18,6 +18,12 @@ const fixtureFiles = [{ path: 'src/app.mjs', content: 'export async function cre
 const fileName = fileURLToPath(import.meta.url);
 const moduleUrl = name => new URL(`../lib/${name}.mjs`, import.meta.url).href;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const sourceBinding = source => Object.fromEntries(['projectId', 'runId', 'taskId', 'specRevision', 'planRevision'].map(key => [key, source[key]]));
+async function outputFixture(t) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'taskflow-recheck-output-'));
+  t.after(async () => { assert.equal(path.dirname(root), path.resolve(os.tmpdir())); assert.ok(path.basename(root).startsWith('taskflow-recheck-output-')); await rm(root, { recursive: true, force: true }); });
+  return path.join(root, 'service-row', 'new-output');
+}
 
 async function fixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'taskflow-recheck-test-'));
@@ -115,12 +121,13 @@ async function mockChild(config) {
     if (mode === 'previous-open') raw.resolutions.forEach(item => { item.status = 'open'; });
     if (mode === 'previous-missing') raw.resolutions = [];
     if (mode === 'format' && counts.review === 1) raw.issues.push({ severity: 'advisory', file: 'src/app.mjs', line: 999, evidence: 'wrong', message: 'wrong evidence' });
+    if (mode === 'missing-evidence' && counts.review === 1) raw.issues.push({ severity: 'advisory', file: 'src/app.mjs', line: 1, message: 'missing required evidence' });
     if (mode !== 'no-receipt' && mode !== 'diagnostic') await onReceipt({ model: 'trusted-review-test', finishReason: mode === 'length' ? 'length' : mode === 'bad-enum' ? 'not-real' : 'stop',
       usage: mode === 'unknown-usage' ? { inputTokens: null, outputTokens: null } : { inputTokens: 7, outputTokens: 11 }, content: JSON.stringify(mode === 'mismatched-receipt' ? { ...raw, summary: 'a different response' } : raw) });
     if (mode === 'http-failure') await sleep(40);
     return raw;
   };
-  const execution = startWebRecheck({ executionRoot: config.executionRoot, sourceReportPath: config.sourceReportPath, reviewer,
+  const execution = startWebRecheck({ executionRoot: config.executionRoot, sourceReportPath: config.sourceReportPath, sourceBinding: config.sourceBinding, outputDir: config.outputDir, reviewer,
     reviewerKind: mode === 'diagnostic' ? 'diagnostic' : 'model', signal: controller.signal, timeoutMs: config.timeoutMs ?? 15000, maxReviewCalls: config.maxReviewCalls ?? 2,
     assertCurrent: async () => { if (mode === 'changed-binding' && counts.http >= 2) throw new Error('trusted binding changed'); } });
   const record = await execution.done; clearTimeout(timeout);
@@ -187,6 +194,110 @@ if (process.argv[2] === '--trusted-mock-child') {
     assert.deepEqual(await readFile(f.sourceReportPath), original); assert.equal(await f.git(['rev-parse', 'HEAD']), f.commit); assert.equal(await f.git(['status', '--porcelain']), '');
     const receiptText = await readFile(record.modelCalls[0].receiptPath); assert.equal(hash(receiptText), record.modelCalls[0].receiptHash);
     assert.deepEqual(Object.keys(JSON.parse(receiptText)).sort(), ['content', 'finishReason', 'model', 'usage']);
+  });
+
+  test('trusted planning binding admits noncanonical source without changing default CLI rules or original Git', async t => {
+    const f = await fixture(t), outputDir = await outputFixture(t), { inspectWebRecheckSource } = await import(moduleUrl('web-recheck'));
+    f.source.specRevision = 'a'.repeat(64); f.source.planRevision = 'b'.repeat(64);
+    f.source.versions[0].acceptance = { review: { status: 'error' }, openIssues: [] }; await f.saveSource();
+    const binding = sourceBinding(f.source), original = await readFile(f.sourceReportPath), index = await readFile(path.join(f.workspace, '.git/index')), receipt = await readFile(f.receiptPath);
+    await assert.rejects(inspectWebRecheckSource({ executionRoot: f.root, sourceReportPath: f.sourceReportPath }));
+    const inspected = await inspectWebRecheckSource({ executionRoot: f.root, sourceReportPath: f.sourceReportPath, sourceBinding: binding });
+    assert.deepEqual(inspected.summary.sourceBinding, binding); assert.equal(inspected.summary.sourceExecutionRoot, f.root);
+    assert.equal(inspected.summary.sourceReportHash, hash(original)); assert.deepEqual(inspected.files, fixtureFiles);
+    const result = await mockRun(f, 'normal', { sourceBinding: binding, outputDir }), { record } = result;
+    assert.equal(result.accepted, true); assert.equal(record.calls, 0); assert.equal(record.reviewCalls, 1);
+    assert.equal(path.dirname(path.dirname(record.workspace)), outputDir); assert.notEqual(record.attemptId, f.source.attemptId);
+    for (const key of Object.keys(binding)) assert.equal(record[key], binding[key]);
+    for (const branch of [record.versions[0].acceptance.test, record.versions[0].acceptance.browser, record.versions[0].acceptance.review]) {
+      for (const key of Object.keys(binding)) assert.equal(branch.binding[key], binding[key]);
+    }
+    assert.equal(record.candidateCommit, f.commit); assert.equal(record.provenance.sourceReportHash, hash(original));
+    assert.deepEqual(record.provenance.sourceBinding, binding); assert.equal(record.provenance.sourceWorkspace, f.workspace);
+    assert.ok(!(await readdir(record.workspace)).includes('.git')); assert.deepEqual(await readFile(f.sourceReportPath), original);
+    assert.deepEqual(await readFile(path.join(f.workspace, '.git/index')), index); assert.equal(await f.git(['status', '--porcelain']), '');
+    assert.deepEqual(await readFile(f.receiptPath), receipt);
+    assert.deepEqual(await readdir(f.root), [path.basename(f.directory)]);
+  });
+
+  test('source binding requires exact plain data fields without getters, symbols or unapproved extra versions', async t => {
+    const f = await fixture(t), { inspectWebRecheckSource, startWebRecheck } = await import(moduleUrl('web-recheck')), binding = sourceBinding(f.source);
+    const options = { executionRoot: f.root, sourceReportPath: f.sourceReportPath, reviewer: async () => assert.fail('must not call') };
+    let getters = 0; const accessor = { ...binding }; Object.defineProperty(accessor, 'specRevision', { enumerable: true, get() { getters++; return binding.specRevision; } });
+    const hidden = { ...binding }; Object.defineProperty(hidden, 'projectId', { value: binding.projectId, enumerable: false });
+    for (const value of [null, [], true, {}, { ...binding, sourceRevision: 'a'.repeat(64) }, { ...binding, [Symbol('extra')]: 'x' },
+      { ...binding, specRevision: 'A'.repeat(64) }, { ...binding, projectId: '../source' }, { ...binding, taskId: 'other' }, { ...binding, runId: 7 }, accessor, hidden, Object.assign(Object.create({}), binding)]) {
+      assert.throws(() => startWebRecheck({ ...options, sourceBinding: value }));
+      await assert.rejects(inspectWebRecheckSource({ ...options, sourceBinding: value }));
+    }
+    assert.equal(getters, 0);
+    for (const key of ['sourceBinding', 'outputDir']) {
+      const accessorOptions = { ...options }; Object.defineProperty(accessorOptions, key, { enumerable: true, get() { getters++; return key === 'sourceBinding' ? binding : f.root; } });
+      assert.throws(() => startWebRecheck(accessorOptions));
+      if (key === 'sourceBinding') await assert.rejects(inspectWebRecheckSource(accessorOptions));
+    }
+    assert.equal(getters, 0);
+    for (const key of Object.keys(binding)) {
+      const value = { ...binding, [key]: key.endsWith('Revision') ? 'e'.repeat(64) : key === 'taskId' ? 'other' : 'different' };
+      await assert.rejects(inspectWebRecheckSource({ ...options, sourceBinding: value }));
+      if (key === 'taskId') assert.throws(() => startWebRecheck({ ...options, sourceBinding: value }));
+      else { const denied = await startWebRecheck({ ...options, sourceBinding: value }).done; assert.equal(denied.status, 'failed'); assert.equal(denied.calls, 0); assert.equal(denied.reviewCalls, 0); assert.equal(denied.reportPath, undefined); }
+    }
+    assert.deepEqual(await readdir(f.root), [path.basename(f.directory)]);
+  });
+
+  test('failed source binding admission creates no target, and canonical default keeps a fresh plan', async t => {
+    const f = await fixture(t), outputDir = await outputFixture(t), { startWebRecheck } = await import(moduleUrl('web-recheck'));
+    const bad = await startWebRecheck({ executionRoot: f.root, sourceReportPath: f.sourceReportPath, outputDir,
+      sourceBinding: { ...sourceBinding(f.source), planRevision: 'c'.repeat(64) }, reviewer: async () => assert.fail('must not call') }).done;
+    assert.equal(bad.status, 'failed'); assert.equal(bad.calls, 0); assert.equal(bad.reportPath, undefined);
+    await assert.rejects(readdir(outputDir), { code: 'ENOENT' });
+    const { record } = await mockRun(f, 'normal');
+    assert.equal(record.specRevision, f.source.specRevision); assert.notEqual(record.planRevision, f.source.planRevision);
+  });
+
+  test('contextual Review missing required evidence receives at most one fresh format recheck without coding', async t => {
+    const f = await fixture(t), outputDir = await outputFixture(t);
+    f.source.specRevision = 'a'.repeat(64); f.source.planRevision = 'b'.repeat(64); await f.saveSource();
+    const options = { sourceBinding: sourceBinding(f.source), outputDir };
+    const result = await mockRun(f, 'missing-evidence', options);
+    assert.equal(result.accepted, true); assert.equal(result.record.calls, 0); assert.equal(result.record.reviewCalls, 2);
+    assert.equal(result.record.candidateCommit, f.commit); assert.equal(result.record.formatFailures.length, 1);
+    assert.deepEqual(result.record.usage, { inputTokens: 14, outputTokens: 22 });
+    const limited = await mockRun(f, 'missing-evidence', { ...options, maxReviewCalls: 1 });
+    assert.equal(limited.accepted, false); assert.equal(limited.record.reviewCalls, 1); assert.equal(limited.record.calls, 0);
+  });
+
+  test('output targets reject original record/workspace, roots, files and linked parents before creating snapshots', async t => {
+    const f = await fixture(t), { startWebRecheck } = await import(moduleUrl('web-recheck'));
+    const outside = await outputFixture(t), alias = path.join(f.root, 'output-alias'); await mkdir(outside, { recursive: true });
+    await symlink(outside, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    const file = path.join(f.root, 'not-directory'); await writeFile(file, 'preserve');
+    for (const outputDir of [f.directory, f.workspace, path.join(f.workspace, 'never-create'), path.join(f.workspace, '..', 'never-create'), path.parse(f.root).root, file, path.join(alias, 'never-create')]) {
+      const result = await startWebRecheck({ executionRoot: f.root, sourceReportPath: f.sourceReportPath, outputDir, reviewer: async () => assert.fail('must not call') }).done;
+      assert.equal(result.status, 'failed', outputDir); assert.equal(result.reportPath, undefined, outputDir); assert.equal(result.reviewCalls, 0);
+    }
+    assert.equal(await readFile(file, 'utf8'), 'preserve'); assert.deepEqual(await readdir(outside), []);
+    assert.ok(!(await readdir(f.workspace)).includes('never-create')); assert.ok(!(await readdir(f.directory)).includes('never-create'));
+    assert.equal(await f.git(['status', '--porcelain']), '');
+  });
+
+  test('two-root cancellation before output and after checks leaves original source unchanged and retains unknown evidence', async t => {
+    const f = await fixture(t), outputDir = await outputFixture(t), original = await readFile(f.sourceReportPath);
+    const { startWebRecheck } = await import(moduleUrl('web-recheck')), controller = new AbortController(), captured = sourceBinding(f.source);
+    const execution = startWebRecheck({ executionRoot: f.root, sourceReportPath: f.sourceReportPath, sourceBinding: captured, outputDir,
+      signal: controller.signal, assertCurrent: async binding => { assert.equal(binding.planRevision, f.source.planRevision); controller.abort(); }, reviewer: async () => assert.fail('must not call') });
+    captured.planRevision = 'e'.repeat(64); const first = await execution.done;
+    assert.equal(first.status, 'stopped'); assert.equal(first.reportPath, undefined); await assert.rejects(readdir(outputDir), { code: 'ENOENT' });
+    for (const mode of ['cancel-runtime', 'late-receipt', 'preflight', 'http-throws-unknown']) {
+      const { record, unchanged } = await mockRun(f, mode, { sourceBinding: sourceBinding(f.source), outputDir });
+      assert.equal(path.dirname(path.dirname(record.workspace)), outputDir); assert.equal(record.calls, 0); assert.equal(unchanged, true);
+      assert.equal(record.status, mode === 'preflight' || mode === 'http-throws-unknown' ? 'reconciliation_required' : 'stopped');
+      if (mode === 'preflight') assert.equal(record.environmentFailure.result.pid, 98765);
+      if (mode === 'http-throws-unknown') assert.equal(record.versions[0].acceptance.test.failure.result.pid, 98766);
+    }
+    assert.deepEqual(await readFile(f.sourceReportPath), original); assert.equal(await f.git(['status', '--porcelain']), '');
+    assert.deepEqual(await readdir(f.root), [path.basename(f.directory)]);
   });
 
   test('old passed results cannot replace failed fresh self-check; unknown stop forbids downstream', async t => {
@@ -276,7 +387,7 @@ if (process.argv[2] === '--trusted-mock-child') {
     const args = [script, '--record', f.sourceReportPath, '--execution-root', f.root];
     const inspected = await child(args); assert.equal(inspected.code, 0, inspected.stderr); const value = JSON.parse(inspected.stdout);
     assert.equal(value.mode, 'inspect'); assert.equal(value.reviewCallsThisInspection, 0); assert.equal(value.provenance.sourceCommit, f.commit);
-    for (const flags of [['--run'], ['--model-review'], ['--surprise']]) { const failed = await child([...args, ...flags]); assert.equal(failed.code, 2); }
+    for (const flags of [['--run'], ['--model-review'], ['--surprise'], ['--source-binding', '{}'], ['--output-dir', f.root]]) { const failed = await child([...args, ...flags]); assert.equal(failed.code, 2); }
     assert.deepEqual((await readdir(f.root)).filter(name => name.startsWith('web-recheck-')), []);
   });
 
@@ -288,5 +399,21 @@ if (process.argv[2] === '--trusted-mock-child') {
     assert.equal(record.candidateCommit, f.commit); assert.equal(record.versions[0].selfCheck.status, 'failed');
     assert.equal(record.versions[0].selfCheck.checks.length, webManifest.count); assert.equal(record.versions[0].selfCheck.terminationConfirmed, true);
     assert.ok(record.versions[0].selfCheck.checks.some(item => !item.passed)); assert.deepEqual(await readFile(f.sourceReportPath), original);
+  });
+
+  test('real two-root contextual recheck preserves original candidate and fails fresh MXC business checks without model requests', { skip: process.env.TASKFLOW_TEST_REAL_SANDBOX !== '1', timeout: 60000 }, async t => {
+    const f = await fixture(t), outputDir = await outputFixture(t), { startWebRecheck } = await import(moduleUrl('web-recheck'));
+    f.source.specRevision = 'a'.repeat(64); f.source.planRevision = 'b'.repeat(64); await f.saveSource();
+    const original = await readFile(f.sourceReportPath), receipt = await readFile(f.receiptPath), index = await readFile(path.join(f.workspace, '.git/index'));
+    const record = await startWebRecheck({ executionRoot: f.root, sourceReportPath: f.sourceReportPath, sourceBinding: sourceBinding(f.source), outputDir, timeoutMs: 45000,
+      reviewer: async () => assert.fail('incomplete candidate cannot reach Review') }).done;
+    assert.equal(record.status, 'failed', record.error); assert.equal(record.calls, 0); assert.equal(record.reviewCalls, 0);
+    assert.equal(record.candidateCommit, f.commit); assert.equal(path.dirname(path.dirname(record.workspace)), outputDir);
+    assert.equal(record.versions[0].selfCheck.status, 'failed'); assert.equal(record.versions[0].selfCheck.checks.length, webManifest.count);
+    assert.equal(record.versions[0].selfCheck.terminationConfirmed, true); assert.ok(record.versions[0].selfCheck.checks.some(item => !item.passed));
+    assert.deepEqual(record.provenance.sourceBinding, sourceBinding(f.source)); assert.equal(record.provenance.sourceReportHash, hash(original));
+    assert.deepEqual(await readFile(f.sourceReportPath), original); assert.deepEqual(await readFile(f.receiptPath), receipt);
+    assert.deepEqual(await readFile(path.join(f.workspace, '.git/index')), index); assert.equal(await f.git(['status', '--porcelain']), '');
+    assert.ok(!(await readdir(record.workspace)).includes('.git')); assert.deepEqual(await readdir(f.root), [path.basename(f.directory)]);
   });
 }
