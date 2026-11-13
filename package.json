@@ -14,7 +14,8 @@
     "test": "node --test tests/*.test.mjs",
     "check": "node scripts/check-syntax.mjs",
     "execution:check": "node scripts/check-executor.mjs",
-    "web:check": "node scripts/check-web-executor.mjs"
+    "web:check": "node scripts/check-web-executor.mjs",
+    "web:verify": "node scripts/verify-web-delivery.mjs"
   },
   "dependencies": {
     "playwright-core": "1.65.0"
