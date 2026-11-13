@@ -24,7 +24,7 @@
 
 最新业务证据（2026年11月14日）：平台`9a07615`对原真实模型提交`5dc88cd31f0aa7649458a58ab386e23d3ff1e6a2`进行新一轮验收，自检18/18、独立HTTP/SQLite18/18、Edge21/21、新模型Review完成且阻塞0，`accepted/taskAccepted:true`。该轮编码0次、Review1次，用量17628输入/510输出；3项advisory保留，不宣称全部建议已处理。原失败报告与源码保持原样，新记录为`output/web-executions/web-recheck-HSll13/execution.json`。
 
-最终源码包`output/live-web-delivery-3lVPQC/library-web-source.zip`包含20个文件，无平台密钥、数据库或私有回执；规格及计划快照与绑定hash相符。当前平台对该包重新运行18项HTTP/数据库和21项浏览器检查，均通过；此命令不调用模型、不信包内历史Review。最终包干净解压后实际安装、npm start，并通过7项文件/版本/HTTP借还及登出检查；同一源码首包另经真实浏览器手动完成登录、借阅、归还。两个启动服务均STOP_CONFIRMED、退出0、端口不再监听。平台`9594fba`的61脚本及267/267真实MXC测试通过，无跳过；独立集成复验待补。各次失败、修复依据及限制见[验证记录](VERIFICATION.md)和[持续任务](tasks/platform-completion.md)。
+最终源码包`output/live-web-delivery-3lVPQC/library-web-source.zip`包含20个文件，无平台密钥、数据库或私有回执；规格及计划快照与绑定hash相符。当前平台对该包重新运行18项HTTP/数据库和21项浏览器检查，均通过；此命令不调用模型、不信包内历史Review。最终包干净解压后实际安装、npm start，并通过7项文件/版本/HTTP借还及登出检查；同一源码首包另经真实浏览器手动完成登录、借阅、归还。两个启动服务均STOP_CONFIRMED、退出0、端口不再监听。固定集成`a3e7de6`已由另一Agent独立复验61脚本、267/267真实MXC测试及源码包新副本HTTP18+Edge21，无失败/跳过、新阻塞0；原失败及修复仍保留。各次失败、修复依据及限制见[验证记录](VERIFICATION.md)和[持续任务](tasks/platform-completion.md)。
 
 以下为各历史固定版本的检查记录，不能替代后续新提交的验证：
 

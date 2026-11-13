@@ -141,3 +141,5 @@ passed只表示固定`library-borrow-v1`在当前清单和Review规则下通过�
 最终包实际`npm run web:verify -- --archive <路径>`再次HTTP18/18、Edge21/21通过，报告`output/delivery-verification/delivery-revalidation-e5rxxp/revalidation.json`。解压到新的clean-start目录，npm ci不运行安装脚本；npm start使用交付保护入口，7项实际检查通过：全部交付文件bytes/hash、规格/计划hash、HTML入口、alice登录、借阅库存减为0、归还恢复1、登出使会话401。记录`output/live-web-delivery-3lVPQC/clean-start-smoke.json`。输入STOP后STOP_CONFIRMED且启动进程退出0，端口49721不再监听；测试数据库仅留该忽略目录。未将目标模块导入宿主，未请求外网或新增模型调用。
 
 归档复验命令不调用模型，`checks_passed/taskAccepted:false/historicalAcceptanceVerified:false`仅表示新检查，不相信ZIP中的历史通过声明，也不产生新Review。当前仍是固定图书借阅参考范围，不宣称通用执行、需求变更、多Agent集成或全部PRD完成。
+
+固定主集成`a3e7de653d6d75adf0bba3345c28bfe9a06ca80e`独立复验完成：另一Agent运行61脚本语法检查、显式真实MXC的267/267测试，0失败/取消/跳过，60931.9237ms；只读Review检查新模块和计时回归，无新增阻塞。独立核对新accepted记录、私有Review正文及哈希、原Git准入和ZIP源码绑定，并再次在新副本实际执行HTTP18/18、Edge21/21，全部停止确认。检查前后HEAD一致、工作区干净；未付费调用或修改用户数据。完整本地记录`output/verification/independent-integration-a3e7de6-20261114/RESULT.md`。
