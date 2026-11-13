@@ -214,3 +214,60 @@ test('私有回执父链链接及保存失败阻断两个分支而不暴露宿�
   assert.equal(x.run.engineeringHistory[0].finishReason, 'stop'); assert.deepEqual(x.run.engineeringHistory[0].usage, { inputTokens: 23, outputTokens: 34 });
   assert.equal(JSON.stringify(x.run).includes(outside), false); assert.equal(JSON.stringify(x.run).includes(config.apiKey), false);
 });
+
+test('非合作回执写入不能阻塞超时或关闭，迟到结果不改最终历史', async t => {
+  for (const shutdown of [false, true]) for (const lateFailure of [false, true]) await t.test(`${shutdown ? '关闭' : '超时'}-${lateFailure ? '迟到失败' : '迟到成功'}`, async t => {
+    const entered = deferred(), release = deferred();
+    const x = await setup(t, { options: { engineeringTimeoutMs: shutdown ? 5000 : 50 } });
+    let writerSettled = false;
+    x.orchestrator.writeEngineeringReceipt = async () => {
+      entered.resolve(); await release.promise; writerSettled = true;
+      if (lateFailure) throw new Error(`${config.apiKey} C:/synthetic-private/late-receipt`);
+      return { id: 'late-receipt', sha256: 'a'.repeat(64), bytes: 100 };
+    };
+    try {
+      await x.approve(); await entered.promise;
+      if (shutdown) {
+        let closed = false;
+        void x.orchestrator.shutdown().then(() => { closed = true; });
+        await waitFor(() => closed);
+      } else await waitFor(() => x.run.status === 'failed');
+      assert.equal(writerSettled, false, '停止必须在写入器释放前完成');
+      assert.equal(x.run.engineeringPlan, undefined);
+      const attempt = x.run.engineeringHistory[0];
+      assert.equal(attempt.code, shutdown ? 'cancelled' : 'model_timeout');
+      assert.equal(attempt.receipt, null); assert.equal(attempt.receiptState, 'unconfirmed');
+      assert.deepEqual(attempt.usage, { inputTokens: 23, outputTokens: 34 });
+      assert.ok(attempt.finishedAt);
+      for (const id of ['architecture', 'tasks']) assert.equal(x.run.stages.find(stage => stage.id === id).status, 'failed');
+      const before = JSON.stringify(x.run);
+      release.resolve(); await waitFor(() => writerSettled); await delay(5);
+      assert.equal(JSON.stringify(x.run), before, '迟到写入不得更新回执或发布草案');
+    } finally { release.resolve(); }
+  });
+});
+
+test('工程规划最终保存失败撤回成功且公开错误保持固定，持续故障不产生拒绝泄漏', async t => {
+  for (const persistent of [false, true]) await t.test(persistent ? '持续故障' : '单次故障', async t => {
+    const x = await setup(t), save = x.store.save.bind(x.store);
+    let faults = 0;
+    x.store.save = async project => {
+      if (x.run.engineeringHistory?.[0]?.finishedAt && (persistent || faults === 0)) {
+        faults++; throw new Error(`${config.apiKey} EACCES C:/synthetic-private/engineering-final-save.tmp`);
+      }
+      return save(project);
+    };
+    await x.approve(); await waitFor(() => x.run.status === 'failed');
+    await x.orchestrator.shutdown();
+    assert.ok(faults > 0); assert.equal(x.run.engineeringPlan, undefined);
+    const attempt = x.run.engineeringHistory[0];
+    assert.equal(attempt.code, 'persistence_failed'); assert.equal(attempt.status, 'failed');
+    assert.equal(attempt.persistenceStatus, 'failed'); assert.equal(attempt.receiptState, 'saved');
+    assert.deepEqual(attempt.usage, { inputTokens: 23, outputTokens: 34 });
+    assert.ok(attempt.receipt);
+    assert.equal(x.run.planRevision, null); assert.equal(x.run.artifacts.some(item => item.name === 'architecture.md'), false);
+    const publicText = JSON.stringify(x.run);
+    for (const forbidden of [config.apiKey, 'C:/synthetic-private', 'engineering-final-save.tmp', 'EACCES']) assert.equal(publicText.includes(forbidden), false, forbidden);
+    for (const id of ['architecture', 'tasks']) assert.equal(x.run.stages.find(stage => stage.id === id).status, 'failed');
+  });
+});

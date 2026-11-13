@@ -319,8 +319,10 @@ test('审批持久化失败不放行，规格/架构/任务内容变化使旧版
   await waitFor(() => run.status === 'awaiting_spec' && !orchestrator.state(run).driving);
   const originalSave = store.save.bind(store);
   const before = structuredClone(run);
-  store.save = async () => { throw new Error('磁盘写入失败'); };
-  await assert.rejects(approveSpec(orchestrator, project, run), /磁盘写入失败/u);
+  store.save = async () => { throw new Error('磁盘写入失败 C:/synthetic-private/approval-save.tmp synthetic-storage-secret'); };
+  await assert.rejects(approveSpec(orchestrator, project, run), {
+    code: 'persistence_failed', message: '运行记录保存失败，请保留现场并检查本地存储后重试。',
+  });
   assert.deepEqual(run, before);
   assert.equal(orchestrator.state(run).actionBusy, false);
   store.save = originalSave;
