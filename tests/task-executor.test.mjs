@@ -119,3 +119,16 @@ test('候选不能通过process.stdout伪造业务观察', async t => {
   assert.equal(record.status, 'failed');
   assert.notEqual(record.commands[0].exitCode, 0);
 });
+
+test('后续请求没有用量回执时总量保持未知，保留先前已知用量', async t => {
+  let calls = 0;
+  const record = await (await run(t, async () => {
+    if (++calls === 2) throw new Error('模型连接中断');
+    return { ...replacement('export function borrowBook() { return {}; }'), usage: { inputTokens: 10, outputTokens: 20 } };
+  })).done;
+  assert.equal(record.status, 'failed');
+  assert.equal(record.calls, 2);
+  assert.equal(record.usage.inputTokens, null);
+  assert.deepEqual(record.modelCalls[0].usage, { inputTokens: 10, outputTokens: 20 });
+  assert.equal(record.modelCalls[1].usage.outputTokens, null);
+});

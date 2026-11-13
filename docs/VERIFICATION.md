@@ -82,3 +82,5 @@
 主Agent修复自检：25个脚本语法通过，51项自动化检查通过（显式启用真实MXC）。使用真实MXC重新执行先前实际模型产出的代码，13/13通过，记录`output/executions/execution-vfZiuu/execution.json`；独立Review所用的原地修改攻击现判失败、10/13，记录`output/executions/execution-63ZXYA/execution.json`。此次回放没有新增付费模型调用。
 
 另有临时真实进程探针证明：detached且stdio ignore的后代进程在取消CLI、runner主动exit0两种场景都停止心跳，600ms后PID不存在。本机该受管执行方式未发现停止确认误报；不外推为其他Worker的可靠恢复。
+
+独立测试在`23ca669`复验25个脚本、51/51测试和真实候选13/13通过；两项原失败判定回归也在真实MXC复核。随后补充逐次调用用量记录及未收到后续回执时的总量未知规则，主Agent最终运行显式真实MXC的`npm test`为52/52通过、0跳过。该补充不改变候选执行与验收逻辑，也不产生模型请求。
