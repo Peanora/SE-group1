@@ -129,7 +129,7 @@ export async function createApp(options = {}) {
           if (segments.length === 8 && segments[7] === 'action') {
             if (method !== 'POST') throw new HttpError(405, '执行动作请使用POST请求。');
             const body = exactFields(await readJson(request), ['action']);
-            if (!['cancel', 'retry', 'preview', 'stop_preview'].includes(body.action)) throw new HttpError(400, '执行动作无效，请刷新后使用页面提供的操作。');
+            if (!['cancel', 'retry', 'recheck', 'preview', 'stop_preview'].includes(body.action)) throw new HttpError(400, '执行动作无效，请刷新后使用页面提供的操作。');
             return respond(response, 200, await executionService.action({ ...identity, executionId: segments[6], action: body.action }));
           }
           if (segments.length === 8 && segments[7] === 'download') {

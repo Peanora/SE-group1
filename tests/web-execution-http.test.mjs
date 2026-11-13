@@ -44,13 +44,15 @@ test('execution routes preserve server project/run identity, exact payloads and 
   response = await fetch(`${route}/start`, json({ profileId: 'library-web-v1', contractRevision: 'fixed-contract' }));
   assert.equal(response.status, 202); assert.equal((await response.json()).execution.taskAccepted, false);
   response = await fetch(`${route}/execution-1/action`, json({ action: 'cancel' })); assert.equal(response.status, 200);
+  response = await fetch(`${route}/execution-1/action`, json({ action: 'recheck' })); assert.equal(response.status, 200);
   response = await fetch(`${route}/execution-1/download`); assert.equal(response.status, 200);
   assert.equal(response.headers.get('content-type'), 'application/zip');
   assert.match(response.headers.get('content-disposition'), /filename\*=UTF-8''%E5%9B%BE/u);
   assert.equal(await response.text(), 'trusted route fixture');
   assert.deepEqual(calls, [
     ['list', identity], ['start', { ...identity, profileId: 'library-web-v1', contractRevision: 'fixed-contract' }],
-    ['action', { ...identity, executionId: 'execution-1', action: 'cancel' }], ['download', { ...identity, executionId: 'execution-1' }],
+    ['action', { ...identity, executionId: 'execution-1', action: 'cancel' }],
+    ['action', { ...identity, executionId: 'execution-1', action: 'recheck' }], ['download', { ...identity, executionId: 'execution-1' }],
   ]);
 });
 
@@ -73,7 +75,10 @@ test('extra client identity, paths, budget or results cannot enter execution con
     { profileId: 'library-web-v1', contractRevision: 'x', report: { status: 'passed' } },
     { profileId: 'library-web-v1', contractRevision: 'x', workspace: 'C:/private' },
   ]) assert.equal((await fetch(`${route}/start`, json(body))).status, 400);
-  for (const body of [{}, { action: 'cancel', executionId: 'other' }, { action: 'cancel', path: '../other' }, { action: 'force_pass' }]) {
+  for (const body of [{}, { action: 'cancel', executionId: 'other' }, { action: 'cancel', path: '../other' }, { action: 'force_pass' },
+    { action: 'recheck', sourceReportPath: 'C:/private/execution.json' }, { action: 'recheck', sourceBinding: { projectId: 'other' } },
+    { action: 'recheck', outputDir: 'C:/other' }, { action: 'recheck', budget: { maxReviewCalls: 999 } },
+  ]) {
     assert.equal((await fetch(`${route}/execution-1/action`, json(body))).status, 400);
   }
   assert.deepEqual(calls, []);
