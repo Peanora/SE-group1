@@ -33,9 +33,12 @@ async function setup(t, stepDelayMs = 0, plannerOverride = planner) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'task-orchestrator-'));
   const store = await new ProjectStore(directory).init();
   const orchestrator = new Orchestrator(store, plannerOverride, { stepDelayMs });
+  const instances = [orchestrator];
+  const register = instance => { instances.push(instance); return instance; };
   const project = await store.create({ name: '课程任务系统', source: { filename: '需求.md', content: '用户可以创建、更新并完成软件开发任务。' } });
-  t.after(async () => { await orchestrator.shutdown(); await rm(directory, { recursive: true, force: true }); });
-  return { directory, store, orchestrator, project };
+  // Every restored scheduler must finish its own writes before deleting the shared fixture.
+  t.after(async () => { await Promise.all(instances.map(instance => instance.shutdown())); await rm(directory, { recursive: true, force: true }); });
+  return { directory, store, orchestrator, project, register };
 }
 
 async function approveSpec(orchestrator, project, run) {
@@ -90,7 +93,7 @@ test('阶段边界暂停不启动后续任务；恢复后继续推进', async t 
 });
 
 test('服务重启将中断阶段转为可重试失败，并保留成功阶段', async t => {
-  const { directory, store, project } = await setup(t);
+  const { directory, store, project, register } = await setup(t);
   const now = new Date().toISOString();
   const run = {
     id: randomUUID(), projectId: project.id, mode: 'local', status: 'running', createdAt: now, updatedAt: now,
@@ -101,7 +104,7 @@ test('服务重启将中断阶段转为可重试失败，并保留成功阶段',
   await store.save(project);
   const restoredStore = await new ProjectStore(directory).init();
   const restored = new Orchestrator(restoredStore, planner, { stepDelayMs: 0 });
-  t.after(() => restored.shutdown());
+  register(restored);
   await restored.init();
   const restoredRun = restoredStore.getRun(project.id, run.id).run;
   assert.equal(restoredRun.status, 'failed');
@@ -124,14 +127,14 @@ test('拒绝未配置模型和越过审阅门禁的操作', async t => {
 });
 
 test('等待人工审阅的运行在服务重启后保持门禁状态', async t => {
-  const { directory, orchestrator, project } = await setup(t);
+  const { directory, orchestrator, project, register } = await setup(t);
   const run = await orchestrator.createRun(project.id);
   await approveSpec(orchestrator, project, run);
   await waitFor(() => run.status === 'awaiting_review');
   await orchestrator.shutdown();
   const restoredStore = await new ProjectStore(directory).init();
   const restored = new Orchestrator(restoredStore, planner, { stepDelayMs: 0 });
-  t.after(() => restored.shutdown());
+  register(restored);
   await restored.init();
   const restoredRun = restoredStore.getRun(project.id, run.id).run;
   assert.equal(restoredRun.status, 'awaiting_review');
@@ -261,7 +264,7 @@ test('并发重复审批或修订仅接受一次，修订存在有界版本上�
 });
 
 test('规格等待在重启后保留，输入快照不会被项目正文变化污染', async t => {
-  const { directory, store, orchestrator, project } = await setup(t, 20);
+  const { directory, store, orchestrator, project, register } = await setup(t, 20);
   const source = structuredClone(project.source);
   const run = await orchestrator.createRun(project.id);
   project.source = { filename: '新需求.md', content: '新的需求正文' };
@@ -272,7 +275,7 @@ test('规格等待在重启后保留，输入快照不会被项目正文变化�
   await orchestrator.shutdown();
   const restoredStore = await new ProjectStore(directory).init();
   const restored = new Orchestrator(restoredStore, planner, { stepDelayMs: 0 });
-  t.after(() => restored.shutdown());
+  register(restored);
   await restored.init();
   const restoredRun = restoredStore.getRun(project.id, run.id).run;
   assert.equal(restoredRun.status, 'awaiting_spec');
@@ -287,7 +290,7 @@ test('规格等待在重启后保留，输入快照不会被项目正文变化�
 });
 
 test('无workflowVersion的历史等待记录保留旧导出，不能追认v2规格审批', async t => {
-  const { directory, store, project } = await setup(t);
+  const { directory, store, project, register } = await setup(t);
   const now = new Date().toISOString();
   const spec = planner.analyzeRequirements(project.source.content, project.name);
   const run = {
@@ -299,7 +302,7 @@ test('无workflowVersion的历史等待记录保留旧导出，不能追认v2规
   await store.save(project);
   const restoredStore = await new ProjectStore(directory).init();
   const restored = new Orchestrator(restoredStore, planner, { stepDelayMs: 0 });
-  t.after(() => restored.shutdown());
+  register(restored);
   await restored.init();
   const legacy = restoredStore.getRun(project.id, run.id).run;
   assert.equal(legacy.status, 'awaiting_review');
