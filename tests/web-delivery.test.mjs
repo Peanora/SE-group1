@@ -25,16 +25,16 @@ async function setup(t) {
   });
   return { root, workspace, cleanup };
 }
-async function input() {
+async function input(proposalFiles = sourceFiles()) {
   const { webManifest, databaseObserverHash } = await import('../lib/web-tests.mjs');
   const { browserManifest } = await import('../lib/web-browser-tests.mjs');
   const { webProfile } = await import('../lib/web-profile.mjs');
   const { projectReviewPolicy } = await import('../lib/project-review-model.mjs');
-  const files = validateProjectFiles(sourceFiles());
+  const files = validateProjectFiles(proposalFiles);
   const binding = { projectId: 'project-1', runId: 'run-1', taskId: 'task-1', attemptId: 'attempt-1', specRevision: '1'.repeat(64),
     planRevision: '2'.repeat(64), candidateCommit: '3'.repeat(40), sourceHash: hash(JSON.stringify(files)),
     manifestHash: webManifest.hash, browserManifestHash: browserManifest.hash, reviewPolicyHash: projectReviewPolicy.hash };
-  const result = manifest => ({ status: 'passed', profileId: webProfile.id, sourceHash: binding.sourceHash, manifestHash: manifest.hash,
+  const result = manifest => ({ status: 'passed', binding: { ...binding }, profileId: webProfile.id, sourceHash: binding.sourceHash, manifestHash: manifest.hash,
     checks: manifest.checks.map(check => ({ ...check, passed: true })), terminationConfirmed: true,
     processes: [0, 1].map(() => ({ status: 'stopped', terminationConfirmed: true, sourceUnchanged: true, exitCode: 0, stopAcknowledged: true,
       stderr: 'C:\\Users\\private\\database.sqlite', databasePath: '/home/private/data.db' })) });
@@ -47,7 +47,7 @@ async function input() {
       terminationConfirmed: true, stopReason: null, truncated: false, stdout: 'private database observation', stderr: 'private host path',
     })) },
       browser: { ...browserResult, binding: { ...binding }, browser: { version: '123.0.1', closed: true } },
-      review: { status: 'completed', policyHash: projectReviewPolicy.hash, openBlockingIssues: 0 },
+      review: { status: 'completed', binding: { ...binding }, policyHash: projectReviewPolicy.hash, openBlockingIssues: 0 },
       rawLogs: 'LLM_API_KEY=private-api-key; C:\\Users\\private\\.env; /home/private/data.db' } };
 }
 function unzip(bytes) {
@@ -210,6 +210,21 @@ test('delivery refuses stale or missing binding fields, changed source and old p
   }
 });
 
+test('delivery binds every independent branch to all eleven current identity fields', async () => {
+  const options = await input();
+  for (const role of ['test', 'browser', 'review']) {
+    const missingBranchBinding = structuredClone(options); delete missingBranchBinding.report[role].binding;
+    await assert.rejects(createWebDelivery(missingBranchBinding), undefined, `${role} needs its own binding`);
+    for (const key of Object.keys(options.binding)) {
+      const stale = structuredClone(options);
+      stale.report[role].binding[key] = key.endsWith('Id') ? 'old-identity' : key === 'candidateCommit' ? '0'.repeat(40) : '0'.repeat(64);
+      await assert.rejects(createWebDelivery(stale), undefined, `${role}.${key} cannot be stale`);
+      const missingField = structuredClone(options); delete missingField.report[role].binding[key];
+      await assert.rejects(createWebDelivery(missingField), undefined, `${role}.${key} cannot be omitted`);
+    }
+  }
+});
+
 test('delivery needs every exact HTTP and browser check and independently confirmed process termination', async () => {
   const options = await input();
   const changes = [
@@ -282,6 +297,22 @@ test('delivery rejects protected model paths, environment files, credentials and
   await assert.rejects(createWebDelivery(accessor), /普通数据/u); assert.equal(invoked, false);
 });
 
+test('delivery refuses unquoted commented credentials and authorization headers without echoing their values', async () => {
+  const options = await input(), fakeSecret = ['REVIEW', 'FAKE', 'SECRET', '123456'].join('_');
+  for (const material of [
+    `LLM_API_KEY=${fakeSecret} # local`,
+    `LLM_API_KEY=${fakeSecret}#local`,
+    `Authorization: Bearer ${fakeSecret}`,
+    `authorization:Bearer ${fakeSecret}`,
+    `Authorization: Basic ${Buffer.from(fakeSecret).toString('base64')}`,
+  ]) {
+    const changed = structuredClone(options); changed.requirements = material;
+    await assert.rejects(createWebDelivery(changed), error => /凭据|绝对路径/u.test(error.message) && !error.message.includes(fakeSecret));
+    const code = await input([{ path: 'src/app.mjs', content: `export const value = ${JSON.stringify(material)};` }]);
+    await assert.rejects(createWebDelivery(code), error => /凭据|绝对路径/u.test(error.message) && !error.message.includes(fakeSecret));
+  }
+});
+
 function launch(workspace, { executable = '', npm = false } = {}) {
   const command = npm && process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe') : process.execPath;
   const args = npm && process.platform === 'win32' ? ['/d', '/s', '/c', 'npm start'] : ['server.mjs'];
@@ -304,6 +335,25 @@ async function ensureStopped(launched) {
     } else launched.child.kill();
   }, 7000);
   try { return await launched.done; } finally { clearTimeout(timer); }
+}
+
+async function extractDelivery(workspace, delivery) {
+  for (const [name, content] of unzip(delivery.zip)) {
+    const target = path.resolve(workspace, ...name.split('/')), relative = path.relative(workspace, target);
+    assert.ok(relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+    await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, content, { flag: 'wx' });
+  }
+  assert.equal((await verifyWebShell({ workspace })).hash, delivery.manifest.shellHash);
+}
+
+async function readyUrl(launched) {
+  for (let count = 0; count < 500; count++) {
+    const url = /Preview URL: (http:\/\/[^\s]+)/u.exec(launched.stdout())?.[1];
+    if (url) return url;
+    if (launched.child.exitCode !== null) assert.fail(JSON.stringify(await launched.done));
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.fail('packaged launcher did not report preview readiness');
 }
 
 test('packaged launcher fails closed without MXC and never imports candidate code on the host', async t => {
@@ -339,22 +389,10 @@ test('real packaged ZIP npm start serves a trusted echo fixture through MXC and 
   const { workspace, cleanup } = await setup(t);
   // Synthetic service verdicts exercise packaging only; this fixture is not a business acceptance claim.
   const delivery = await createWebDelivery(await input());
-  for (const [name, content] of unzip(delivery.zip)) {
-    const target = path.resolve(workspace, ...name.split('/')), relative = path.relative(workspace, target);
-    assert.ok(relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
-    await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, content, { flag: 'wx' });
-  }
-  assert.equal((await verifyWebShell({ workspace })).hash, delivery.manifest.shellHash);
+  await extractDelivery(workspace, delivery);
   const launched = launch(workspace, { executable: process.env.EXECUTION_SANDBOX_EXE, npm: true });
   cleanup.push(() => ensureStopped(launched));
-  let url;
-  for (let count = 0; count < 500; count++) {
-    url = /Preview URL: (http:\/\/[^\s]+)/u.exec(launched.stdout())?.[1];
-    if (url) break;
-    if (launched.child.exitCode !== null) assert.fail(JSON.stringify(await launched.done));
-    await new Promise(resolve => setTimeout(resolve, 20));
-  }
-  assert.ok(url, 'packaged launcher reported preview readiness');
+  const url = await readyUrl(launched);
   const response = await fetch(url + '/echo');
   assert.equal(response.status, 200); assert.equal(await response.text(), 'protected fixture /echo');
   assert.match(response.headers.get('content-security-policy'), /script-src 'self'/u);
@@ -364,4 +402,26 @@ test('real packaged ZIP npm start serves a trusted echo fixture through MXC and 
   await assert.rejects(fetch(url));
   assert.equal(await fs.readFile(path.join(workspace, 'src', 'app.mjs'), 'utf8'), source);
   assert.equal((await verifyWebShell({ workspace })).hash, hash(JSON.stringify(await getWebShellFiles())));
+});
+
+test('real packaged launcher exits nonzero when a hanging close must be killed despite confirmed termination', {
+  skip: process.env.TASKFLOW_TEST_REAL_SANDBOX !== '1', timeout: 40_000,
+}, async t => {
+  const { workspace, cleanup } = await setup(t);
+  const hangingSource = 'export async function createApp(){return {handle(){return {status:200,body:"close fixture"}},close(){setInterval(()=>{},20);return new Promise(()=>{})}}}\n';
+  // A trusted transport fixture with synthetic service verdicts, never a business acceptance claim.
+  const delivery = await createWebDelivery(await input([{ path: 'src/app.mjs', content: hangingSource }]));
+  await extractDelivery(workspace, delivery);
+  const launched = launch(workspace, { executable: process.env.EXECUTION_SANDBOX_EXE, npm: true });
+  cleanup.push(() => ensureStopped(launched));
+  const url = await readyUrl(launched);
+  assert.equal(await (await fetch(url)).text(), 'close fixture');
+  launched.child.stdin.write('STOP\n');
+  const result = await launched.done;
+  assert.equal(result.code, 1, 'confirmed force termination must not look like a normal application close');
+  assert.match(result.stdout, /STOP_CONFIRMED/u);
+  assert.match(result.stderr, /did not finish cleanly/u);
+  await assert.rejects(fetch(url));
+  assert.equal(await fs.readFile(path.join(workspace, 'src/app.mjs'), 'utf8'), hangingSource);
+  assert.equal((await verifyWebShell({ workspace })).hash, delivery.manifest.shellHash);
 });
