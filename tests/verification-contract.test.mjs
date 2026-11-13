@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { createVerificationControl, compileManifest, readJsonPath, resolveScenarioPath, HTTP_LIMITS } from '../lib/verification-contract.mjs';
+import { canonicalJSON, createVerificationControl, compileManifest, readJsonPath, resolveScenarioPath, resolveScenarioValue, HTTP_LIMITS } from '../lib/verification-contract.mjs';
 import { runHttpScenarios } from '../lib/http-scenarios.mjs';
 
 const baseBinding = { projectId: 'project', runId: '1234-run', specRevision: 'a'.repeat(64), planRevision: 'b'.repeat(64) };
@@ -21,6 +21,16 @@ function proposal() {
     { id: 'race', type: 'concurrent', dependsOn: ['create', 'bob_login'], requirementIds: ['REQ2'], requests: ['alice', 'bob'].map((session, index) => ({ id: `race_${index}`, method: 'POST', path: '/claim', session, body: { itemId: { $var: 'itemId' } }, assertions: [{ id: `race_status_${index}`, op: 'statusIn', value: [201, 409] }] })), expectedStatuses: [201, 409] },
     { id: 'restart', type: 'restart', dependsOn: ['race'], requirementIds: ['REQ2'] },
     { id: 'persisted', type: 'request', dependsOn: ['restart'], requirementIds: ['REQ2'], request: { id: 'read_item', method: 'GET', path: '/items/${itemId}', session: 'alice', assertions: [status('read_status'), { id: 'read_id', op: 'jsonEquals', path: '$.id', value: { $var: 'itemId' } }, { id: 'read_names', op: 'jsonLength', path: '$.names', value: 1 }, { id: 'read_count', op: 'jsonEquals', path: '$.count', value: 1 }, { id: 'read_text', op: 'textIncludes', value: 'names' }] } },
+  ] };
+}
+function numberProposal({ nested = false, captureOnly = false, expected = null } = {}) {
+  return { version: 1, id: 'json-number', name: 'JSON number safety', sessions: [], steps: [
+    { id: 'number', type: 'request', dependsOn: [], requirementIds: ['REQ1', 'REQ2'], request: {
+      id: 'read_number', method: 'GET', path: '/number', assertions: [status('number_status'),
+        ...(captureOnly ? [] : [{ id: 'number_equals', op: 'jsonEquals', path: nested ? '$.items[0].amount' : '$', value: expected }]),
+        ...(nested ? [{ id: 'number_exists', op: 'jsonExists', path: '$.safe' }] : [])],
+      captures: [{ name: 'amount', path: nested ? '$.items[0].amount' : '$' }],
+    } },
   ] };
 }
 function approved(raw = proposal(), binding = baseBinding) {
@@ -43,8 +53,14 @@ async function mocked(t, mode, raw = proposal()) {
   const script = `
     import {mock} from 'node:test';import {writeFile} from 'node:fs/promises';
     const raw=${JSON.stringify(raw)},files=${JSON.stringify(files)},binding=${JSON.stringify(execution)},rootDir=${JSON.stringify(rootDir)},mode=${JSON.stringify(mode)};
-    let starts=0,requests=[],workspaces=[],attempts=0,claimed=0;
+    let starts=0,stops=0,revocations=0,requests=[],workspaces=[],attempts=0,claimed=0,control,approval;
     const controller=new AbortController();
+    const projectFiles=await import(${JSON.stringify(new URL('../lib/project-files.mjs', import.meta.url).href)});
+    mock.module(${JSON.stringify(new URL('../lib/project-files.mjs', import.meta.url).href)},{namedExports:{...projectFiles,readProjectFiles:async workspace=>{
+      const actual=await projectFiles.readProjectFiles(workspace);
+      if(mode==='final-read-revoke'&&stops===2){control.revoke(approval);revocations++;}
+      return actual;
+    }}});
     function response(status,json,headers={}){return {status,headers:{'content-type':'application/json',...headers},body:Buffer.from(JSON.stringify(json))};}
     mock.module(${JSON.stringify(new URL('../lib/web-runtime.mjs', import.meta.url).href)},{namedExports:{startWebRuntime:async options=>{
       const number=++starts;workspaces.push(options.workspace);options.onEvent?.({type:'ready'});
@@ -56,18 +72,19 @@ async function mocked(t, mode, raw = proposal()) {
         if(mode==='all-fail')return response(500,{passed:true});
         if(mode==='large-response')return {status:200,headers:{'content-type':'text/plain'},body:Buffer.alloc(65537,97)};
         if(mode==='unsafe-cookie')return response(200,{},{'set-cookie':['external_cookie=bad; HttpOnly']});
+        if(mode.startsWith('json-number:'))return {status:200,headers:{'content-type':'application/json'},body:Buffer.from(mode.slice('json-number:'.length))};
         if(request.path==='/login'){const user=JSON.parse(request.body).user;return response(200,{user},{'set-cookie':['app_session='+user+'; HttpOnly; Path=/; SameSite=Lax']});}
         if(request.path==='/items')return response(201,{id:mode==='bad-capture'?{}:mode==='large-capture'?'x'.repeat(5000):mode==='expansion'?'x'.repeat(4090):'A/B?x=1'});
         if(request.path==='/claim')return response(++claimed===1?201:409,{ok:true});
         return response(200,{id:'A/B?x=1',names:['one'],count:mode==='lost-persistence'?0:1});
-      },stop:async()=>({pid:100+number,startedAt:'mock-'+number,status:mode==='unknown-stop'?'reconciliation_required':'stopped',terminationConfirmed:mode!=='unknown-stop',exitCode:0,stopAcknowledged:mode!=='bad-stop',sourceUnchanged:mode!=='tamper'})};
+      },stop:async()=>{stops++;return {pid:100+number,startedAt:'mock-'+number,status:mode==='unknown-stop'?'reconciliation_required':'stopped',terminationConfirmed:mode!=='unknown-stop',exitCode:0,stopAcknowledged:mode!=='bad-stop',sourceUnchanged:mode!=='tamper'};}};
     }}});
     const {createVerificationControl,compileManifest}=await import(${JSON.stringify(new URL('../lib/verification-contract.mjs', import.meta.url).href)});
-    const control=createVerificationControl(),input={proposal:raw,requirements:['REQ1','REQ2'],binding:${JSON.stringify(baseBinding)}};
-    const approval=control.approve(input),manifest=compileManifest({...input,approval});control.beginCoding(approval);
+    control=createVerificationControl();const input={proposal:raw,requirements:['REQ1','REQ2'],binding:${JSON.stringify(baseBinding)}};
+    approval=control.approve(input);const manifest=compileManifest({...input,approval});control.beginCoding(approval);
     const {runHttpScenarios}=await import(${JSON.stringify(new URL('../lib/http-scenarios.mjs', import.meta.url).href)});
-    const report=await runHttpScenarios({manifest,files,rootDir,binding,signal:controller.signal,executable:'unused-mock',timeoutMs:mode==='timeout'?100:10000,onEvent:event=>{if(mode==='revoke'&&event.id==='login_a_status')control.revoke(approval);},runtimeFactory:()=>{throw new Error('client factory must not execute');}});
-    process.stdout.write(JSON.stringify({report,starts,requests,workspaces,manifest}));
+    const report=await runHttpScenarios({manifest,files,rootDir,binding,signal:controller.signal,executable:'unused-mock',timeoutMs:mode==='timeout'?100:10000,onEvent:event=>{if(mode==='revoke'&&event.id==='login_a_status'||mode==='final-publish-revoke'&&event.id==='SYS_FINAL'&&event.passed){control.revoke(approval);revocations++;}},runtimeFactory:()=>{throw new Error('client factory must not execute');}});
+    process.stdout.write(JSON.stringify({report,starts,stops,revocations,requests,workspaces,manifest}));
   `;
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--experimental-test-module-mocks', '--input-type=module'], { cwd: fileURLToPath(new URL('..', import.meta.url)), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -117,6 +134,34 @@ test('只接收纯JSON，不运行getter或循环对象，不允许未依赖变�
   const customPrototype = proposal(); Object.setPrototypeOf(customPrototype.steps, { map() { called = true; } }); assert.throws(() => approved(customPrototype)); assert.equal(called, false);
 });
 
+test('捕获名和$var只允许字符串，不把布尔true与字符串true当成同一变量', () => {
+  const named = proposal(); named.steps[2].request.captures[0].name = 'true';
+  named.steps[3].requests.forEach(request => { request.body.itemId.$var = 'true'; });
+  named.steps[5].request.path = '/items/${true}'; named.steps[5].request.assertions[1].value.$var = 'true';
+  assert.doesNotThrow(() => approved(named));
+  assert.equal(resolveScenarioValue({ $var: 'true' }, { true: 7 }), 7);
+  for (const value of [true, false, ['true'], 1, null, {}]) {
+    const badCapture = structuredClone(named); badCapture.steps[2].request.captures[0].name = value;
+    assert.throws(() => approved(badCapture), /捕获变量/u);
+    const badReference = structuredClone(named); badReference.steps[3].requests[0].body.itemId.$var = value;
+    assert.throws(() => approved(badReference), /变量引用/u);
+    assert.throws(() => resolveScenarioValue({ $var: value }, { true: 7, false: 8 }), /变量引用/u);
+  }
+  const aliases = { version: 1, id: 'alias', name: 'no coerced variables', sessions: [], steps: [true, 'true'].map((name, index) => ({
+    id: `capture_${index}`, type: 'request', dependsOn: [], requirementIds: ['REQ1', 'REQ2'],
+    request: { id: `read_${index}`, method: 'GET', path: '/number', assertions: [status(`status_${index}`)], captures: [{ name, path: '$' }] },
+  })) };
+  assert.throws(() => approved(aliases), /捕获变量/u);
+});
+
+test('规范JSON递归拒绝非有限number，保留正常JSON数值与null', () => {
+  for (const value of [Infinity, -Infinity, NaN]) {
+    assert.throws(() => canonicalJSON(value), /有限/u);
+    assert.throws(() => canonicalJSON({ nested: [0, { amount: value }] }), /有限/u);
+  }
+  assert.equal(canonicalJSON({ z: null, a: [-1, 0, 1.5, 1e300] }), '{"a":[-1,0,1.5,1e+300],"z":null}');
+});
+
 test('步骤、正文、断言、变量及总预算都有硬上限', () => {
   const large = proposal(); large.steps[0].request.body = { value: 'x'.repeat(HTTP_LIMITS.bodyBytes) }; assert.throws(() => approved(large));
   const steps = proposal(); steps.steps = Array.from({ length: 41 }, (_, index) => ({ ...structuredClone(steps.steps[0]), id: 'step' + index })); assert.throws(() => approved(steps));
@@ -137,6 +182,23 @@ test('可信mock验证捕获、URL编码、两独立cookie jar、状态multiset�
 test('错误候选、失败捕获、重启丢数据都保留完整断言且不能pass', async t => {
   for (const mode of ['all-fail', 'bad-capture', 'large-capture', 'lost-persistence', 'large-response', 'unsafe-cookie']) {
     const { report, manifest } = await mocked(t, mode); complete(report, manifest); assert.equal(report.status, 'failed'); assert.ok(report.checks.some(check => !check.passed));
+  }
+});
+
+test('响应指数溢出不能变成null通过断言或捕获，嵌套JSON也整体无效', async t => {
+  for (const { body, options } of [
+    { body: '1e400', options: {} },
+    { body: '-1e400', options: { captureOnly: true } },
+    { body: '{"safe":1,"items":[{"amount":1e400}]}', options: { nested: true } },
+  ]) {
+    const { report, manifest } = await mocked(t, 'json-number:' + body, numberProposal(options)); complete(report, manifest);
+    assert.equal(report.status, 'failed'); assert.equal(report.checks.find(check => check.id === 'number_status').passed, true);
+    assert.equal(report.checks.find(check => check.id === 'CAP_number_amount').passed, false);
+    for (const check of report.checks.filter(item => item.id === 'number_equals' || item.id === 'number_exists')) assert.equal(check.passed, false);
+  }
+  for (const value of [null, 1e300]) {
+    const { report, manifest } = await mocked(t, 'json-number:' + JSON.stringify(value), numberProposal({ expected: value }));
+    complete(report, manifest); assert.equal(report.status, 'passed');
   }
 });
 
@@ -162,6 +224,16 @@ test('取消、超时、未知停止、撤销或源码变化禁止后续启动�
   }
 });
 
+test('最终源码读取期间或最终check回调撤销批准，完整业务成功仍不能发布passed', async t => {
+  for (const mode of ['final-read-revoke', 'final-publish-revoke']) {
+    const { report, manifest, starts, stops, revocations } = await mocked(t, mode); complete(report, manifest);
+    assert.equal(revocations, 1); assert.equal(starts, 2); assert.equal(stops, 2);
+    assert.equal(report.status, 'failed'); assert.equal(report.terminationConfirmed, true);
+    assert.equal(report.checks.find(check => check.id === 'SYS_FINAL').passed, false);
+    assert.ok(report.checks.filter(check => check.id !== 'SYS_FINAL').every(check => check.passed));
+  }
+});
+
 test('非法signal或提前取消返回完整结果，不泄露取消原因', async t => {
   const { manifest } = approved();
   for (const signal of [null, {}, 1]) { const result = await runHttpScenarios({ manifest, files, rootDir: await directory(t), binding: execution, signal }); complete(result, manifest); assert.equal(result.status, 'error'); }
@@ -174,4 +246,20 @@ test('真实MXC错误候选不能以源码tests/pass marker代替批准HTTP断�
   const { manifest } = approved(); const result = await runHttpScenarios({ manifest, files, rootDir: await directory(t), binding: execution, timeoutMs: 30000 }); complete(result, manifest);
   assert.equal(result.status, 'failed'); assert.ok(result.checks.some(check => check.id === 'login_a_status' && !check.passed)); assert.equal(result.terminationConfirmed, true);
   assert.ok(result.processes.length >= 1); assert.ok(result.processes.every(process => process.terminationConfirmed));
+});
+
+test('真实MXC响应1e400不能冒充null，整份JSON和标量捕获拒绝溢出', real, async t => {
+  for (const { body, options } of [
+    { body: '1e400', options: {} },
+    { body: '-1e400', options: { captureOnly: true } },
+    { body: '{"safe":1,"items":[{"amount":1e400}]}', options: { nested: true } },
+  ]) {
+    const { manifest } = approved(numberProposal(options));
+    const candidate = [{ path: 'src/app.mjs', content: `export async function createApp(){return {handle(){return {status:200,headers:{"content-type":"application/json"},body:${JSON.stringify(body)}}}}}` }];
+    const result = await runHttpScenarios({ manifest, files: candidate, rootDir: await directory(t), binding: execution, timeoutMs: 30000 }); complete(result, manifest);
+    assert.equal(result.status, 'failed'); assert.equal(result.terminationConfirmed, true); assert.equal(result.processes.length, 1);
+    assert.equal(result.checks.find(check => check.id === 'number_status').passed, true);
+    assert.equal(result.checks.find(check => check.id === 'CAP_number_amount').passed, false);
+    for (const check of result.checks.filter(item => item.id === 'number_equals' || item.id === 'number_exists')) assert.equal(check.passed, false);
+  }
 });
