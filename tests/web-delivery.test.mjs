@@ -313,6 +313,30 @@ test('delivery refuses unquoted commented credentials and authorization headers 
   }
 });
 
+test('credential literals share single double and template quote handling, including exported dotenv assignments', async () => {
+  const options = await input(), fakeSecret = ['REVIEW', 'FAKE', 'SECRET', '123456'].join('_');
+  const privateLiterals = [fakeSecret, Buffer.from(fakeSecret).toString('base64')];
+  const materials = [`export LLM_API_KEY=${fakeSecret} # local`, `export LLM_API_KEY=${fakeSecret}#local`];
+  for (const quote of ["'", '"', String.fromCharCode(96)]) {
+    for (const scheme of ['Bearer', 'Basic']) {
+      const token = scheme === 'Basic' ? Buffer.from(fakeSecret).toString('base64') : fakeSecret;
+      materials.push(`const headers = {Authorization: ${quote}${scheme} ${token}${quote}};`);
+      materials.push(`const headers = {${quote}Authorization${quote}: ${quote}${scheme} ${token}${quote}};`);
+    }
+    materials.push(`const apiKey = ${quote}${fakeSecret}${quote};`);
+    materials.push(`export LLM_API_KEY=${quote}${fakeSecret}${quote} # local`);
+  }
+  for (const material of materials) {
+    const rejectWithoutEcho = error => /凭据|绝对路径/u.test(error.message) && privateLiterals.every(value => !error.message.includes(value));
+    for (const field of ['requirements', 'spec', 'plan']) {
+      const changed = structuredClone(options); changed[field] = material;
+      await assert.rejects(createWebDelivery(changed), rejectWithoutEcho);
+    }
+    const code = await input([{ path: 'src/app.mjs', content: material }]);
+    await assert.rejects(createWebDelivery(code), rejectWithoutEcho);
+  }
+});
+
 function launch(workspace, { executable = '', npm = false } = {}) {
   const command = npm && process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe') : process.execPath;
   const args = npm && process.platform === 'win32' ? ['/d', '/s', '/c', 'npm start'] : ['server.mjs'];
