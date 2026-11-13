@@ -191,8 +191,8 @@ test('real web runtime obeys external cancellation and the total deadline', real
   const deadline = await next.done; assert.equal(deadline.status, 'timed_out'); assert.equal(deadline.stopReason, 'timed_out'); assert.equal(deadline.terminationConfirmed, true);
 });
 
-test('real startup cancellation at control preparation never spawns and immediate post-spawn cancellation terminates', real, async t => {
-  for (const checkpoint of ['prepared', 'started']) {
+test('real startup cancellation before spawn, after spawn and during proxy listen always settles', real, async t => {
+  for (const checkpoint of ['prepared', 'started', 'proxy_preparing', 'ready']) {
     const { workspace } = await fixture(t, echoSource);
     const controller = new AbortController(), events = [];
     let timer;
@@ -200,7 +200,10 @@ test('real startup cancellation at control preparation never spawns and immediat
       await assert.rejects(Promise.race([
         startWebRuntime({ ...options(workspace), signal: controller.signal, onEvent(event) {
           events.push(event);
-          if (event.type === checkpoint) controller.abort();
+          if (event.type === checkpoint) {
+            if (checkpoint === 'proxy_preparing') queueMicrotask(() => controller.abort());
+            else controller.abort();
+          }
         } }),
         new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('startup cancellation did not settle')), 8000); }),
       ]), cause => {
