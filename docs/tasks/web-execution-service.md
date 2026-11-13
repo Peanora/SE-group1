@@ -22,11 +22,30 @@ getPlanning必须返回与ID匹配的project/run；run需有workflowVersion=2、
 
 预览活跃TTL从runtime就绪后计算；到期先请求正常协议停止，runtime硬截止额外15秒作为启动/停止保护余量。PID、独立工作区、起止时间和停止证据仅保存在专属preview_history，不返回DTO。预览启动前后均复核当前版本；刷新发现审批失效时撤下并停止旧预览。源码核对失败会关闭当前通过权限，进程停止未知则保持reconciliation_required。
 
-## 实际验证与证据边界
+## 9bbd5d3初版证据（独立审查发现阻塞，保留历史）
 
 - `npm ci --ignore-scripts`：安装精确依赖，无依赖清单修改。
 - 普通专测`node --test tests/web-execution-service.test.mjs`最终为18项通过、真实MXC项1项按显式开关跳过；覆盖当前hash/审批、参考范围、事务重复启动及活owner拒绝、取消确认、新attempt历史、旧版本/旧owner拒绝、unknown用量、白名单净化、重启状态、预览复制与TTL、预览停止PID历史、源码核对/版本变化/危险URL、正常重启再次预览及启动竞态。通过收据及预览/下载正向均为显式可信测试依赖，不能作为真实业务验收或真实预览/交付成功的证据。
 - 本轮仅运行一次实际MXC失败候选：显式`TASKFLOW_TEST_REAL_SANDBOX=1`及可信本地MXC路径执行专测，当时19/19通过无跳过。真实startWebExecution完成1次允许源码写入并固定候选，HTTP自检failed、任务未通过、编码调用计1、Review未调用、源码下载未开放，用量保持null。编码返回由薄可信fixture注入，没有付费模型调用。之后补充仅预览PID/停止历史、历史预算/contract和公共请求关闭管理；这些由最终普通专测覆盖，遵守最多1次真实失败候选未重复该MXC项，不能把早先实测冒充最终固定提交的独立复验。
 - `npm run check`：62个脚本语法通过；`git diff --check`通过，最终仅提交本模块、专测和本文。
 
-未连接HTTP路由或主网页；未真实运行正向模型编码、独立Review、已验收候选预览/下载和全仓回归；未迁移用户JSON或data，未推送或部署。下一步由主Agent在固定提交上独立Review/测试，再串行接入HTTP/UI并重新验证集成版本。task-store未成为运行依赖，主Agent可只cherry-pick本服务提交，忽略参考依赖提交c78e0c1。
+独立测试曾在9bb运行19/19（含真实MXC）通过，但随后两个只读Reviewer通过额外探针实证六项P2。因此该版本被阻塞，19项通过不能替代这些未覆盖行为正确的证据。旧提交和独立输出未修改。
+
+## 本次六项审查返工
+
+1. 停止启动中的预览统一调用一次runtime.stop并缓存其真实结果。晚返回runtime的PID、停止状态和证据先保存再拒绝预览URL；stop_preview和shutdown共用该结果。cleanStop规则未放宽，exitCode、ack、sourceUnchanged或termination不合格仍待协调。尚未请求spawn的路径单列not_started，不伪造进程停止结果。
+2. 默认Git核对抛错保留phase、command及实际result。新增专属私有source_history，保存有界的PID、起止时间、control/probe目录、命令及阶段；不保存stdout/stderr/原始收据，不对DTO或HTTP错误公开。此历史与executions.record分开，复核未知源码进程需查询source_history，预览仍查询preview_history。
+3. executions增加control_version，取消、预览控制、失效和完成发布推进代次。finish在异步规划查询结束后重读当前row/owner；取消及任何同run待协调状态优先，不能被迟到accepted覆盖。executor版本断言、DTO也在异步边界后重读。
+4. acceptedSource在每个异步边界重验最新status、active、preview_state、owner、control_version及完整gate。实际调用startRuntime前另作同步guard，期间发现源码进程未知不得spawn或下载；预览URL发布前再检查当前预览句柄与停止状态。
+5. 编码与预览共用同run活动槽。预览starting/running/stopping均占槽；必须正常停止后才可启动新attempt。初始化在owner核对通过后的事务内迁移旧索引：正常活动仍唯一，reconciliation历史允许同时保留多行，但所有新活动/权限查询均将任意待协调行视为阻塞。旧版“一条预览+一条编码”组合全部保留为待协调，不因唯一索引崩溃，也不推断任何旧PID已经死亡。
+6. 所有非空已知API key均遮蔽，包括1至3字符配置；非文本key配置明确拒绝。DTO和公开错误仍按白名单发布。
+
+以上为服务自检修复结论，仍须同两位独立Reviewer在新固定版本复验，不在本任务中自行关闭独立问题。
+
+## 本次实际验证
+
+- 普通专项：`node --test tests/web-execution-service.test.mjs`为28通过、真实项1显式跳过。新增10项回归覆盖上述六个问题，含晚runtime正常/四类不合格停止、启动中shutdown、默认Git错误元数据、source probe私有历史、finish/cancel与assertCurrent竞态、源码unknown后spawn次数0、双向活动槽、旧索引双历史迁移和短key。
+- 按本轮新授权，显式`TASKFLOW_TEST_REAL_SANDBOX=1`与可信本地MXC路径执行同一专项：**29/29通过，无失败/跳过**。仅再次执行1个薄失败候选，真实文件写入与自检失败反馈保留，任务仍未验收，未开放源码下载；无付费模型调用。此次实测与最终代码相同，此后只更新本任务记录。
+- `npm run check`：62个脚本语法通过；`git diff --check`通过。
+
+未连接HTTP路由或主网页；未真实运行正向模型编码、独立Review、已验收候选预览/下载和全仓回归；未迁移用户JSON或data，未推送或部署。下一步由主Agent在新固定提交上独立Review/测试，再串行接入HTTP/UI并重新验证集成版本。task-store未成为运行依赖，主Agent可只cherry-pick服务提交，忽略参考依赖提交c78e0c1。

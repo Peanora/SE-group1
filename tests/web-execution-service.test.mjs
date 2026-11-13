@@ -11,6 +11,8 @@ import { isWebTaskAccepted, startWebExecution } from '../lib/web-executor.mjs';
 import { webManifest, databaseObserverHash } from '../lib/web-tests.mjs';
 import { browserManifest } from '../lib/web-browser-tests.mjs';
 import { projectReviewPolicy } from '../lib/project-review-model.mjs';
+import { installWebShell } from '../lib/web-delivery.mjs';
+import { applyProjectFiles } from '../lib/project-files.mjs';
 
 const ids = { projectId: 'project-1', runId: 'run-1' };
 const startInput = { ...ids, profileId: 'library-web-v1', contractRevision: webExecutionContractRevision };
@@ -245,6 +247,133 @@ test('owned root refuses links and public methods refuse foreign IDs and caller 
   await assert.rejects(createWebExecutionService({ rootDir: linked, getPlanning: async () => planning() }), { code: 'invalid_root' });
   await assert.rejects(service.download({ ...ids, executionId: '../host' }), { status: 400 });
   await assert.rejects(service.start({ ...startInput, budget: { maxCalls: 100 } }), { status: 400 });
+});
+
+test('stop during runtime startup preserves the one actual stop result and strict failure cases', async t => {
+  for (const invalid of [null, 'terminationConfirmed', 'exitCode', 'stopAcknowledged', 'sourceUnchanged']) {
+    const entered = deferred(), release = deferred(), done = deferred(); let stops = 0;
+    const stopResult = { status: 'stopped', pid: 777, exitCode: 0, stopAcknowledged: true, sourceUnchanged: true, terminationConfirmed: true };
+    if (invalid) stopResult[invalid] = invalid === 'exitCode' ? 1 : false;
+    const { service, state, rootDir } = await fixture(t, { previewTimeoutMs: 10000, dependencies: { startRuntime: async () => {
+      entered.resolve(); await release.promise;
+      return { url: 'http://localhost:43123', pid: 777, done: done.promise, stop: async () => { stops++; done.resolve(stopResult); return stopResult; } };
+    } } });
+    const executionId = await accept(service, state), starting = service.action({ ...ids, executionId, action: 'preview' }).catch(error => error);
+    await entered.promise; const stopping = service.action({ ...ids, executionId, action: 'stop_preview' }); release.resolve();
+    assert.equal((await starting).code, 'preview_failed'); const result = await stopping;
+    assert.equal(stops, 1); assert.equal(result.execution.status, invalid ? 'reconciliation_required' : 'accepted');
+    assert.equal((await service.list(ids)).capabilities.canStart, !invalid);
+    const db = new DatabaseSync(path.join(rootDir, 'service.sqlite')), history = db.prepare('SELECT state,record FROM preview_history').get(); db.close();
+    const evidence = JSON.parse(history.record); assert.equal(evidence.pid, 777); assert.equal(evidence.stop.pid, 777);
+    assert.equal(evidence.stop.terminationConfirmed, stopResult.terminationConfirmed); assert.equal(history.state, invalid ? 'unknown' : 'stopped');
+  }
+});
+
+test('shutdown during runtime startup waits for the same late clean stop evidence', async t => {
+  const entered = deferred(), release = deferred(), done = deferred(); let stops = 0;
+  const { service, state, rootDir } = await fixture(t, { dependencies: { startRuntime: async () => {
+    entered.resolve(); await release.promise; return { url: 'http://localhost:43123', pid: 778, done: done.promise,
+      stop: async () => { stops++; const result = { status: 'stopped', pid: 778, exitCode: 0, stopAcknowledged: true, sourceUnchanged: true, terminationConfirmed: true }; done.resolve(result); return result; } };
+  } } });
+  const executionId = await accept(service, state), starting = service.action({ ...ids, executionId, action: 'preview' }).catch(error => error);
+  await entered.promise; const shutdown = service.shutdown(); release.resolve(); await shutdown;
+  assert.equal((await starting).code, 'preview_failed'); assert.equal(stops, 1);
+  const db = new DatabaseSync(path.join(rootDir, 'service.sqlite')), history = db.prepare('SELECT state,record FROM preview_history').get(); db.close();
+  assert.equal(history.state, 'stopped'); assert.equal(JSON.parse(history.record).stop.pid, 778);
+});
+
+test('source errors keep private process and probe evidence without exposing them in DTO or HTTP errors', async t => {
+  const { service, state, rootDir } = await fixture(t, { dependencies: { verifySource: async () => { throw Object.assign(new Error('private source stop'), {
+    status: 409, code: 'reconciliation_required', phase: 'source_probe', probeDirectory: 'C:/owned/private-probe',
+    command: { executable: 'git', args: ['status', '--porcelain'], workspace: 'C:/owned/private-workspace' },
+    result: { pid: 89124, startedAt: '2026-11-14T00:00:00Z', terminationConfirmed: false, controlDirectory: 'C:/owned/private-control' },
+  }); } } });
+  const executionId = await accept(service, state);
+  await assert.rejects(service.download({ ...ids, executionId }), error => error.code === 'reconciliation_required' && !('result' in error) && !error.message.includes('89124'));
+  const db = new DatabaseSync(path.join(rootDir, 'service.sqlite')), history = JSON.parse(db.prepare('SELECT record FROM source_history').get().record); db.close();
+  assert.equal(history.result.pid, 89124); assert.equal(history.result.controlDirectory, 'C:/owned/private-control');
+  assert.equal(history.probeDirectory, 'C:/owned/private-probe'); assert.equal(history.phase, 'source_probe'); assert.deepEqual(history.command.args, ['status', '--porcelain']);
+  const dto = JSON.stringify(await service.list(ids)); assert.ok(!dto.includes('89124') && !dto.includes('private-probe') && !dto.includes('private-control'));
+});
+
+test('the default Git source guard attaches actual unknown-stop command metadata to private history', async t => {
+  const { service, state, rootDir } = await fixture(t); const executionId = await accept(service, state); await service.shutdown();
+  const workspace = path.join(rootDir, 'executions', executionId, 'web-execution-fixture', 'workspace'); await mkdir(workspace, { recursive: true });
+  const shell = await installWebShell({ workspace }); await applyProjectFiles({ workspace, files }); await mkdir(path.join(workspace, '.git'));
+  const db = new DatabaseSync(path.join(rootDir, 'service.sqlite')), row = db.prepare('SELECT record FROM executions WHERE id=?').get(executionId), record = JSON.parse(row.record);
+  Object.assign(record, { workspace, shellHash: shell.hash }); db.prepare('UPDATE executions SET record=? WHERE id=?').run(JSON.stringify(record), executionId); db.close();
+  const next = await createWebExecutionService({ rootDir, getPlanning: async () => state.planning, config, executable: process.execPath, dependencies: {
+    runProcess: async () => ({ pid: 89125, startedAt: '2026-11-14T00:00:00Z', terminationConfirmed: false, controlDirectory: 'C:/owned/git-control' }),
+  } }); state.services.push(next);
+  await assert.rejects(next.download({ ...ids, executionId }), { code: 'reconciliation_required' });
+  const evidenceDb = new DatabaseSync(path.join(rootDir, 'service.sqlite')), history = JSON.parse(evidenceDb.prepare('SELECT record FROM source_history').get().record); evidenceDb.close();
+  assert.equal(history.phase, 'source_git'); assert.equal(history.result.pid, 89125); assert.equal(history.command.executable, 'git');
+  assert.ok(history.command.args.includes('rev-parse')); assert.equal(history.result.controlDirectory, 'C:/owned/git-control');
+});
+
+test('a cancel accepted during finish planning lookup wins over the late accepted record', async t => {
+  const entered = deferred(), release = deferred(), plan = planning(); let pauseNext = false;
+  const { service, state } = await fixture(t, { getPlanning: async () => { if (pauseNext) { pauseNext = false; entered.resolve(); await release.promise; } return plan; } });
+  const { execution } = await service.start(startInput), entry = state.calls[0]; pauseNext = true; entry.finish(acceptedRecord(entry)); await entered.promise;
+  const cancelled = await service.action({ ...ids, executionId: execution.id, action: 'cancel' }); assert.equal(cancelled.execution.status, 'cancel_requested'); release.resolve();
+  const result = await waitFor(service, value => value.executions[0].status === 'stopped');
+  assert.equal(entry.cancelled, 1); assert.equal(result.executions[0].taskAccepted, false); assert.equal(result.executions[0].actions.canDownload, false);
+  await assert.rejects(service.download({ ...ids, executionId: execution.id }), { code: 'not_accepted' });
+});
+
+test('an executor version assertion rechecks a concurrent cancellation after its async planning lookup', async t => {
+  const entered = deferred(), release = deferred(), plan = planning(); let pauseNext = false;
+  const { service, state } = await fixture(t, { getPlanning: async () => { if (pauseNext) { pauseNext = false; entered.resolve(); await release.promise; } return plan; } });
+  state.manualCancel = true; const { execution } = await service.start(startInput), entry = state.calls[0]; pauseNext = true;
+  const asserting = entry.options.assertCurrent(entry.options.binding).catch(error => error); await entered.promise;
+  await service.action({ ...ids, executionId: execution.id, action: 'cancel' }); release.resolve(); assert.equal((await asserting).code, 'stale_execution');
+  entry.finish({ status: 'stopped' }); state.manualCancel = false;
+});
+
+test('a concurrent source unknown-stop prevents the already pending preview from spawning', async t => {
+  const entered = deferred(), release = deferred(); let calls = 0;
+  const { service, state, rootDir } = await fixture(t, { dependencies: { verifySource: async () => {
+    const call = ++calls; if (call === 2) { entered.resolve(); await release.promise; }
+    if (call === 3) throw Object.assign(new Error('trusted unknown stop'), { code: 'reconciliation_required', result: { pid: 424242, terminationConfirmed: false, control: 'private-control' }, probe: 'private-probe' });
+    return { files: structuredClone(files), shellHash: 'c'.repeat(64) };
+  } } });
+  const executionId = await accept(service, state), starting = service.action({ ...ids, executionId, action: 'preview' }).catch(error => error); await entered.promise;
+  await assert.rejects(service.download({ ...ids, executionId }), { code: 'reconciliation_required' }); release.resolve();
+  assert.equal((await starting).code, 'preview_failed'); assert.equal(state.previews.length, 0);
+  const result = await service.list(ids); assert.equal(result.executions[0].status, 'reconciliation_required'); assert.equal(result.capabilities.canStart, false);
+  const db = new DatabaseSync(path.join(rootDir, 'service.sqlite')), history = db.prepare('SELECT state FROM preview_history').get(); db.close(); assert.equal(history.state, 'not_started');
+});
+
+test('coding and preview share one run slot in either direction and release it only after a confirmed stop', async t => {
+  const { service, state } = await fixture(t, { previewTimeoutMs: 10000 }); const executionId = await accept(service, state);
+  await service.action({ ...ids, executionId, action: 'preview' }); assert.equal((await service.list(ids)).capabilities.canStart, false);
+  await assert.rejects(service.start(startInput), { code: 'execution_active' }); assert.equal(state.calls.length, 1);
+  await service.action({ ...ids, executionId, action: 'stop_preview' }); assert.equal((await service.list(ids)).capabilities.canStart, true);
+  await service.start(startInput); const list = await service.list(ids); assert.equal(list.executions[1].actions.canPreview, false);
+  await assert.rejects(service.action({ ...ids, executionId, action: 'preview' }), { code: 'preview_active' }); assert.equal(state.previews.length, 1);
+});
+
+test('legacy preview-plus-coding rows migrate to two retained unknown histories without a uniqueness crash', async t => {
+  const { service, state, rootDir, open } = await fixture(t); const oldId = await accept(service, state); const { execution } = await service.start(startInput);
+  await service.shutdown();
+  const db = new DatabaseSync(path.join(rootDir, 'service.sqlite'));
+  db.exec('DROP INDEX active_run; CREATE UNIQUE INDEX active_run ON executions(project_id,run_id) WHERE active=1');
+  db.prepare("UPDATE executions SET status='accepted',active=0,preview_state='running' WHERE id=?").run(oldId);
+  db.prepare("UPDATE executions SET status='generating',active=1 WHERE id=?").run(execution.id);
+  db.prepare('INSERT INTO preview_history VALUES(?,?,?,?)').run('legacy-preview', oldId, 'running', JSON.stringify({ pid: 515151, workspace: 'C:/owned/legacy-preview' })); db.close();
+  const next = await open(), result = await next.list(ids); assert.equal(result.executions.length, 2); assert.ok(result.executions.every(item => item.status === 'reconciliation_required'));
+  assert.equal(result.capabilities.canStart, false); assert.ok(result.executions.every(item => !item.actions.canRetry && !item.actions.canDownload));
+  const check = new DatabaseSync(path.join(rootDir, 'service.sqlite')); assert.equal(check.prepare('SELECT COUNT(*) n FROM executions').get().n, 2);
+  const history = check.prepare('SELECT state,record FROM preview_history WHERE id=?').get('legacy-preview'); check.close();
+  assert.equal(history.state, 'unknown'); assert.equal(JSON.parse(history.record).pid, 515151);
+});
+
+test('all nonempty known keys including one-to-three-character keys are masked in DTO text and errors', async t => {
+  for (const key of ['abc', 'xy', 'z']) {
+    const { service, state } = await fixture(t, { config: { ...config, apiKey: key }, dependencies: { codeModel: () => async () => {} } });
+    await service.start(startInput); state.calls[0].record.events = [{ sequence: 1, message: `echo=${key}` }]; state.calls[0].record.error = `echo=${key}`;
+    const dto = (await service.list(ids)).executions[0]; assert.ok(!dto.events[0].message.includes(key)); assert.ok(!dto.error.includes(key));
+  }
 });
 
 test('real MXC executes exactly one thin failed candidate through the default executor without model calls', {
