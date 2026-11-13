@@ -46,4 +46,21 @@
 
 ## 状态和持久化
 
+### 独立编码试验的内部接口
+
+本轮不新增 HTTP 路由，规划 Run、DevTask 和现有成功状态含义保持不变。命令入口为 `npm run execution:check -- --fixture|--model`。
+
+`startTaskExecution({outputDir, provider, sandbox, providerKind?, signal?, maxCalls?, timeoutMs?, onEvent?})` 返回 `{id, cancel(), done}`，`done` 解析为持久化执行记录。该接口供平台可信代码调用，尚不接受网页上传任务或任意仓库。调用方不得把适配器注入接口直接暴露给客户端。
+
+- 任务固定为 `library-borrow-v1`；模型只返回 `src/borrow.mjs` 的完整替换建议，不能设置命令、路径根、环境、验收和版本。
+- 每次执行记录 taskId、attemptId、specRevision、planRevision、基础/候选提交、验证清单版本/哈希、每次候选检查、命令结果和用量。未知 token 数为 null。
+- 状态为 preparing、checking_environment、generating、validating，以及终态 executed、failed、stopped、timed_out、reconciliation_required。执行完成不等于软件验收通过。
+- `cancel()` 幂等请求取消；候选进程是否停止依据适配器确认，无法确认时保持 reconciliation_required。
+- 代码输出限制32KiB、模型响应128KiB、进程输出64KiB；最多3次模型请求、总时长最多600秒。命令入口默认2次、180秒，单次候选执行最多15秒。
+- `execution.json` 与候选工作区在本地 output 中保留。进程意外中断后记录可能仍是运行状态，需要人工核对实际进程；本轮不提供后台恢复或多进程认领。
+
+模型接口为 `createCodeModel({config?,fetchImpl?})` 返回的异步文件建议函数；沙箱接口为 `createWindowsSandbox({executable?,nodeExecutable?})` 的 `preflight` 和 `run`。生产入口预检失败关闭，不提供无保护执行选项。
+
+### 现有规划记录
+
 规格和原始需求在运行中冻结。再次运行创建新 run_id，重试保持同一运行且递增 attempt。输出归属当前运行；只有成功的阶段发布产物。服务重启时将中断运行转为 failed，用户可重试，无自动恢复承诺。配置 `.env` 在启动时读取，密钥只保存在服务端。
