@@ -70,7 +70,7 @@ function previewURL(preview) {
 export function createExecutionPanel({ api, getContext, onError = () => {} }) {
   if (typeof api !== 'function' || typeof getContext !== 'function') throw new TypeError('执行面板需要api和getContext。');
   let root, refs, mounted = false, destroyed = false, timer, request = 0, context = {}, key = '';
-  let data = null, loadState = 'idle', error = '', busy = false, selectedId = '', preview = null, profileSignature = '';
+  let data = null, loadState = 'idle', error = '', activeAction = null, selectedId = '', preview = null, profileSignature = '';
   let inFlight = null, inFlightKey = '', inFlightSerial = 0, contentId = '', versionNodes = new Map(), eventNodes = new Map();
 
   function node(tag, className, content) {
@@ -100,7 +100,7 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
   function syncContext() {
     const next = getContext() || {}, nextKey = snapshotKey(next);
     if (key === nextKey) return false;
-    context = { ...next }; key = nextKey; request++; data = null; loadState = 'idle'; error = ''; selectedId = ''; preview = null;
+    context = { ...next }; key = nextKey; request++; activeAction = null; data = null; loadState = 'idle'; error = ''; selectedId = ''; preview = null;
     profileSignature = ''; if (refs) refs.consent.checked = false;
     return true;
   }
@@ -214,6 +214,7 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
   }
   function render() {
     if (!refs || destroyed) return;
+    const busy = activeAction !== null;
     const ready = loadState === 'ready', capabilities = data?.capabilities || {}, profiles = Array.isArray(capabilities.profiles) ? capabilities.profiles : [];
     const signature = JSON.stringify([profiles, capabilities.model, capabilities.budget]);
     if (signature !== profileSignature) { refs.consent.checked = false; profileSignature = signature; }
@@ -268,7 +269,7 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
     if (!mounted || destroyed) return;
     clearTimeout(timer); syncContext();
     if (!context.projectId || !context.runId) { render(); return; }
-    if (busy) { render(); schedule(); return; }
+    if (activeAction) { render(); schedule(); return; }
     if (inFlight && inFlightKey === key && inFlightSerial === request) return inFlight;
     const savedKey = key, serial = ++request;
     if (!data) loadState = 'loading'; render();
@@ -290,18 +291,22 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
     try { await pending; } finally { if (inFlight === pending) { inFlight = null; inFlightKey = ''; } }
   }
   async function perform(action) {
-    if (destroyed || busy) return;
+    if (destroyed) return;
     if (syncContext()) { render(); void refresh(); return; }
+    if (activeAction) return;
     const execution = currentExecution(), profile = data?.capabilities?.profiles?.find(item => item.id === refs.profiles.value);
     const permitted = action === 'start' ? !refs.startButton.disabled
       : loadState === 'ready' && execution?.actions?.[{ cancel: 'canCancel', retry: 'canRetry', preview: 'canPreview', stop_preview: 'canStopPreview' }[action]] === true;
     if (!permitted || (action === 'retry' && (!confirmed(context) || !refs.consent.checked))) return;
     const savedKey = key, path = action === 'start' ? `${basePath()}/start` : `${basePath()}/${encodeURIComponent(execution.id)}/action`;
     const payload = action === 'start' ? { profileId: profile.id, contractRevision: profile.contractRevision } : { action };
-    request++; busy = true; error = ''; clearTimeout(timer); render();
+    // Context changes detach the pending action without claiming its backend
+    // work stopped. A unique token also rejects stale replies after A→B→A.
+    const token = { key: savedKey }; activeAction = token;
+    request++; error = ''; clearTimeout(timer); render();
     try {
       const response = await api(path, { method: 'POST', body: JSON.stringify(payload) });
-      if (!isCurrent(savedKey)) return;
+      if (activeAction !== token || !isCurrent(savedKey)) return;
       if (!response?.execution?.id) throw new Error('服务端未返回执行记录，请刷新核对状态后再操作。');
       const next = response.execution, executions = data?.executions || [], index = executions.findIndex(item => item.id === next.id);
       data.executions = index < 0 ? [next, ...executions] : executions.map(item => item.id === next.id ? next : item);
@@ -309,11 +314,13 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
       if (action === 'stop_preview' || action === 'cancel' || action === 'retry' || action === 'start') preview = null;
       if (response.preview) { next.preview = response.preview; preview = response.preview; if (!previewURL(preview)) setError('服务端返回的预览地址不符合本机安全范围或已过期。'); }
     } catch (cause) {
-      if (isCurrent(savedKey)) { loadState = Number(cause?.status ?? cause?.statusCode) === 404 ? 'unavailable' : 'error'; setError(cause); }
+      if (activeAction === token && isCurrent(savedKey)) { loadState = Number(cause?.status ?? cause?.statusCode) === 404 ? 'unavailable' : 'error'; setError(cause); }
     }
     finally {
-      busy = false;
-      if (isCurrent(savedKey)) { render(); schedule(); } else if (!destroyed) { syncContext(); render(); void refresh(); }
+      if (activeAction === token) {
+        activeAction = null;
+        if (isCurrent(savedKey)) { render(); schedule(); } else if (!destroyed) { syncContext(); render(); void refresh(); }
+      }
     }
   }
 
@@ -323,6 +330,6 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
       mounted = true; build(element); syncContext(); render(); return refresh();
     },
     refresh,
-    destroy() { destroyed = true; mounted = false; request++; clearTimeout(timer); root?.remove(); refs = null; },
+    destroy() { destroyed = true; mounted = false; request++; activeAction = null; clearTimeout(timer); root?.remove(); refs = null; },
   };
 }

@@ -82,6 +82,66 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
   const start = page => page.getByRole('button', { name: '使用配置模型开始执行', exact: true });
   const consent = page => page.getByRole('checkbox');
   const download = page => page.getByRole('link', { name: '下载已验收源码' });
+  async function pendingPostPage() {
+    const page = await pageFor();
+    await page.evaluate(async ({ initialContext, runA, runB }) => {
+      window.panel.destroy();
+      const { createExecutionPanel } = await import('/execution-panel.js');
+      window.context = initialContext; window.crossRequests = []; window.crossPosts = [];
+      const states = { 'run-a': runA, 'run-b': runB };
+      const api = (url, options = {}) => {
+        const runId = url.includes('/runs/run-b/') ? 'run-b' : 'run-a', method = options.method || 'GET';
+        window.crossRequests.push({ url, method });
+        if (method === 'GET') return Promise.resolve(structuredClone(states[runId]));
+        return new Promise((resolve, reject) => {
+          window.crossPosts.push({ runId, complete(response) {
+            states[runId].executions = [response.execution]; resolve(response);
+          }, fail() { reject(Object.assign(new Error('旧运行操作失败，不应显示在新运行'), { status: 409 })); } });
+        });
+      };
+      window.panel = createExecutionPanel({ api, getContext: () => window.context, onError: error => window.errors.push(error.message) });
+      await window.panel.mount(document.querySelector('#panel'));
+    }, { initialContext: context, runA: fixture({ executions: [execution({ id: 'run-a-record' })] }), runB: fixture({ executions: [execution({ id: 'run-b-record' })] }) });
+    return page;
+  }
+  async function assertPendingPostIsolation({ oldResult = 'success', revisit = false }) {
+    const page = await pendingPostPage();
+    await consent(page).check(); await start(page).click();
+    await page.waitForFunction(() => window.crossPosts.length === 1);
+    await page.evaluate(async () => { window.context.runId = 'run-b'; await window.panel.refresh(); });
+    const selected = page.getByRole('combobox', { name: '执行记录', exact: true });
+    assert.equal(await selected.inputValue(), 'run-b-record');
+    assert.equal(await page.evaluate(() => window.crossRequests.filter(item => item.method === 'GET' && item.url.includes('/run-b/')).length), 1);
+    assert.equal(await consent(page).isChecked(), false);
+    if (revisit) {
+      await page.evaluate(async () => { window.context.runId = 'run-a'; await window.panel.refresh(); });
+      assert.equal(await selected.inputValue(), 'run-a-record');
+    }
+    const currentRun = revisit ? 'run-a' : 'run-b';
+    await consent(page).check(); assert.equal(await start(page).isEnabled(), true); await start(page).click();
+    await page.waitForFunction(() => window.crossPosts.length === 2);
+    assert.equal(await page.evaluate(() => window.crossPosts[1].runId), currentRun);
+    const reads = await page.evaluate(() => window.crossRequests.filter(item => item.method === 'GET').length);
+    await page.evaluate(async ({ oldResult, oldExecution }) => {
+      if (oldResult === 'success') window.crossPosts[0].complete({ execution: oldExecution, preview: { url: 'http://localhost:1234/old', expiresAt: '2099-01-01T00:00:00Z' } });
+      else window.crossPosts[0].fail();
+      // Drain the resolved/rejected POST and the component's finally before
+      // observing whether it incorrectly unlocked the newer pending action.
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }, { oldResult, oldExecution: execution({ id: 'stale-action-result', taskAccepted: true, actions: { canDownload: true } }) });
+    assert.equal(await start(page).isDisabled(), true);
+    assert.equal(await consent(page).isDisabled(), true);
+    assert.equal(await selected.inputValue(), `${currentRun}-record`);
+    assert.equal(await page.getByRole('alert').isVisible(), false); assert.deepEqual(await page.evaluate(() => window.errors), []);
+    assert.equal(await page.getByRole('link', { name: '打开本地预览', exact: true }).count(), 0); assert.equal(await download(page).count(), 0);
+    await refresh(page); await start(page).dispatchEvent('click');
+    assert.equal(await page.evaluate(() => window.crossPosts.length), 2);
+    assert.equal(await page.evaluate(() => window.crossRequests.filter(item => item.method === 'GET').length), reads);
+    await page.evaluate(response => window.crossPosts[1].complete(response), { execution: execution({ id: 'current-action-result', status: 'preparing' }) });
+    await page.waitForFunction(() => document.querySelector('select[aria-label="执行记录"]').value === 'current-action-result');
+    assert.equal(await start(page).isEnabled(), true); assert.equal(await selected.isEnabled(), true);
+    assert.equal(await selected.locator('option', { hasText: 'stale-action-result' }).count(), 0);
+  }
 
   await t.test('404 clearly keeps planning documents distinct from code execution', async () => {
     const page = await pageFor(); getStatus = 404; await refresh(page);
@@ -239,6 +299,14 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
     release(); await page.evaluate(() => window.oldRequest);
     assert.equal(await page.getByRole('combobox', { name: '执行记录', exact: true }).inputValue(), 'new-run-execution');
     assert.match(requests.at(-1).url, /run-b/);
+  });
+
+  await t.test('pending POST permits new-run GET and POST; old success, error and finally cannot unlock the new action', async () => {
+    for (const oldResult of ['success', 'error']) await assertPendingPostIsolation({ oldResult });
+  });
+
+  await t.test('revisiting a run keeps the newer action token even when the old POST has the same context key', async () => {
+    for (const oldResult of ['success', 'error']) await assertPendingPostIsolation({ oldResult, revisit: true });
   });
 
   await t.test('an action supersedes an old read without stopping subsequent polling', async () => {
