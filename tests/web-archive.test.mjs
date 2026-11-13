@@ -15,6 +15,7 @@ import { projectReviewPolicy } from '../lib/project-review-model.mjs';
 import { validateProjectFiles } from '../lib/project-files.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
+const retainedRoots = new Set();
 const sources = () => validateProjectFiles([
   { path: 'src/app.mjs', content: 'export async function createApp(){return {handle(){return {status:500,body:"not a business application"}},close(){}}}' },
   { path: 'tests/forged.test.mjs', content: 'throw new Error("archived npm test must never be trusted or executed");' },
@@ -37,7 +38,11 @@ async function fixture() {
 }
 async function temporary(t) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'taskflow-archive-test-'));
-  t.after(async () => { const relative = path.relative(path.resolve(os.tmpdir()), directory); assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative)); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => {
+    const relative = path.relative(path.resolve(os.tmpdir()), directory); assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+    if (retainedRoots.has(directory)) { t.diagnostic(`停止未确认，保留本测试工作区：${directory}`); return; }
+    await rm(directory, { recursive: true, force: true });
+  });
   return directory;
 }
 
@@ -152,6 +157,15 @@ test('real clean-snapshot archive checks reject wrong business despite forged ar
   const root = await temporary(t), input = await fixture(), archiveFile = path.join(root, 'fixture.zip');
   await writeFile(archiveFile, input.pack());
   const report = await revalidateWebArchive({ archiveFile, outputDir: path.join(root, 'verification'), timeoutMs: 30_000 });
+  const unknownStop = report.status === 'reconciliation_required' || report.test?.terminationConfirmed !== true || report.browser?.terminationConfirmed !== true;
+  if (unknownStop) retainedRoots.add(root);
+  if (report.status !== 'failed' || unknownStop) {
+    const evidenceRoot = path.resolve(import.meta.dirname, '../output/verification/archive-failures');
+    await mkdir(evidenceRoot, { recursive: true });
+    const evidence = await mkdtemp(path.join(evidenceRoot, 'archive-'));
+    await writeFile(path.join(evidence, 'result.json'), JSON.stringify({ temporaryRoot: root, report }, null, 2), { flag: 'wx' });
+    t.diagnostic(`归档复验意外结果已保存：${path.join(evidence, 'result.json')}`);
+  }
   assert.equal(report.status, 'failed'); assert.equal(report.taskAccepted, false); assert.equal(report.historicalAcceptanceVerified, false);
   assert.equal(report.test.checks.length, webManifest.count); assert.equal(report.browser.checks.length, browserManifest.count);
   assert.equal(report.test.terminationConfirmed, true); assert.equal(report.browser.terminationConfirmed, true);
