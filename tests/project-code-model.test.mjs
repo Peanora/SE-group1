@@ -101,8 +101,8 @@ test('输出路径、纯文本、数量和大小在模型响应后继续受校�
   for (const invalid of [
     { path: 'package.json', content: '{}' },
     { path: 'server.mjs', content: 'console.log(1)' },
-    { path: '.platform/secret-project-key.json', content: 'secret-project-key' },
-    { path: '../secret-project-key.txt', content: 'outside' },
+    { path: '.platform/disallowed.json', content: 'candidate data' },
+    { path: '../outside-project.txt', content: 'outside' },
     { path: 'public/CON.txt', content: 'reserved' },
     { path: 'src/app.mjs', content: '\0' },
     { path: 'public/large.txt', content: 'x'.repeat(128 * 1024 + 1) },
@@ -203,4 +203,106 @@ test('读取挂起响应期间取消会关闭流，响应返回时已取消同�
   } });
   await assert.rejects(late({ task, files, signal: after.signal }), { name: 'AbortError', message: '项目编码模型请求已取消。' });
   assert.equal(bodyCancelled, true);
+});
+
+test('malformed, blank and missing model content save only the fixed receipt before format rejection', async () => {
+  for (const content of ['{"files":', ' \t\n ', '', '```json\n{"files":[]}\n```', null, undefined]) {
+    const receipts = [];
+    const model = createProjectCodeModel({ config, fetchImpl: async () => responseFor(undefined, {
+      model: 'untrusted-provider-model', url: 'https://private.invalid', headers: { authorization: 'private' },
+      choices: [{ finish_reason: 'stop', message: { content } }], usage: { prompt_tokens: 31, completion_tokens: 'invalid' },
+    }) });
+    await assert.rejects(model({ task, files, onReceipt: async receipt => { receipts.push(receipt); } }), { code: 'invalid_model_response' });
+    assert.deepEqual(receipts, [{ model: config.model, finishReason: 'stop', usage: { inputTokens: 31, outputTokens: null }, content: typeof content === 'string' ? content : '' }]);
+    assert.deepEqual(Object.keys(receipts[0]), ['model', 'finishReason', 'usage', 'content']);
+    assert.equal(Object.getPrototypeOf(receipts[0]), Object.prototype);
+    assert.equal(Object.getPrototypeOf(receipts[0].usage), Object.prototype);
+  }
+  for (const proposal of [null, {}, [], { files: [] }, { files: 'wrong' }, { files: [null] }, { files: [{ path: 1, content: '' }] }, { files: [{ path: 'src/app.mjs' }] }]) {
+    let receipt;
+    await assert.rejects(createProjectCodeModel({ config, fetchImpl: async () => responseFor(proposal) })({ task, files, onReceipt: async value => { receipt = value; } }), { code: 'invalid_model_response' });
+    assert.equal(receipt.content, JSON.stringify(proposal));
+  }
+});
+
+test('receipt sink is per call, never sent to the provider, and mutations cannot change the proposal or usage', async () => {
+  let release, received, providerCalls = 0, sinkCalls = 0;
+  const barrier = new Promise(resolve => { release = resolve; });
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const sink = async receipt => {
+    sinkCalls++; received = receipt; entered(); await barrier;
+    receipt.content = '{"files":[]}'; receipt.usage.inputTokens = 999; receipt.model = 'changed';
+  };
+  sink.toJSON = () => { throw new Error('sink must not be serialized'); };
+  const model = createProjectCodeModel({ config, fetchImpl: async (_url, options) => {
+    providerCalls++; assert.equal(Object.hasOwn(options, 'onReceipt'), false);
+    assert.deepEqual(Object.keys(options.headers).sort(), ['Authorization', 'Content-Type']);
+    const sent = JSON.parse(JSON.parse(options.body).messages[1].content);
+    assert.deepEqual(sent, { task, files, feedback: null });
+    return responseFor(undefined, { usage: { prompt_tokens: 7, completion_tokens: 9 } });
+  } });
+  let accepted = false;
+  const pending = model({ task, files, onReceipt: sink }).then(result => { accepted = true; return result; });
+  await started; assert.equal(accepted, false); assert.equal(received.content, JSON.stringify({ files: replacement }));
+  release();
+  assert.deepEqual(await pending, { files: normalized(replacement), usage: { inputTokens: 7, outputTokens: 9 }, model: config.model });
+  await model({ task, files });
+  assert.equal(providerCalls, 2); assert.equal(sinkCalls, 1);
+});
+
+test('configured credential echoes are fully redacted in receipts and reject proposals even without a sink', async () => {
+  const content = JSON.stringify({ files: [{ path: 'src/app.mjs', content: `// ${config.apiKey} and ${config.apiKey}` }] });
+  const model = createProjectCodeModel({ config, fetchImpl: async () => responseFor(undefined, { choices: [{ finish_reason: 'stop', message: { content } }] }) });
+  let receipt;
+  await assert.rejects(model({ task, files, onReceipt: async value => { receipt = value; } }), error => {
+    assert.equal(error.code, 'credential_response'); assert.equal(error.cause, undefined);
+    assert.ok(!error.message.includes(config.apiKey)); return true;
+  });
+  assert.equal(receipt.content.includes(config.apiKey), false);
+  assert.equal(receipt.content.split('[REDACTED]').length - 1, 2);
+  await assert.rejects(model({ task, files }), { code: 'credential_response' });
+  let boundedReceipt;
+  const tinyKey = { ...config, apiKey: '!' };
+  await assert.rejects(createProjectCodeModel({ config: tinyKey, fetchImpl: async () => responseFor(undefined, { choices: [{ finish_reason: 'stop', message: { content: '!'.repeat(70_000) } }] }) })({ task, files, onReceipt: async value => { boundedReceipt = value; } }), { code: 'credential_response' });
+  assert.ok(Buffer.byteLength(boundedReceipt.content) <= 512 * 1024);
+  assert.equal(boundedReceipt.content.includes('!'), false);
+});
+
+test('receipt failures and cancellation fail closed, hide sink errors and never become format retries', async () => {
+  const model = createProjectCodeModel({ config, fetchImpl: async () => responseFor() });
+  await assert.rejects(model({ task, files, onReceipt: async () => { throw new Error(`${config.apiKey} https://private.invalid`); } }), error => {
+    assert.equal(error.code, 'receipt_failed'); assert.equal(error.cause, undefined);
+    assert.ok(!error.message.includes(config.apiKey) && !error.message.includes('private.invalid')); return true;
+  });
+  let providerCalls = 0;
+  await assert.rejects(createProjectCodeModel({ config, fetchImpl: async () => { providerCalls++; return responseFor(); } })({ task, files, onReceipt: true }), { code: 'receipt_failed' });
+  assert.equal(providerCalls, 0);
+  const controller = new AbortController();
+  let entered, release, accepted = false;
+  const started = new Promise(resolve => { entered = resolve; });
+  const barrier = new Promise(resolve => { release = resolve; });
+  const pending = model({ task, files, signal: controller.signal, onReceipt: async () => { entered(); await barrier; } }).then(value => { accepted = true; return value; });
+  await started; controller.abort(config.apiKey);
+  await assert.rejects(pending, { name: 'AbortError', message: '项目编码模型请求已取消。' });
+  release(); await new Promise(resolve => setImmediate(resolve)); assert.equal(accepted, false);
+  let sinkCalls = 0;
+  const before = new AbortController(); before.abort();
+  await assert.rejects(model({ task, files, signal: before.signal, onReceipt: () => { sinkCalls++; } }), { name: 'AbortError' });
+  assert.equal(sinkCalls, 0);
+});
+
+test('path, permission, HTTP and truncated responses do not receive a format retry code', async () => {
+  for (const [fetchImpl, finishReason] of [
+    [async () => responseFor({ files: [{ path: '../escape.mjs', content: 'outside' }] }), 'stop'],
+    [async () => responseFor(undefined, { choices: [{ finish_reason: 'length', message: { content: '{"files":' } }], usage: { prompt_tokens: 2, completion_tokens: 3 } }), 'length'],
+    [async () => responseFor(undefined, { choices: [{ message: { content: '{}' } }] }), 'unknown'],
+  ]) {
+    let receipt;
+    await assert.rejects(createProjectCodeModel({ config, fetchImpl })({ task, files, onReceipt: value => { receipt = value; } }), error => error.code !== 'invalid_model_response');
+    assert.equal(receipt.finishReason, finishReason);
+  }
+  let sinkCalled = false;
+  await assert.rejects(createProjectCodeModel({ config, fetchImpl: async () => new Response('provider rejected', { status: 401 }) })({ task, files, onReceipt: () => { sinkCalled = true; } }), error => error.code !== 'invalid_model_response');
+  assert.equal(sinkCalled, false);
 });
