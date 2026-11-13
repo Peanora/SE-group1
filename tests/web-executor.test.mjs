@@ -34,12 +34,26 @@ async function mockExecution(t, mode) {
       return {kind:'trusted-test-only'};
     }})}});
     const {startWebExecution}=await import(${JSON.stringify(new URL('../lib/web-executor.mjs', import.meta.url).href)});
-    let calls=0,abortTimer;const controller=new AbortController();const started=Date.now();
+    let calls=0,abortTimer,lateReceipt=false;const controller=new AbortController();const started=Date.now();
     const execution=startWebExecution({outputDir:directory,binding:${JSON.stringify(binding)},reviewer:async()=>({}),signal:controller.signal,timeoutMs:mode==='deadline'?1500:5000,
-      provider:async()=>{calls++;if(mode==='cancel')abortTimer=setTimeout(()=>controller.abort(),30);return new Promise(()=>{});}});
+      provider:async({onReceipt})=>{
+        calls++;
+        if(mode==='format'){
+          await onReceipt({model:'trusted-mock',finishReason:'stop',usage:{inputTokens:10,outputTokens:20},content:'   '});
+          throw Object.assign(new Error('invalid JSON'),{code:'invalid_model_response'});
+        }
+        if(mode==='cancel'||mode==='late-receipt')abortTimer=setTimeout(()=>controller.abort(),30);
+        if(mode==='late-receipt'){
+          await new Promise(resolve=>setTimeout(resolve,150));lateReceipt=true;
+          await onReceipt({model:'trusted-mock',finishReason:'stop',usage:{inputTokens:10,outputTokens:20},content:'late'});
+        }
+        return new Promise(()=>{});
+      }});
     const record=await execution.done;clearTimeout(abortTimer);
+    const original=await readFile(record.reportPath,'utf8');
+    if(mode==='late-receipt')await new Promise(resolve=>setTimeout(resolve,250));
     const persisted=JSON.parse(await readFile(record.reportPath,'utf8'));
-    process.stdout.write(JSON.stringify({record,persisted,calls,duration:Date.now()-started}));
+    process.stdout.write(JSON.stringify({record,persisted,calls,duration:Date.now()-started,lateReceipt,unchanged:original===await readFile(record.reportPath,'utf8')}));
   `;
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--experimental-test-module-mocks', '--input-type=module'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -104,6 +118,27 @@ test('noncooperative model callback cannot keep execution alive after cancellati
     assert.equal(record.modelCalls[0].usage.inputTokens, null);
     assert.ok(duration < 7000); assert.equal(isWebTaskAccepted(record), false);
   }
+});
+
+test('malformed responses retain private receipts and known usage, with at most one bounded format correction', async t => {
+  const { record, persisted, calls } = await mockExecution(t, 'format');
+  assert.equal(record.status, 'failed'); assert.equal(calls, 2);
+  assert.equal(record.proposalFailures.length, 2); assert.equal(record.versions.length, 0);
+  assert.deepEqual(persisted.usage, { inputTokens: 20, outputTokens: 40 });
+  for (const call of persisted.modelCalls) {
+    assert.equal(call.blankContent, true); assert.equal(call.contentBytes, 3);
+    assert.match(call.receiptHash, /^[a-f0-9]{64}$/u);
+    const receipt = JSON.parse(await readFile(call.receiptPath, 'utf8'));
+    assert.equal(receipt.content, '   '); assert.equal(receipt.usage.inputTokens, 10);
+  }
+});
+
+test('late model receipt after cancellation cannot write evidence or mutate the durable result', async t => {
+  const { record, persisted, lateReceipt, unchanged } = await mockExecution(t, 'late-receipt');
+  assert.equal(record.status, 'stopped'); assert.equal(lateReceipt, true); assert.equal(unchanged, true);
+  assert.equal(persisted.modelCalls[0].receiptPath, undefined);
+  assert.equal(persisted.usage.inputTokens, null);
+  assert.deepEqual((await readdir(path.dirname(record.reportPath))).filter(name => name.startsWith('model-')), []);
 });
 
 test('missing controlled runtime fails closed before coding and persists the failure', async t => {
