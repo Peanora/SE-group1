@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
 import { startWebExecution, isWebTaskAccepted } from '../lib/web-executor.mjs';
@@ -20,6 +21,34 @@ async function fixture(t) {
     await rm(directory, { recursive: true, force: true });
   });
   return directory;
+}
+
+async function mockExecution(t, mode) {
+  const directory = await fixture(t);
+  const script = `
+    import {mock} from 'node:test';import {readFile} from 'node:fs/promises';
+    const directory=${JSON.stringify(directory)},mode=${JSON.stringify(mode)};
+    mock.module(${JSON.stringify(new URL('../lib/windows-sandbox.mjs', import.meta.url).href)},{namedExports:{createWindowsSandbox:()=>({preflight:async()=>{
+      if(mode==='preflight')throw Object.assign(new Error('owned probe did not stop'),{reconciliationRequired:true,
+        probeDirectory:directory+'/owned-probe',result:{pid:424245,startedAt:'2026-01-01T00:00:00.000Z',terminationConfirmed:false,controlDirectory:directory+'/owned-control'}});
+      return {kind:'trusted-test-only'};
+    }})}});
+    const {startWebExecution}=await import(${JSON.stringify(new URL('../lib/web-executor.mjs', import.meta.url).href)});
+    let calls=0,abortTimer;const controller=new AbortController();const started=Date.now();
+    const execution=startWebExecution({outputDir:directory,binding:${JSON.stringify(binding)},reviewer:async()=>({}),signal:controller.signal,timeoutMs:mode==='deadline'?1500:5000,
+      provider:async()=>{calls++;if(mode==='cancel')abortTimer=setTimeout(()=>controller.abort(),30);return new Promise(()=>{});}});
+    const record=await execution.done;clearTimeout(abortTimer);
+    const persisted=JSON.parse(await readFile(record.reportPath,'utf8'));
+    process.stdout.write(JSON.stringify({record,persisted,calls,duration:Date.now()-started}));
+  `;
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--experimental-test-module-mocks', '--input-type=module'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    const timer = setTimeout(() => { child.kill(); reject(new Error('trusted executor probe did not settle')); }, 10_000);
+    child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('error', reject); child.once('close', code => { clearTimeout(timer); if (code !== 0) reject(new Error(stderr)); else { try { resolve(JSON.parse(stdout)); } catch { reject(new Error(stderr + stdout)); } } });
+    child.stdin.end(script);
+  });
 }
 
 test('Web execution requires exact confirmed versions, roles and finite budgets before work starts', () => {
@@ -47,6 +76,34 @@ test('Web execution rejects a changed confirmed version before creating work or 
   const result = await execution.done;
   assert.equal(result.status, 'failed'); assert.match(result.error, /版本/); assert.equal(result.calls, 0);
   assert.deepEqual(await readdir(directory), []);
+});
+
+test('output directory links are rejected before creating a missing child through them', async t => {
+  const directory = await fixture(t), target = path.join(directory, 'target'), alias = path.join(directory, 'alias');
+  await mkdir(target); await symlink(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const result = await startWebExecution({ outputDir: path.join(alias, 'must-not-exist'), binding, provider: async () => assert.fail('model must not run'), reviewer: review }).done;
+  assert.equal(result.status, 'failed'); assert.deepEqual(await readdir(target), []);
+});
+
+test('initial unconfirmed preflight retains process and workspace evidence in the durable record', async t => {
+  const { record, persisted, calls } = await mockExecution(t, 'preflight');
+  assert.equal(record.status, 'reconciliation_required'); assert.equal(calls, 0);
+  assert.equal(persisted.environmentFailure.result.pid, 424245);
+  assert.equal(persisted.environmentFailure.result.startedAt, '2026-01-01T00:00:00.000Z');
+  assert.equal(persisted.environmentFailure.result.terminationConfirmed, false);
+  assert.match(persisted.environmentFailure.result.controlDirectory, /owned-control$/u);
+  assert.match(persisted.environmentFailure.probeDirectory, /owned-probe$/u);
+});
+
+test('noncooperative model callback cannot keep execution alive after cancellation or total deadline', async t => {
+  for (const mode of ['cancel', 'deadline']) {
+    const { record, persisted, calls, duration } = await mockExecution(t, mode);
+    assert.equal(record.status, mode === 'deadline' ? 'timed_out' : 'stopped');
+    assert.equal(persisted.status, record.status); assert.equal(calls, 1);
+    assert.equal(record.candidateCommit, null); assert.equal(record.versions.length, 0);
+    assert.equal(record.modelCalls[0].usage.inputTokens, null);
+    assert.ok(duration < 7000); assert.equal(isWebTaskAccepted(record), false);
+  }
 });
 
 test('missing controlled runtime fails closed before coding and persists the failure', async t => {
