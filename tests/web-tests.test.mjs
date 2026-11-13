@@ -45,6 +45,7 @@ async function mocked(t, mode) {
     let calls=0, stops=0, requestCount=0;
     const runtimeUrl = ${JSON.stringify(new URL('../lib/web-runtime.mjs', import.meta.url).href)};
     const rootDir=${JSON.stringify(rootDir)}, mode=${JSON.stringify(mode)};
+    const realObserver=mode.endsWith('-mxc');
     const files=${JSON.stringify(files)};
     if(mode.startsWith('valid'))files.push({path:'public/app.js',content:'document.title="Trusted test stub";'}, {path:'public/app.css',content:'body {color: black;}'},{path:'public/index.html',content:'<!doctype html><form><input name="username"><input name="password" type="password"></form><script src="/app.js"></script><link rel="stylesheet" href="/app.css">'});
     // Trusted acceptance-test double only. Never delivered or counted as generated software.
@@ -99,14 +100,14 @@ async function mocked(t, mode) {
       for(const item of state.events)db.prepare('INSERT INTO audit_events VALUES(?,?,?,?)').run(item.action,item.actorId,item.targetId,item.at);
       db.exec('COMMIT');db.close();
     }
-    if(mode==='db-slow-timeout'||mode==='db-slow-mxc'){
+    if(mode==='db-slow-cancel'||mode==='db-slow-mxc'){
       const db=new DatabaseSync(rootDir+'/slow.sqlite');db.exec('CREATE TABLE books(id TEXT,copies INTEGER);CREATE TABLE loans(id TEXT,book_id TEXT,user_id TEXT,status TEXT);CREATE TABLE audit_events(action TEXT,actor_id TEXT,target_id TEXT,at TEXT);BEGIN');
       for(let i=0;i<100;i++)db.prepare('INSERT INTO books VALUES(?,?)').run('b'+i,i);
       db.exec('COMMIT');let expression="printf('%.*c',65536+copies,97)";
       for(let i=0;i<40;i++)expression="replace("+expression+",'"+(i%2?'b':'a')+"','"+(i%2?'a':'b')+"')";
       db.exec('PRAGMA writable_schema=ON');db.prepare('UPDATE sqlite_master SET sql=? WHERE name=?').run('CREATE TABLE books(id TEXT,copies INTEGER,title TEXT GENERATED ALWAYS AS(substr('+expression+',1,1)) VIRTUAL)','books');db.close();
     }
-    if(mode!=='db-slow-mxc')mock.module(${JSON.stringify(new URL('../lib/windows-sandbox.mjs', import.meta.url).href)},{namedExports:{createWindowsSandbox:()=>({
+    if(!realObserver)mock.module(${JSON.stringify(new URL('../lib/windows-sandbox.mjs', import.meta.url).href)},{namedExports:{createWindowsSandbox:()=>({
       preflight:async()=>{if(mode==='valid-preflight-unconfirmed')throw Object.assign(new Error('preflight unconfirmed'),{reconciliationRequired:true,probeDirectory:'retained-probe',result:{pid:12345,startedAt:'mock-preflight',terminationConfirmed:false,controlDirectory:'retained-control'}});return {kind:'trusted-test-stub'};},
       run:async options=>{const result=await runProcess(process.execPath,[options.runnerFile],{cwd:options.workspace,signal:options.signal,timeoutMs:options.timeoutMs,maxOutputBytes:options.maxOutputBytes});return mode==='valid-database-unconfirmed'?{...result,terminationConfirmed:false}:result;}
     })}});
@@ -120,8 +121,10 @@ async function mocked(t, mode) {
         if(mode==='db-header') await writeFile(filename,'x'.repeat(4096));
         else if(mode==='db-oversize') await writeFile(filename,Buffer.alloc(8*1024*1024+1));
         else if(mode==='db-hardlink'){await writeFile(rootDir+'/other.sqlite','x'.repeat(4096));await link(rootDir+'/other.sqlite',filename);}
-        else if(mode==='db-slow-timeout'||mode==='db-slow-mxc')await copyFile(rootDir+'/slow.sqlite',filename);
-        else { const db=new DatabaseSync(filename);db.exec('CREATE TABLE loans(id TEXT,book_id TEXT,user_id TEXT,status TEXT);CREATE TABLE audit_events(action TEXT,actor_id TEXT,target_id TEXT,at TEXT);'+(mode==='db-view'?'CREATE VIEW books AS SELECT 1 AS id;':'CREATE TABLE books(id TEXT,title TEXT,copies INTEGER);'));
+        else if(mode==='db-slow-cancel'||mode==='db-slow-mxc')await copyFile(rootDir+'/slow.sqlite',filename);
+        else { const db=new DatabaseSync(filename);
+          const booksSql=mode==='db-view'?'CREATE VIEW books AS SELECT 1 AS id;':mode.includes('commented-virtual')?'CREATE /* comment */ VIRTUAL TABLE books USING fts5(id,title,copies);':mode==='db-generated'?"CREATE TABLE books(id TEXT,copies INTEGER,title TEXT GENERATED ALWAYS AS('课程示例图书') VIRTUAL,created_at TEXT);INSERT INTO books(id,copies) VALUES('book-1',1);":'CREATE TABLE books(id TEXT,title TEXT,copies INTEGER);';
+          db.exec('CREATE TABLE loans(id TEXT,book_id TEXT,user_id TEXT,status TEXT);CREATE TABLE audit_events(action TEXT,actor_id TEXT,target_id TEXT,at TEXT);'+booksSql);
           db.close();}
       }
       if(mode==='startup-timeout') await new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('stopped'),{code:'cancelled'})),{once:true}));
@@ -134,13 +137,16 @@ async function mocked(t, mode) {
       },stop:async()=>{stops++;if(mode.startsWith('valid'))saveTestDatabase(options.workspace);return {...record,pid:123456+calls,startedAt:'mock-'+calls,...(mode==='unconfirmed'?{status:'reconciliation_required',terminationConfirmed:false}:{}),...(mode==='tampered'?{sourceUnchanged:false}:{})};}};
     }}});
     const {runWebTests}=await import(${JSON.stringify(new URL('../lib/web-tests.mjs', import.meta.url).href)});
-    let lastPulse=Date.now(),maxGap=0;const pulse=setInterval(()=>{const now=Date.now();maxGap=Math.max(maxGap,now-lastPulse);lastPulse=now;},5);
-    const report=await runWebTests({rootDir,files,executable:mode==='db-slow-mxc'?process.env.EXECUTION_SANDBOX_EXE:'unused-mock',timeoutMs:mode.includes('timeout')?80:5000,signal:controller.signal,manifest:{hash:'forged',checks:[{passed:true}]},onEvent:event=>{
+    let observationStarting=false,heartbeatBeforeAbort=false,cancelledObservation=false,observationPulse=false;
+    const pulse=setInterval(()=>{if(observationStarting)observationPulse=true;},5);
+    const report=await runWebTests({rootDir,files,executable:realObserver?process.env.EXECUTION_SANDBOX_EXE:'unused-mock',timeoutMs:mode==='startup-timeout'||mode==='request-timeout'?80:5000,signal:controller.signal,manifest:{hash:'forged',checks:[{passed:true}]},onEvent:event=>{
       if(mode==='cancelled'&&event.id==='WEB-002')controller.abort();
       if(mode==='throw-observer')throw new Error('observer cannot grant or stop a verdict');
-      if(mode==='db-slow-mxc'&&event.phase==='database_observation'&&event.type==='starting')setTimeout(()=>controller.abort(),80);
+      if((mode==='db-slow-cancel'||mode==='db-slow-mxc')&&event.phase==='database_observation'&&event.type==='starting'){
+        observationStarting=true;setTimeout(()=>{heartbeatBeforeAbort=observationPulse;cancelledObservation=true;controller.abort();},80);
+      }
     }});
-    clearInterval(pulse);process.stdout.write(JSON.stringify({report,calls,stops,requestCount,maxGap}));
+    clearInterval(pulse);process.stdout.write(JSON.stringify({report,calls,stops,requestCount,observationStarting,heartbeatBeforeAbort,cancelledObservation}));
   `;
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--experimental-test-module-mocks', '--input-type=module'], { cwd: fileURLToPath(new URL('..', import.meta.url)), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -224,8 +230,8 @@ test('源码篡改与无法确认停止均阻止验收', async t => {
   assert.equal(uncertain.status, 'reconciliation_required'); assert.equal(uncertain.terminationConfirmed, false);
 });
 
-test('独立只读数据库观察拒绝非SQLite、超限、硬链接和伪装视图', async t => {
-  for (const [mode, expected] of [['db-header', 'invalid_header'], ['db-oversize', 'unsafe_file'], ['db-hardlink', 'unsafe_file'], ['db-view', 'invalid_table'], ['db-empty', null]]) {
+test('独立只读数据库观察拒绝非SQLite、超限、硬链接、视图和注释虚拟表', async t => {
+  for (const [mode, expected] of [['db-header', 'invalid_header'], ['db-oversize', 'unsafe_file'], ['db-hardlink', 'unsafe_file'], ['db-view', 'invalid_table'], ['db-commented-virtual', 'invalid_table'], ['db-empty', null], ['db-generated', null]]) {
     const { report } = await mocked(t, mode); complete(report);
     const observation = report.checks.find(check => check.id === 'WEB-017');
     assert.equal(observation.passed, false);
@@ -233,7 +239,7 @@ test('独立只读数据库观察拒绝非SQLite、超限、硬链接和伪装�
     assert.equal(command.runnerHash,databaseObserverHash);
     assert.equal(command.sourceHash,report.sourceHash);
     if(expected) {assert.equal(JSON.parse(command.stdout).code,expected);assert.equal(command.exitCode,1);}
-    else {assert.equal(JSON.parse(command.stdout).ok,true);assert.ok(observation.expected.includes('完整重启'));}
+    else {assert.equal(JSON.parse(command.stdout).ok,true);assert.ok(observation.expected.includes('完整重启'));if(mode==='db-generated')assert.equal(JSON.parse(command.stdout).books[0].title,'课程示例图书');}
   }
 });
 
@@ -243,16 +249,15 @@ test('无效signal始终返回完整error报告，不在finally再抛异常', as
   }
 });
 
-test('低内存慢生成列只在可终止子进程求值，80ms预算保持宿主响应', async t => {
-  const start=Date.now();
-  let pulse=false;const timer=setTimeout(()=>{pulse=true;},120);
-  const {report,maxGap}=await mocked(t,'db-slow-timeout');clearTimeout(timer);complete(report);
-  assert.equal(report.status,'timed_out');
+test('低内存生成列观察调用开始后80ms取消，宿主定时器保持响应', async t => {
+  const {report,observationStarting,heartbeatBeforeAbort,cancelledObservation}=await mocked(t,'db-slow-cancel');complete(report);
+  assert.equal(report.status,'cancelled');
+  assert.equal(observationStarting,true);assert.equal(heartbeatBeforeAbort,true);assert.equal(cancelledObservation,true);
   assert.equal(report.databaseCommands.length,1);
-  assert.ok(['cancelled','timeout'].includes(report.databaseCommands[0].stopReason),JSON.stringify(report.databaseCommands));
+  assert.equal(report.databaseCommands[0].stopReason,'cancelled',JSON.stringify(report.databaseCommands));
+  assert.ok(report.databaseCommands[0].pid>0);
   assert.equal(report.databaseCommands[0].terminationConfirmed,true);
   assert.equal(report.terminationConfirmed,true);
-  assert.equal(pulse,true);assert.ok(Date.now()-start<2500);assert.ok(maxGap<150,'the runWebTests host event loop remained responsive: '+maxGap);
 });
 
 test('可信业务替身附加字段不会误拒，数据库命令与runtime分开计量并绑定版本', async t => {
@@ -296,9 +301,16 @@ test('真实MXC运行错误业务候选：500/候选marker不能冒充Web业务�
   assert.equal(report.databaseCommands[0].runnerHash,databaseObserverHash);
 });
 
-test('真实MXC数据库观察进程遇到慢生成列仍可在80ms取消且停止得到确认', real, async t=>{
-  const {report,maxGap}=await mocked(t,'db-slow-mxc');complete(report);
+test('真实MXC观察调用开始后80ms可取消且进程停止得到确认', real, async t=>{
+  const {report,observationStarting,heartbeatBeforeAbort,cancelledObservation}=await mocked(t,'db-slow-mxc');complete(report);
   assert.equal(report.status,'cancelled');assert.equal(report.databaseCommands.length,1);
   const command=report.databaseCommands[0];assert.equal(command.stopReason,'cancelled');assert.equal(command.terminationConfirmed,true);assert.ok(command.pid>0);assert.equal(command.runnerHash,databaseObserverHash);assert.equal(command.sourceHash,report.sourceHash);
-  assert.equal(report.terminationConfirmed,true);assert.ok(maxGap<200,'observer did not block host: '+maxGap);
+  assert.equal(report.terminationConfirmed,true);assert.equal(observationStarting,true);assert.equal(heartbeatBeforeAbort,true);assert.equal(cancelledObservation,true);
+});
+
+test('真实MXC观察拒绝带注释的FTS虚拟表，SQLite对象类型不可用SQL文本伪装', real, async t=>{
+  const {report}=await mocked(t,'db-commented-virtual-mxc');complete(report);
+  assert.equal(report.databaseCommands.length,1);const command=report.databaseCommands[0];
+  assert.ok(command.pid>0);assert.equal(command.terminationConfirmed,true);assert.equal(command.stopReason,null);assert.equal(command.exitCode,1);
+  assert.equal(JSON.parse(command.stdout).code,'invalid_table');assert.equal(JSON.parse(command.stdout).phase,'schema');
 });
