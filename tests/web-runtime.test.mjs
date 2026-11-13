@@ -191,6 +191,35 @@ test('real web runtime obeys external cancellation and the total deadline', real
   const deadline = await next.done; assert.equal(deadline.status, 'timed_out'); assert.equal(deadline.stopReason, 'timed_out'); assert.equal(deadline.terminationConfirmed, true);
 });
 
+test('real startup cancellation at control preparation never spawns and immediate post-spawn cancellation terminates', real, async t => {
+  for (const checkpoint of ['prepared', 'started']) {
+    const { workspace } = await fixture(t, echoSource);
+    const controller = new AbortController(), events = [];
+    let timer;
+    try {
+      await assert.rejects(Promise.race([
+        startWebRuntime({ ...options(workspace), signal: controller.signal, onEvent(event) {
+          events.push(event);
+          if (event.type === checkpoint) controller.abort();
+        } }),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('startup cancellation did not settle')), 8000); }),
+      ]), cause => {
+        assert.equal(cause.result?.stopReason, 'cancelled');
+        assert.equal(cause.result.terminationConfirmed, true);
+        assert.equal(cause.result.controlDirectory, null);
+        assert.equal(cause.result.status, 'stopped');
+        assert.equal(cause.result.sourceUnchanged, true);
+        if (checkpoint === 'prepared') assert.equal(cause.result.pid, null);
+        else assert.ok(Number.isInteger(cause.result.pid));
+        return true;
+      });
+      assert.ok(events.some(event => event.type === checkpoint));
+      if (checkpoint === 'prepared') assert.equal(events.some(event => event.type === 'started'), false);
+      assert.equal(events.filter(event => event.type === 'closed').length, 1);
+    } finally { clearTimeout(timer); controller.abort(); }
+  }
+});
+
 test('real web runtime rejects unknown and duplicate response identities and bounded output', real, async t => {
   const sources = [
     [`export async function createApp(){return {handle(){process.stdout.write(JSON.stringify({type:'response',id:'unknown',response:{status:200,headers:{},bodyBase64:''}})+'\\n');return {status:200,body:'unsafe'}}}}`, 'protocol_error'],
