@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { runWebTests, webManifest } from '../lib/web-tests.mjs';
+import { runWebTests, webManifest, databaseObserverHash } from '../lib/web-tests.mjs';
 import { webProfile } from '../lib/web-profile.mjs';
 import { validateProjectFiles } from '../lib/project-files.mjs';
 
@@ -38,38 +38,109 @@ async function mocked(t, mode) {
   // This subprocess executes trusted test scaffolding only. Candidate source is never imported.
   const script = `
     import { mock } from 'node:test';
-    import { writeFile,mkdir,link } from 'node:fs/promises';
+    import { writeFile,mkdir,link,copyFile } from 'node:fs/promises';
     import { DatabaseSync } from 'node:sqlite';
+    import {runProcess} from ${JSON.stringify(new URL('../lib/managed-process.mjs', import.meta.url).href)};
     const controller = new AbortController();
     let calls=0, stops=0, requestCount=0;
     const runtimeUrl = ${JSON.stringify(new URL('../lib/web-runtime.mjs', import.meta.url).href)};
     const rootDir=${JSON.stringify(rootDir)}, mode=${JSON.stringify(mode)};
     const files=${JSON.stringify(files)};
+    if(mode.startsWith('valid'))files.push({path:'public/app.js',content:'document.title="Trusted test stub";'}, {path:'public/app.css',content:'body {color: black;}'},{path:'public/index.html',content:'<!doctype html><form><input name="username"><input name="password" type="password"></form><script src="/app.js"></script><link rel="stylesheet" href="/app.css">'});
+    // Trusted acceptance-test double only. Never delivered or counted as generated software.
+    const state={books:[{id:'book-1',title:mode==='valid-wrong-title'?'wrong title':'课程示例图书',copies:1,createdAt:'extra'}],loans:[],events:[]}, sessions=new Map();let nextSession=0,extra=0;
+    const stamped=rows=>rows.map(row=>({...row,extraMetadata:String(++extra)}));
+    function reply(status,json,headers={}){return {status,headers:{'content-type':'application/json',...headers},body:Buffer.from(JSON.stringify(json))};}
+    function testRequest(request){
+      if(request.path==='/'||request.path==='/app.js'||request.path==='/app.css'){
+        const item=files.find(file=>file.path==='public'+(request.path==='/'?'/index.html':request.path));
+        return {status:200,headers:{'content-type':request.path==='/'?'text/html':request.path.endsWith('.js')?'text/javascript':'text/css'},body:Buffer.from(item.content)};
+      }
+      const token=(request.headers.cookie||'').replace('app_session=',''), user=sessions.get(token);let body={};
+      try{if(request.body)body=JSON.parse(request.body);}catch{return reply(400,{error:'Invalid JSON'});}
+      const error=code=>reply(code,{error:'Rejected'});
+      if(request.path==='/api/login'){
+        if(!['admin','alice','bob'].includes(body.username)||body.password!==body.username+'-pass')return error(401);
+        const token='session-'+(++nextSession);sessions.set(token,body.username);
+        return reply(200,{user:{id:body.username,role:body.username==='admin'?'admin':'member',username:body.username,createdAt:'extra'}},{'set-cookie':['app_session='+token+'; HttpOnly; Path=/; SameSite=Lax']});
+      }
+      if(!user)return error(401);
+      if(request.path==='/api/logout'){sessions.delete(token);return reply(200,{ok:true},{'set-cookie':['app_session=; Max-Age=0; HttpOnly; Path=/; SameSite=Lax']});}
+      if(request.path==='/api/me')return reply(200,{user:{id:user,role:user==='admin'?'admin':'member',username:user}});
+      const available=book=>book.copies-state.loans.filter(loan=>loan.bookId===book.id&&loan.status==='active').length;
+      const event=(action,targetId)=>state.events.push({id:'audit-'+state.events.length,action,actorId:user,targetId,at:'2026-11-14T00:00:00.000Z'});
+      if(request.path==='/api/books'&&request.method==='GET')return reply(200,{books:stamped(state.books.map(book=>({...book,available:available(book)})))});
+      if(request.path==='/api/books'){
+        if(user!=='admin')return error(403);
+        if(typeof body.title!=='string'||!body.title.trim()||body.title.trim().length>120||!Number.isInteger(body.copies)||body.copies<1||body.copies>1000)return error(400);
+        const book={id:'new-book',title:body.title.trim(),copies:body.copies,createdAt:'extra'};state.books.push(book);event('create_book',book.id);return reply(201,{book:{...book,available:book.copies}});
+      }
+      if(request.path==='/api/audit')return user==='admin'?reply(200,{events:stamped(state.events)}):error(403);
+      if(request.path==='/api/loans'&&request.method==='GET')return reply(200,{loans:stamped(state.loans.filter(loan=>user==='admin'||loan.userId===user))});
+      if(request.path==='/api/loans'){
+        if(typeof body.bookId!=='string'||'userId'in body||'role'in body)return error(400);
+        const book=state.books.find(book=>book.id===body.bookId);if(!book)return error(404);
+        if(available(book)<1||state.loans.some(loan=>loan.bookId===book.id&&loan.userId===user&&loan.status==='active'))return error(409);
+        const loan={id:'loan-'+state.loans.length,bookId:book.id,userId:user,status:'active',createdAt:'extra'};state.loans.push(loan);event('borrow',loan.id);return reply(201,{loan:{...loan}});
+      }
+      const parts=request.path.split('/');
+      if(parts.length===5&&parts[1]==='api'&&parts[2]==='loans'&&parts[4]==='return'){
+        const loan=state.loans.find(loan=>loan.id===decodeURIComponent(parts[3]));if(!loan)return error(404);
+        if(user!=='admin'&&loan.userId!==user)return error(403);if(loan.status!=='active')return error(409);
+        loan.status='returned';loan.returnedAt='extra return time';event('return',loan.id);return reply(200,{loan:{...loan}});
+      }
+      return error(404);
+    }
+    function saveTestDatabase(workspace){
+      const db=new DatabaseSync(workspace+'/.platform/tmp/app.sqlite');
+      db.exec('CREATE TABLE IF NOT EXISTS books(id TEXT,title TEXT,copies INTEGER);CREATE TABLE IF NOT EXISTS loans(id TEXT,book_id TEXT,user_id TEXT,status TEXT);CREATE TABLE IF NOT EXISTS audit_events(action TEXT,actor_id TEXT,target_id TEXT,at TEXT);BEGIN;DELETE FROM books;DELETE FROM loans;DELETE FROM audit_events;');
+      for(const book of state.books)db.prepare('INSERT INTO books VALUES(?,?,?)').run(book.id,book.title,book.copies);
+      for(const loan of state.loans)db.prepare('INSERT INTO loans VALUES(?,?,?,?)').run(loan.id,loan.bookId,loan.userId,loan.status);
+      for(const item of state.events)db.prepare('INSERT INTO audit_events VALUES(?,?,?,?)').run(item.action,item.actorId,item.targetId,item.at);
+      db.exec('COMMIT');db.close();
+    }
+    if(mode==='db-slow-timeout'||mode==='db-slow-mxc'){
+      const db=new DatabaseSync(rootDir+'/slow.sqlite');db.exec('CREATE TABLE books(id TEXT,copies INTEGER);CREATE TABLE loans(id TEXT,book_id TEXT,user_id TEXT,status TEXT);CREATE TABLE audit_events(action TEXT,actor_id TEXT,target_id TEXT,at TEXT);BEGIN');
+      for(let i=0;i<100;i++)db.prepare('INSERT INTO books VALUES(?,?)').run('b'+i,i);
+      db.exec('COMMIT');let expression="printf('%.*c',65536+copies,97)";
+      for(let i=0;i<40;i++)expression="replace("+expression+",'"+(i%2?'b':'a')+"','"+(i%2?'a':'b')+"')";
+      db.exec('PRAGMA writable_schema=ON');db.prepare('UPDATE sqlite_master SET sql=? WHERE name=?').run('CREATE TABLE books(id TEXT,copies INTEGER,title TEXT GENERATED ALWAYS AS(substr('+expression+',1,1)) VIRTUAL)','books');db.close();
+    }
+    if(mode!=='db-slow-mxc')mock.module(${JSON.stringify(new URL('../lib/windows-sandbox.mjs', import.meta.url).href)},{namedExports:{createWindowsSandbox:()=>({
+      preflight:async()=>{if(mode==='valid-preflight-unconfirmed')throw Object.assign(new Error('preflight unconfirmed'),{reconciliationRequired:true,probeDirectory:'retained-probe',result:{pid:12345,startedAt:'mock-preflight',terminationConfirmed:false,controlDirectory:'retained-control'}});return {kind:'trusted-test-stub'};},
+      run:async options=>{const result=await runProcess(process.execPath,[options.runnerFile],{cwd:options.workspace,signal:options.signal,timeoutMs:options.timeoutMs,maxOutputBytes:options.maxOutputBytes});return mode==='valid-database-unconfirmed'?{...result,terminationConfirmed:false}:result;}
+    })}});
     const record={pid:123456,startedAt:'mock',status:'stopped',terminationConfirmed:true,sourceUnchanged:true,exitCode:0,stopAcknowledged:true};
     mock.module(runtimeUrl,{namedExports:{startWebRuntime:async options=>{
       calls++;
+      await mkdir(options.workspace+'/.platform/tmp',{recursive:true});
       if(mode.startsWith('db-')){
         const directory=options.workspace+'/.platform/tmp'; await mkdir(directory,{recursive:true});
         const filename=directory+'/app.sqlite';
         if(mode==='db-header') await writeFile(filename,'x'.repeat(4096));
         else if(mode==='db-oversize') await writeFile(filename,Buffer.alloc(8*1024*1024+1));
         else if(mode==='db-hardlink'){await writeFile(rootDir+'/other.sqlite','x'.repeat(4096));await link(rootDir+'/other.sqlite',filename);}
-        else { const db=new DatabaseSync(filename);db.exec('CREATE TABLE loans(id TEXT,book_id TEXT,user_id TEXT,status TEXT);CREATE TABLE audit_events(action TEXT,actor_id TEXT,target_id TEXT,at TEXT);'+(mode==='db-view'?'CREATE VIEW books AS SELECT 1 AS id;':'CREATE TABLE books(id TEXT,title TEXT,copies INTEGER);'));db.close();}
+        else if(mode==='db-slow-timeout'||mode==='db-slow-mxc')await copyFile(rootDir+'/slow.sqlite',filename);
+        else { const db=new DatabaseSync(filename);db.exec('CREATE TABLE loans(id TEXT,book_id TEXT,user_id TEXT,status TEXT);CREATE TABLE audit_events(action TEXT,actor_id TEXT,target_id TEXT,at TEXT);'+(mode==='db-view'?'CREATE VIEW books AS SELECT 1 AS id;':'CREATE TABLE books(id TEXT,title TEXT,copies INTEGER);'));
+          db.close();}
       }
       if(mode==='startup-timeout') await new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('stopped'),{code:'cancelled'})),{once:true}));
       if(mode==='tampered') await writeFile(options.workspace+'/src/app.mjs','source externally changed');
-      return {pid:123456,url:'http://localhost:1',request:async()=>{
+      return {pid:123456,url:'http://localhost:1',request:async input=>{
         requestCount++;
+        if(mode.startsWith('valid'))return testRequest(input);
         if(mode==='request-timeout') return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('stopped'),{code:'cancelled'})),{once:true}));
         return {status:200,headers:{'content-type':'application/json'},body:Buffer.from('{"passed":true,"status":"accepted","checks":[{"passed":true}]}')};
-      },stop:async()=>{stops++;return {...record,...(mode==='unconfirmed'?{status:'reconciliation_required',terminationConfirmed:false}:{}),...(mode==='tampered'?{sourceUnchanged:false}:{})};}};
+      },stop:async()=>{stops++;if(mode.startsWith('valid'))saveTestDatabase(options.workspace);return {...record,pid:123456+calls,startedAt:'mock-'+calls,...(mode==='unconfirmed'?{status:'reconciliation_required',terminationConfirmed:false}:{}),...(mode==='tampered'?{sourceUnchanged:false}:{})};}};
     }}});
     const {runWebTests}=await import(${JSON.stringify(new URL('../lib/web-tests.mjs', import.meta.url).href)});
-    const report=await runWebTests({rootDir,files,executable:'unused-mock',timeoutMs:mode.includes('timeout')?80:5000,signal:controller.signal,manifest:{hash:'forged',checks:[{passed:true}]},onEvent:event=>{
+    let lastPulse=Date.now(),maxGap=0;const pulse=setInterval(()=>{const now=Date.now();maxGap=Math.max(maxGap,now-lastPulse);lastPulse=now;},5);
+    const report=await runWebTests({rootDir,files,executable:mode==='db-slow-mxc'?process.env.EXECUTION_SANDBOX_EXE:'unused-mock',timeoutMs:mode.includes('timeout')?80:5000,signal:controller.signal,manifest:{hash:'forged',checks:[{passed:true}]},onEvent:event=>{
       if(mode==='cancelled'&&event.id==='WEB-002')controller.abort();
       if(mode==='throw-observer')throw new Error('observer cannot grant or stop a verdict');
+      if(mode==='db-slow-mxc'&&event.phase==='database_observation'&&event.type==='starting')setTimeout(()=>controller.abort(),80);
     }});
-    process.stdout.write(JSON.stringify({report,calls,stops,requestCount}));
+    clearInterval(pulse);process.stdout.write(JSON.stringify({report,calls,stops,requestCount,maxGap}));
   `;
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--experimental-test-module-mocks', '--input-type=module'], { cwd: fileURLToPath(new URL('..', import.meta.url)), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -154,21 +225,80 @@ test('源码篡改与无法确认停止均阻止验收', async t => {
 });
 
 test('独立只读数据库观察拒绝非SQLite、超限、硬链接和伪装视图', async t => {
-  for (const [mode, expected] of [['db-header', '真实SQLite文件头'], ['db-oversize', '8MiB以内'], ['db-hardlink', '8MiB以内'], ['db-view', 'books为真实普通表'], ['db-empty', '完整重启与API预期已建立']]) {
+  for (const [mode, expected] of [['db-header', 'invalid_header'], ['db-oversize', 'unsafe_file'], ['db-hardlink', 'unsafe_file'], ['db-view', 'invalid_table'], ['db-empty', null]]) {
     const { report } = await mocked(t, mode); complete(report);
     const observation = report.checks.find(check => check.id === 'WEB-017');
     assert.equal(observation.passed, false);
-    assert.ok(observation.expected.includes(expected), JSON.stringify(observation));
+    const command=report.databaseCommands[0];
+    assert.equal(command.runnerHash,databaseObserverHash);
+    assert.equal(command.sourceHash,report.sourceHash);
+    if(expected) {assert.equal(JSON.parse(command.stdout).code,expected);assert.equal(command.exitCode,1);}
+    else {assert.equal(JSON.parse(command.stdout).ok,true);assert.ok(observation.expected.includes('完整重启'));}
   }
+});
+
+test('无效signal始终返回完整error报告，不在finally再抛异常', async t => {
+  for(const signal of [null, {}, 1, {aborted:true,removeEventListener:0}]) {
+    const report=await runWebTests({rootDir:await root(t),files,signal});complete(report);assert.equal(report.status,'error');assert.deepEqual(report.processes,[]);assert.deepEqual(report.databaseCommands,[]);
+  }
+});
+
+test('低内存慢生成列只在可终止子进程求值，80ms预算保持宿主响应', async t => {
+  const start=Date.now();
+  let pulse=false;const timer=setTimeout(()=>{pulse=true;},120);
+  const {report,maxGap}=await mocked(t,'db-slow-timeout');clearTimeout(timer);complete(report);
+  assert.equal(report.status,'timed_out');
+  assert.equal(report.databaseCommands.length,1);
+  assert.ok(['cancelled','timeout'].includes(report.databaseCommands[0].stopReason),JSON.stringify(report.databaseCommands));
+  assert.equal(report.databaseCommands[0].terminationConfirmed,true);
+  assert.equal(report.terminationConfirmed,true);
+  assert.equal(pulse,true);assert.ok(Date.now()-start<2500);assert.ok(maxGap<150,'the runWebTests host event loop remained responsive: '+maxGap);
+});
+
+test('可信业务替身附加字段不会误拒，数据库命令与runtime分开计量并绑定版本', async t => {
+  const {report}=await mocked(t,'valid-extra-fields');
+  assert.equal(report.status,'passed',JSON.stringify(report.checks.filter(check=>!check.passed)));
+  assert.equal(report.checks.length,webManifest.count);
+  assert.equal(report.databaseCommands.length,2);
+  assert.equal(report.processes.length,2);
+  assert.deepEqual(report.databasePreflights,[]);
+  for(const command of report.databaseCommands){assert.equal(command.kind,'database_observation');assert.equal(command.runnerHash,databaseObserverHash);assert.equal(command.sourceHash,report.sourceHash);assert.equal(command.exitCode,0);assert.equal(command.terminationConfirmed,true);assert.equal(command.stopReason,null);assert.equal(command.truncated,false);assert.equal('stopAcknowledged' in command,false);}
+  assert.equal(report.terminationConfirmed,true);
+});
+
+test('错误初始书名即使库存正确也拒绝', async t => {
+  const {report}=await mocked(t,'valid-wrong-title');complete(report);
+  assert.equal(report.checks.find(check=>check.id==='WEB-005').passed,false);
+});
+
+test('数据库命令或预检停止未确认时保留真实记录且不再启动下一轮', async t=>{
+  const command=(await mocked(t,'valid-database-unconfirmed')).report;complete(command);
+  assert.equal(command.status,'reconciliation_required');assert.equal(command.terminationConfirmed,false);assert.equal(command.databaseCommands.length,1);assert.equal(command.processes.length,1);
+  const preflight=(await mocked(t,'valid-preflight-unconfirmed')).report;complete(preflight);
+  assert.equal(preflight.status,'reconciliation_required');assert.equal(preflight.terminationConfirmed,false);assert.equal(preflight.databaseCommands.length,0);assert.equal(preflight.processes.length,1);
+  assert.equal(preflight.databasePreflights.length,1);const record=preflight.databasePreflights[0];
+  assert.equal(record.pid,12345);assert.equal(record.startedAt,'mock-preflight');assert.equal(record.probeDirectory,'retained-probe');assert.equal(record.controlDirectory,'retained-control');assert.equal(record.kind,'database_preflight');assert.equal(record.sourceHash,preflight.sourceHash);assert.equal('result'in record,false);
 });
 
 const real = { skip: process.env.TASKFLOW_TEST_REAL_SANDBOX !== '1', timeout: 45_000 };
 test('真实MXC运行错误业务候选：500/候选marker不能冒充Web业务验收', real, async t => {
-  const report = await runWebTests({ rootDir: await root(t), files, timeoutMs: 30_000 });
+  const partial = files.map(file => file.path === 'src/app.mjs' ? { path: file.path, content: 'import {DatabaseSync} from "node:sqlite";export async function createApp({databasePath}){const db=new DatabaseSync(databasePath);db.exec("CREATE TABLE books(id TEXT,title TEXT,copies INTEGER);CREATE TABLE loans(id TEXT,book_id TEXT,user_id TEXT,status TEXT);CREATE TABLE audit_events(action TEXT,actor_id TEXT,target_id TEXT,at TEXT);");return {handle(){return {status:500,headers:{"content-type":"application/json"},body:"{}"}},close(){db.close()}}}' } : file);
+  const report = await runWebTests({ rootDir: await root(t), files: partial, timeoutMs: 30_000 });
   complete(report);
   assert.equal(report.checks[1].passed, true);
   assert.equal(report.checks[2].passed, false);
   assert.equal(report.status, 'failed');
   assert.equal(report.processes.length, 1);
   assert.equal(report.terminationConfirmed, true);
+  assert.equal(report.databaseCommands.length,1);
+  assert.ok(Number.isInteger(report.databaseCommands[0].pid) && report.databaseCommands[0].pid>0);
+  assert.equal(report.databaseCommands[0].exitCode,0,JSON.stringify(report.databaseCommands[0]));
+  assert.equal(report.databaseCommands[0].runnerHash,databaseObserverHash);
+});
+
+test('真实MXC数据库观察进程遇到慢生成列仍可在80ms取消且停止得到确认', real, async t=>{
+  const {report,maxGap}=await mocked(t,'db-slow-mxc');complete(report);
+  assert.equal(report.status,'cancelled');assert.equal(report.databaseCommands.length,1);
+  const command=report.databaseCommands[0];assert.equal(command.stopReason,'cancelled');assert.equal(command.terminationConfirmed,true);assert.ok(command.pid>0);assert.equal(command.runnerHash,databaseObserverHash);assert.equal(command.sourceHash,report.sourceHash);
+  assert.equal(report.terminationConfirmed,true);assert.ok(maxGap<200,'observer did not block host: '+maxGap);
 });
