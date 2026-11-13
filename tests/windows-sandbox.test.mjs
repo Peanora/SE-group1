@@ -6,6 +6,17 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createWindowsSandbox } from '../lib/windows-sandbox.mjs';
 
+async function runTrustedScript(script) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--experimental-test-module-mocks', '--input-type=module'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    const timer = setTimeout(() => { child.kill(); reject(new Error('trusted control test timed out')); }, 10_000);
+    child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('error', reject); child.once('close', code => { clearTimeout(timer); if (code !== 0) reject(new Error(stderr)); else { try { resolve(JSON.parse(stdout)); } catch { reject(new Error(stderr + stdout)); } } });
+    child.stdin.end(script);
+  });
+}
+
 test('unconfirmed sandbox stop preserves the owned control directory and process evidence', { skip: process.platform !== 'win32' }, async t => {
   const workspace = await mkdtemp(path.join(os.tmpdir(), 'taskflow-control-test-'));
   t.after(async () => {
@@ -32,19 +43,49 @@ test('unconfirmed sandbox stop preserves the owned control directory and process
     const sandbox=createWindowsSandbox({executable:process.execPath});await sandbox.preflight({workspace});
     process.stdout.write(JSON.stringify(await sandbox.run({workspace,runnerFile:workspace+'/.platform/runner.cjs'})));
   `;
-  const result = await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['--experimental-test-module-mocks', '--input-type=module'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = '', stderr = '';
-    const timer = setTimeout(() => { child.kill(); reject(new Error('trusted control test timed out')); }, 10_000);
-    child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
-    child.once('error', reject); child.once('close', code => { clearTimeout(timer); code === 0 ? resolve(JSON.parse(stdout)) : reject(new Error(stderr)); });
-    child.stdin.end(script);
-  });
+  const result = await runTrustedScript(script);
   assert.equal(result.terminationConfirmed, false); assert.equal(result.pid, 424242);
   const relative = path.relative(path.resolve(os.tmpdir()), result.controlDirectory);
   assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative) && path.basename(result.controlDirectory).startsWith('task-sandbox-control-'));
   assert.deepEqual(await (await import('node:fs/promises')).readdir(result.controlDirectory), []);
   await rm(result.controlDirectory, { recursive: true, force: true });
+});
+
+test('unconfirmed preflight preserves probe and original stop evidence even when probe cleanup would fail', { skip: process.platform !== 'win32' }, async t => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'taskflow-preflight-test-'));
+  t.after(async () => {
+    const relative = path.relative(path.resolve(os.tmpdir()), workspace);
+    assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+    await rm(workspace, { recursive: true, force: true });
+  });
+  const script = `
+    import {mock} from 'node:test';
+    const moduleUrl=${JSON.stringify(new URL('../lib/managed-process.mjs', import.meta.url).href)};
+    const {minimalEnv}=await import(moduleUrl);
+    const {default:unused,...fs}=await import('node:fs/promises');
+    let cleanupAttempts=0,calls=0;
+    mock.module('node:fs/promises',{namedExports:{...fs,rm:async(file,options)=>{
+      if(String(file).includes('.task-sandbox-probe-')){cleanupAttempts++;throw Object.assign(new Error('busy'),{code:'EBUSY'});}
+      return fs.rm(file,options);
+    }}});
+    mock.module(moduleUrl,{namedExports:{minimalEnv,runProcess:async()=>{
+      calls++;return {exitCode:calls===1?0:null,signal:null,stdout:calls===1?'codex-cli mocked':'',stderr:'',truncated:false,
+        terminationConfirmed:calls===1,stopReason:calls===1?null:'timeout',pid:424243,startedAt:'2026-01-01T00:00:00.000Z'};
+    }}});
+    const {createWindowsSandbox}=await import(${JSON.stringify(new URL('../lib/windows-sandbox.mjs', import.meta.url).href)});
+    try{await createWindowsSandbox({executable:process.execPath}).preflight({workspace:${JSON.stringify(workspace)}});throw new Error('unexpected success');}
+    catch(error){process.stdout.write(JSON.stringify({reconciliationRequired:error.reconciliationRequired,result:error.result,probeDirectory:error.probeDirectory,cleanupAttempts}));}
+  `;
+  const outcome = await runTrustedScript(script);
+  assert.equal(outcome.reconciliationRequired, true); assert.equal(outcome.result.terminationConfirmed, false);
+  assert.equal(outcome.result.pid, 424243); assert.equal(outcome.cleanupAttempts, 0);
+  assert.equal(outcome.probeDirectory, outcome.result.probeDirectory);
+  for (const [directory, prefix] of [[outcome.probeDirectory, '.task-sandbox-probe-'], [outcome.result.controlDirectory, 'task-sandbox-control-']]) {
+    const relative = path.relative(path.resolve(os.tmpdir()), directory);
+    assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative) && path.basename(directory).startsWith(prefix));
+    assert.ok(Array.isArray(await (await import('node:fs/promises')).readdir(directory)));
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('unconfigured sandbox fails closed and never falls back to host execution', async () => {
