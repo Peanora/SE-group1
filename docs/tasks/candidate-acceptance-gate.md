@@ -31,3 +31,5 @@
 真实命令联调：`npm run execution:check -- --model`使用1次编码和1次独立Review请求，同一候选`d905ed0776887f745eca85ce8c942dcd6bb1c282`自检13/13、独立测试13/13，Review完成且无阻塞问题，状态accepted/passed、taskAccepted:true。记录位于本地`output/executions/execution-Fs5URC/`，两方记录绑定同一validationId及候选标识，测试与Review使用不同目录。
 
 可信候选命令诊断通过但taskAccepted:false，另有真实MXC诊断回归证明返工后提交变化、两方重新检查及历史问题显式关闭；模拟Review不冒充真实模型证据。无新增运行依赖、无用户data迁移，无网页修改，未重复付费联调。源码固定后再由独立测试与Review检查同一版本。
+
+候选`dc2c463`的同版本独立检查：31个脚本语法通过、显式真实MXC的85/85测试通过；独立诊断再执行13/13固定检查，两方绑定一致、taskAccepted:false、真实模型请求0。静态Review无阻塞问题，唯一非阻塞建议为显式核对最后版本记录commit与当前候选commit。该建议已补充一条判定及回归断言，随后固定最终代码版本复验。

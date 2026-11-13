@@ -136,6 +136,8 @@ test('执行器返工后新提交重新运行两方，保留旧问题和独立�
   assert.equal(processCalls, 4, 'each candidate has its own self-check and independent test');
   const old = structuredClone(record); old.candidateCommit = old.versions[0].commit;
   assert.equal(isTaskAccepted(old), false);
+  const mismatchedLatest = structuredClone(record); mismatchedLatest.versions.at(-1).commit = mismatchedLatest.versions[0].commit;
+  assert.equal(isTaskAccepted(mismatchedLatest), false);
   const oldPolicy = structuredClone(record); oldPolicy.versions.at(-1).acceptance.binding.reviewPolicyHash = 'old-policy';
   assert.equal(isTaskAccepted(oldPolicy), false);
   const wrongRole = structuredClone(record); wrongRole.versions.at(-1).acceptance.test.role = 'review';

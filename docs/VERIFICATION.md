@@ -100,3 +100,5 @@
 `npm run execution:check -- --model`真实联调完成：1次编码、1次独立Review请求，候选提交`d905ed0776887f745eca85ce8c942dcd6bb1c282`，自检13/13、独立测试13/13，Review无阻塞意见，accepted/passed、taskAccepted:true。执行记录为本地`output/executions/execution-Fs5URC/execution.json`；两方独立结论为`acceptance/validation-g9YhCH/acceptance.json`，使用同一candidate binding和不同快照目录。此轮共2次真实模型请求，未重新调用model:check。
 
 passed只表示固定`library-borrow-v1`在当前清单和Review规则下通过。测试侧是固定验证服务，不是自主生成测试的Agent；没有验证任意仓库、完整全栈、集成提交交付或多Worker恢复。浏览器无修改，未重复浏览器操作；无新增依赖、无数据迁移、未推送/部署。独立源码审查和提交后的复验另见本轮任务记录。
+
+候选`dc2c463`由独立测试角色复验：31个脚本、真实MXC开启的85/85测试通过、无跳过；fixture实际独立测试13/13，两方同绑定，diagnostic_passed但taskAccepted:false、模型请求0。独立静态Review无阻塞项；其最后版本commit一致性建议随后补充判定及回归断言，不改变真实联调的通过条件或增加模型调用。
