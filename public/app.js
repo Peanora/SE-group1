@@ -127,7 +127,7 @@ function sortedRuns(project = state.project) { return [...(project?.runs || [])]
 function stageOf(id) { return state.run?.stages?.find((stage) => stage.id === id); }
 function stageTitle(id) { return stageOf(id)?.title || STAGES.find((stage) => stage.id === id)?.title || '运行'; }
 const planningReview = createPlanningReview({
-  container: $('#review-banner'), getState: () => state, submit: reviewAction,
+  container: $('#review-banner'), getState: () => ({ ...state, busy: state.busy || state.selectionPending }), submit: reviewAction,
   refresh: async () => {
     const id = state.run?.id; const epoch = state.epoch;
     const { run } = await api(basePath());
@@ -155,13 +155,14 @@ function renderHeader() {
 function renderControls() {
   const run = state.run;
   const active = ACTIVE.has(run?.status);
-  $('#start-run').disabled = !state.project || state.busy || active;
+  const changing = state.busy || state.selectionPending;
+  $('#start-run').disabled = !state.project || changing || active;
   $('#start-run span').textContent = run ? '再次编排' : '开始编排';
-  $('#mode-select').disabled = state.busy || active;
-  $('#failure-select').disabled = state.busy || active;
+  $('#mode-select').disabled = changing || active;
+  $('#failure-select').disabled = changing || active;
   $('#pause-button').hidden = !['running', 'paused'].includes(run?.status);
   $('#pause-button').textContent = run?.status === 'paused' ? '恢复执行' : '暂停';
-  $('#pause-button').disabled = state.busy;
+  $('#pause-button').disabled = changing;
   $('#refresh-button').disabled = state.busy;
   $('#run-select').disabled = !state.project?.runs?.length || state.busy;
   $('#download-bundle').hidden = run?.status !== 'succeeded';
@@ -324,7 +325,7 @@ async function pollRun() {
 async function refreshProjects() { const { projects } = await api('/api/projects'); state.projects = projects; renderProjects(); }
 async function selectProject(id, { runId } = {}) {
   clearTimeout(state.pollTimer); const epoch = ++state.epoch;
-  state.selectionPending = true; syncExecutionPanel();
+  state.selectionPending = true; renderControls(); syncExecutionPanel();
   try {
     const { project } = await api(`/api/projects/${encodeURIComponent(id)}`);
     if (epoch !== state.epoch) return;
@@ -334,17 +335,17 @@ async function selectProject(id, { runId } = {}) {
     state.stageId = state.run?.status === 'failed' ? state.run.stages.find((stage) => stage.status === 'failed')?.id || 'spec' : 'spec';
     state.taskId = null; state.artifactName = 'task.md'; clearError(); renderAll(); schedulePoll();
   } catch (error) { if (epoch === state.epoch) showError(error); }
-  finally { if (epoch === state.epoch) { state.selectionPending = false; renderHeader(); syncExecutionPanel(); } }
+  finally { if (epoch === state.epoch) { state.selectionPending = false; renderHeader(); renderControls(); syncExecutionPanel(); } }
 }
 async function selectRun(id) {
   clearTimeout(state.pollTimer); const epoch = ++state.epoch;
-  state.selectionPending = true; syncExecutionPanel();
+  state.selectionPending = true; renderControls(); syncExecutionPanel();
   try { const { run } = await api(`/api/projects/${encodeURIComponent(state.project.id)}/runs/${encodeURIComponent(id)}`); if (epoch !== state.epoch) return; state.selectionPending = false; state.artifactName = 'task.md'; state.taskId = null; updateRun(run); renderHeader(); schedulePoll(); }
   catch (error) { if (epoch === state.epoch) showError(error); }
-  finally { if (epoch === state.epoch) { state.selectionPending = false; renderHeader(); syncExecutionPanel(); } }
+  finally { if (epoch === state.epoch) { state.selectionPending = false; renderHeader(); renderControls(); syncExecutionPanel(); } }
 }
 async function startRun() {
-  if (!state.project || state.busy || ACTIVE.has(state.run?.status)) return;
+  if (!state.project || state.busy || state.selectionPending || ACTIVE.has(state.run?.status)) return;
   clearError(); setBusy(true); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   state.selectionPending = true; syncExecutionPanel();
   try {
@@ -358,7 +359,7 @@ async function startRun() {
   finally { if (epoch === state.epoch) { state.selectionPending = false; syncExecutionPanel(); } setBusy(false); }
 }
 async function runAction(action, stageId) {
-  if (!state.run || state.busy) return;
+  if (!state.run || state.busy || state.selectionPending) return;
   setBusy(true); clearError(); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   try {
     const { run } = await api(`${basePath()}/action`, { method: 'POST', body: JSON.stringify({ action, ...(stageId ? { stageId } : {}), ...(action === 'approve' ? { feedback: state.feedback } : {}) }) });
@@ -370,7 +371,7 @@ async function runAction(action, stageId) {
 }
 
 async function reviewAction(action, payload) {
-  if (!state.run || state.busy) throw new Error('上一项操作尚未结束，请稍后重试。');
+  if (!state.run || state.busy || state.selectionPending) throw new Error('上一项操作或运行切换尚未结束，请稍后重试。');
   setBusy(true); clearError(); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   try {
     const { run } = await api(`${basePath()}/action`, { method: 'POST', body: JSON.stringify({ action, ...payload }) });

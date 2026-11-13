@@ -98,5 +98,45 @@ test('real workbench confirms both planning versions before its execution panel 
   assert.equal(intercepted, true); assert.equal(await start.isDisabled(), true); assert.equal(starts.length, 1);
   release(); await page.getByRole('button', { name: '确认规格并继续', exact: true }).waitFor();
   assert.equal(await start.isDisabled(), true); assert.equal(await consent.isChecked(), false);
+
+  // An old planning action must not steal the selection epoch and strand the
+  // execution context. Exercise both run selection and project selection.
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  for (const answer of await page.locator('[data-review-field^="answer."]').all()) await answer.fill('本次由测试负责人按已生成依赖验收，无额外交付期限。');
+  await page.getByRole('button', { name: '保存修订', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('#approve-button')?.disabled);
+  await page.getByRole('button', { name: '确认规格并继续', exact: true }).click();
+  await page.getByRole('button', { name: '确认计划并导出', exact: true }).waitFor();
+  let releaseRun;
+  const runGate = new Promise(resolve => { releaseRun = resolve; });
+  await page.route(`**/api/projects/${project.id}/runs/${run.id}`, async route => { await runGate; await route.continue(); });
+  await page.locator('#run-select').selectOption(run.id);
+  await page.waitForFunction(() => document.querySelector('.execution-panel .ep-notice').textContent.includes('选择一个已确认'));
+  assert.equal(await page.locator('#approve-button').isDisabled(), true);
+  assert.equal(await page.locator('#review-banner input').first().isDisabled(), true);
+  await page.locator('#approve-button').evaluate(button => button.click());
+  assert.equal(app.store.getRun(project.id, next.id).run.approvals.plan, null);
+  releaseRun(); await page.getByText('可信界面连接替身；未生成软件、未调用模型。', { exact: true }).waitFor();
+  await page.locator('#run-select').selectOption(next.id);
+  await page.getByRole('button', { name: '确认计划并导出', exact: true }).waitFor();
+  const { project: other } = await request('/api/projects', { name: '切换目标项目', filename: 'other.md', content: source });
+  await page.locator('#refresh-button').click();
+  await page.locator(`[data-project="${other.id}"]`).waitFor();
+  await page.waitForFunction(() => !document.querySelector('#approve-button')?.disabled);
+  let releaseProject;
+  const projectGate = new Promise(resolve => { releaseProject = resolve; });
+  await page.route(`**/api/projects/${other.id}`, async route => { await projectGate; await route.continue(); });
+  await page.locator(`[data-project="${other.id}"]`).click();
+  await page.waitForFunction(() => document.querySelector('.execution-panel .ep-notice').textContent.includes('选择一个已确认'));
+  assert.equal(await page.locator('#approve-button').isDisabled(), true);
+  assert.equal(await page.locator('#review-banner input').first().isDisabled(), true);
+  await page.locator('#approve-button').evaluate(button => button.click());
+  assert.equal(app.store.getRun(project.id, next.id).run.approvals.plan, null);
+  releaseProject(); await page.getByRole('heading', { name: other.name, exact: true }).waitFor();
+  await page.locator(`[data-project="${project.id}"]`).click();
+  await page.getByRole('button', { name: '确认计划并导出', exact: true }).click();
+  await consent.check(); await page.waitForFunction(() => !document.querySelector('.execution-panel .ep-primary').disabled);
+  assert.equal(app.store.getRun(project.id, next.id).run.approvals.plan.revision, app.store.getRun(project.id, next.id).run.planRevision);
+  assert.equal(starts.length, 1);
   assert.deepEqual(errors, []);
 });
