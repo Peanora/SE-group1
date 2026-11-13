@@ -104,12 +104,37 @@ test('Review credential responses are redacted everywhere in the receipt and nev
   await assert.rejects(model({ task: '检查', files: candidateFiles, onReceipt: async value => { receipt = value; } }), error => {
     assert.equal(error.code, 'credential_response'); assert.ok(!error.message.includes(config.apiKey)); assert.equal(error.cause, undefined); return true;
   });
-  assert.equal(receipt.content.includes(config.apiKey), false); assert.equal(receipt.content.split('[REDACTED]').length - 1, 2);
+  assert.equal(receipt.content.includes(config.apiKey), false); assert.equal(receipt.content, '[REDACTED]');
   await assert.rejects(model({ task: '检查', files: candidateFiles }), { code: 'credential_response' });
   let boundedReceipt;
   await assert.rejects(createProjectReviewModel({ config: { ...config, apiKey: '!' }, fetchImpl: async () => envelopeFor('!'.repeat(70_000)) })({ task: '检查', files: candidateFiles,
     onReceipt: async value => { boundedReceipt = value; } }), { code: 'credential_response' });
   assert.ok(Buffer.byteLength(boundedReceipt.content) <= 128 * 1024); assert.equal(boundedReceipt.content.includes('!'), false);
+});
+
+test('Review rejects escaped summary/object-key credentials before any recoverable receipt, independent of finish metadata', async () => {
+  const escape = value => value.split('').map(letter => '\\u' + letter.charCodeAt(0).toString(16).padStart(4, '0')).join('');
+  const raw = JSON.stringify({ ...clear, summary: config.apiKey + config.apiKey });
+  const encoded = raw.replaceAll(config.apiKey, escape(config.apiKey)), mixed = raw.replace(config.apiKey, escape(config.apiKey));
+  const key = JSON.stringify({ ...clear, [config.apiKey]: 'also rejected' }).replaceAll(config.apiKey, escape(config.apiKey));
+  for (const content of [encoded, mixed, key, encoded.slice(0, -1)]) {
+    for (const finishReason of ['stop', 'length', 'content_filter', null]) {
+      let receipt, calls = 0;
+      const model = createProjectReviewModel({ config, fetchImpl: async () => { calls++; return envelopeFor(content, { finishReason, usage: { prompt_tokens: 4, completion_tokens: 6 } }); } });
+      await assert.rejects(model({ task: '检查', files: candidateFiles, onReceipt: value => { receipt = value; } }), error => error.code === 'credential_response' && !error.message.includes(config.apiKey) && !error.cause);
+      assert.equal(calls, 1); assert.deepEqual(receipt.usage, { inputTokens: 4, outputTokens: 6 }); assert.equal(receipt.finishReason, finishReason ?? 'unknown');
+      const stored = JSON.parse(JSON.stringify(receipt)); assert.equal(stored.content, '[REDACTED]'); assert.equal(stored.content.includes(escape(config.apiKey)), false);
+      await assert.rejects(model({ task: '检查', files: candidateFiles }), { code: 'credential_response' });
+    }
+  }
+});
+
+test('Review keeps nonleaking escaped JSON byte for byte and still enforces the original evidence validator', async () => {
+  const content = JSON.stringify(clear).replaceAll('summary', '\\u0073ummary'); let receipt;
+  const result = await createProjectReviewModel({ config, fetchImpl: async () => envelopeFor(content) })({ task: '检查', files: candidateFiles, onReceipt: value => { receipt = value; } });
+  assert.equal(receipt.content, content); assert.equal(result.summary, clear.summary);
+  const wrong = { ...clear, issues: [{ severity: 'advisory', file: 'src/app.mjs', line: 1, evidence: 'invented', message: 'still invalid' }] };
+  await assert.rejects(createProjectReviewModel({ config, fetchImpl: async () => reply(wrong) })({ task: '检查', files: candidateFiles }), /证据与候选代码不一致/u);
 });
 
 test('Review sink failures and cancellation cannot publish opinions or expose sink exceptions', async () => {

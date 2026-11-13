@@ -260,13 +260,37 @@ test('configured credential echoes are fully redacted in receipts and reject pro
     assert.ok(!error.message.includes(config.apiKey)); return true;
   });
   assert.equal(receipt.content.includes(config.apiKey), false);
-  assert.equal(receipt.content.split('[REDACTED]').length - 1, 2);
+  assert.equal(receipt.content, '[REDACTED]');
   await assert.rejects(model({ task, files }), { code: 'credential_response' });
   let boundedReceipt;
   const tinyKey = { ...config, apiKey: '!' };
   await assert.rejects(createProjectCodeModel({ config: tinyKey, fetchImpl: async () => responseFor(undefined, { choices: [{ finish_reason: 'stop', message: { content: '!'.repeat(70_000) } }] }) })({ task, files, onReceipt: async value => { boundedReceipt = value; } }), { code: 'credential_response' });
   assert.ok(Buffer.byteLength(boundedReceipt.content) <= 512 * 1024);
   assert.equal(boundedReceipt.content.includes('!'), false);
+});
+
+test('JSON-escaped credentials in file content or object keys reject before saving recoverable receipts, including abnormal finishes', async () => {
+  const escape = value => value.split('').map(letter => '\\u' + letter.charCodeAt(0).toString(16).padStart(4, '0')).join('');
+  const raw = { files: [{ path: 'src/app.mjs', content: '// ' + config.apiKey + ' ' + config.apiKey }] };
+  const encoded = JSON.stringify(raw).replaceAll(config.apiKey, escape(config.apiKey));
+  const mixed = JSON.stringify(raw).replace(config.apiKey, escape(config.apiKey));
+  const key = JSON.stringify({ files: replacement, [config.apiKey]: 'also rejected' }).replaceAll(config.apiKey, escape(config.apiKey));
+  for (const content of [encoded, mixed, key, encoded.slice(0, -1)]) {
+    for (const finish_reason of ['stop', 'length', 'content_filter', null]) {
+      let receipt, calls = 0;
+      const model = createProjectCodeModel({ config, fetchImpl: async () => { calls++; return responseFor(undefined, { choices: [{ finish_reason, message: { content } }], usage: { prompt_tokens: 7, completion_tokens: 9 } }); } });
+      await assert.rejects(model({ task, files, onReceipt: value => { receipt = value; } }), error => error.code === 'credential_response' && !error.message.includes(config.apiKey) && !error.cause);
+      assert.equal(calls, 1); assert.deepEqual(receipt.usage, { inputTokens: 7, outputTokens: 9 }); assert.equal(receipt.finishReason, finish_reason ?? 'unknown');
+      const stored = JSON.parse(JSON.stringify(receipt)); assert.equal(stored.content, '[REDACTED]'); assert.equal(stored.content.includes(escape(config.apiKey)), false);
+      await assert.rejects(model({ task, files }), { code: 'credential_response' });
+    }
+  }
+});
+
+test('nonleaking escaped file JSON keeps the exact receipt while the normal proposal still validates', async () => {
+  const content = JSON.stringify({ files: replacement }).replaceAll('content', '\\u0063ontent'); let receipt;
+  const result = await createProjectCodeModel({ config, fetchImpl: async () => responseFor(undefined, { choices: [{ finish_reason: 'stop', message: { content } }] }) })({ task, files, onReceipt: value => { receipt = value; } });
+  assert.deepEqual(result.files, normalized(replacement)); assert.equal(receipt.content, content);
 });
 
 test('receipt failures and cancellation fail closed, hide sink errors and never become format retries', async () => {
