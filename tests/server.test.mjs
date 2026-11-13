@@ -10,8 +10,9 @@ import { extractDocx, parseDocument } from '../lib/documents.mjs';
 
 const planner = {
   getModelConfig: () => ({ configured: false, model: '', baseUrl: '' }),
-  analyzeRequirements: (content, title) => ({ title, requirements: [{ id: 'R1', description: content }] }),
-  generateTasks: () => [{ id: 'DEV-1', title: '实现功能', dependsOn: [], acceptance: ['通过验收'], requirementIds: ['R1'] }],
+  analyzeRequirements: (content, title) => ({ title, summary: '需求规格', goals: ['实现需求'], roles: [], constraints: [], assumptions: [], questions: [], acceptanceScenarios: [],
+    stack: { frontend: '原生HTML', backend: 'Node.js', storage: 'SQLite' }, requirements: [{ id: 'R1', title: '任务功能', description: content, acceptance: ['能创建任务'], sourceQuote: content, kind: 'functional' }] }),
+  generateTasks: () => [{ id: 'DEV-1', title: '实现功能', description: '创建与查询任务', category: '功能实现', suggestedFiles: ['src/tasks.mjs'], dependsOn: [], acceptance: ['通过验收'], requirementIds: ['R1'] }],
   validateTaskGraph: () => {},
   renderSpec: spec => `# ${spec.title}\n${spec.requirements[0].description}`,
   renderArchitecture: () => '# 架构设计',
@@ -38,7 +39,7 @@ async function start(t) {
 }
 
 test('真实 HTTP 上传、生成、人工确认、单文件和文档包下载', async t => {
-  const { base, request } = await start(t);
+  const { base, request, app } = await start(t);
   assert.equal((await request('/api/health')).body.ok, true);
   assert.match(await (await fetch(base)).text(), /工作台/u);
   const created = await request('/api/projects', { filename: '需求.md', name: '团队项目', content: '# 需求\n用户创建任务，团队查看开发进展。' });
@@ -50,6 +51,16 @@ test('真实 HTTP 上传、生成、人工确认、单文件和文档包下载',
   let run;
   for (let i = 0; i < 100; i++) {
     run = (await request(`/api/projects/${projectId}/runs/${runId}`)).body.run;
+    if (run.status === 'awaiting_spec') break;
+    await delay(10);
+  }
+  assert.equal(run.status, 'awaiting_spec');
+  assert.equal(run.stages.find(item => item.id === 'tasks').status, 'pending');
+  assert.equal((await request(`/api/projects/${projectId}/runs/${runId}/action`, { action: 'approve', feedback: '不能绕过规格确认' })).status, 409);
+  assert.equal((await request(`/api/projects/${projectId}/runs/${runId}/action`, { action: 'approve_spec', revision: 'old-version' })).status, 409);
+  assert.equal((await request(`/api/projects/${projectId}/runs/${runId}/action`, { action: 'approve_spec', revision: run.specRevision })).status, 200);
+  for (let i = 0; i < 100; i++) {
+    run = (await request(`/api/projects/${projectId}/runs/${runId}`)).body.run;
     if (run.status === 'awaiting_review') break;
     await delay(10);
   }
@@ -59,13 +70,16 @@ test('真实 HTTP 上传、生成、人工确认、单文件和文档包下载',
   assert.equal(artifact.status, 200);
   assert.match(artifact.headers.get('content-disposition'), /task\.md/u);
   assert.match(await artifact.text(), /DEV-1/u);
-  assert.equal((await request(`/api/projects/${projectId}/runs/${runId}/action`, { action: 'approve', feedback: '评审通过' })).status, 200);
+  assert.equal((await request(`/api/projects/${projectId}/runs/${runId}/action`, { action: 'approve_plan', revision: run.planRevision, specRevision: run.specRevision, feedback: '评审通过' })).status, 200);
   for (let i = 0; i < 100; i++) {
     run = (await request(`/api/projects/${projectId}/runs/${runId}`)).body.run;
     if (run.status === 'succeeded') break;
     await delay(10);
   }
   assert.equal(run.status, 'succeeded');
+  const project = app.store.get(projectId);
+  project.source = { filename: 'later.md', content: '后续需求不会进入历史导出' };
+  await app.store.save(project);
   const download = await fetch(`${base}/api/projects/${projectId}/runs/${runId}/download`);
   assert.equal(download.status, 200);
   const zip = Buffer.from(await download.arrayBuffer());
@@ -73,6 +87,8 @@ test('真实 HTTP 上传、生成、人工确认、单文件和文档包下载',
   assert.match(zip.toString('utf8'), /requirements\.md/u);
   assert.match(zip.toString('utf8'), /task\.md/u);
   assert.match(zip.toString('utf8'), /评审通过/u);
+  assert.match(zip.toString('utf8'), /用户创建任务，团队查看开发进展/u);
+  assert.doesNotMatch(zip.toString('utf8'), /后续需求不会进入历史导出/u);
   assert.equal((await request('/api/projects')).body.projects[0].lastRunStatus, 'succeeded');
 });
 

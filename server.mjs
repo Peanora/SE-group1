@@ -96,7 +96,7 @@ export async function createApp(options = {}) {
         }
         if (segments.length === 6 && segments[5] === 'download' && method === 'GET') {
           if (run.status !== 'succeeded') throw new HttpError(409, '请先完成审阅并确认导出。');
-          const files = [{ name: 'requirements.md', content: project.source.content }, ...run.artifacts.map(({ name, content }) => ({ name, content }))];
+          const files = [{ name: 'requirements.md', content: (run.sourceSnapshot ?? project.source).content }, ...run.artifacts.map(({ name, content }) => ({ name, content }))];
           return respond(response, 200, createZip(files), 'application/zip', { 'Content-Disposition': `attachment; filename="project-documents.zip"; filename*=UTF-8''${encodeURIComponent(project.name)}.zip` });
         }
         throw new HttpError(404, '未找到该接口。');

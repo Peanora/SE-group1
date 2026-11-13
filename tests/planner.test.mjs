@@ -15,6 +15,14 @@ import {
   validateTaskGraph,
 } from '../lib/planner.mjs';
 
+test('项目标题包含验收等词时，仍按具体章节识别功能和验收', () => {
+  const spec = analyzeRequirements('# 工作流验收需求\n\n## 项目目标\n通过网页创建和查询任务。\n\n## 功能需求\n- 用户可以创建任务，标题必填。\n- 用户可以查询任务列表。\n\n## 验收场景\n空标题被拒绝。');
+  assert.equal(spec.requirements.length, 2);
+  assert.match(spec.requirements[0].description, /创建任务/u);
+  assert.deepEqual(spec.acceptanceScenarios, ['空标题被拒绝。']);
+  assert.deepEqual(spec.goals, ['通过网页创建和查询任务。']);
+});
+
 const issueSource = await readFile(new URL('../examples/issue-tracker.md', import.meta.url), 'utf8');
 const librarySource = await readFile(new URL('../examples/library-system.md', import.meta.url), 'utf8');
 

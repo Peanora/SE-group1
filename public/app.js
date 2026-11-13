@@ -280,11 +280,17 @@ function renderRun() { renderControls(); renderWorkflow(); renderInspector(); re
 function renderAll() { renderProjects(); renderHeader(); renderRun(); }
 
 function setBusy(value) { state.busy = value; renderControls(); $('#create-project-button').disabled = value; $('#create-project-button').textContent = value ? '正在创建…' : '创建项目'; $$('[data-close-dialog]', $('#project-dialog')).forEach((button) => { button.disabled = value; }); }
+function rememberSelection() {
+  try { sessionStorage.setItem('taskflow-selection', JSON.stringify({ projectId: state.project?.id, runId: state.run?.id })); } catch { /* The current view remains usable without session storage. */ }
+}
+function selectedSource() { return state.run?.sourceSnapshot ?? state.project?.source; }
 function updateRun(run) {
   const previousStatus = state.run?.status;
   state.run = run;
   if (state.project) { const i = state.project.runs.findIndex((item) => item.id === run.id); if (i === -1) state.project.runs.push(run); else state.project.runs[i] = run; }
+  rememberSelection();
   if (run.status === 'failed' && previousStatus !== 'failed') state.stageId = run.stages.find((stage) => stage.status === 'failed')?.id || state.stageId;
+  if (previousStatus !== run.status) renderHeader();
   renderRun();
   if (previousStatus !== run.status) refreshProjects().catch(() => {});
 }
@@ -305,6 +311,7 @@ async function selectProject(id, { runId } = {}) {
     const { project } = await api(`/api/projects/${encodeURIComponent(id)}`);
     if (epoch !== state.epoch) return;
     state.project = { ...project, runs: project.runs || [] }; state.run = state.project.runs.find((run) => run.id === runId) || sortedRuns()[0] || null;
+    rememberSelection();
     state.stageId = state.run?.status === 'failed' ? state.run.stages.find((stage) => stage.status === 'failed')?.id || 'spec' : 'spec';
     state.taskId = null; state.artifactName = 'task.md'; clearError(); renderAll(); schedulePoll();
   } catch (error) { if (epoch === state.epoch) showError(error); }
@@ -353,7 +360,7 @@ function openProjectDialog({ sample = false, revise = false } = {}) {
   if (state.busy) return;
   $('#project-form').reset(); state.importFile = null; state.filename = 'requirements.md';
   $('#selected-file').hidden = true; $('#source-input').hidden = false; $('#docx-note').hidden = true; $('#import-error').hidden = true;
-  if (revise && state.project) { $('#project-name-input').value = `${state.project.name} 新版本`; $('#source-input').value = state.project.source.content; }
+  if (revise && state.project) { $('#project-name-input').value = `${state.project.name} 新版本`; $('#source-input').value = selectedSource().content; }
   if (sample) loadSample();
   $('#project-dialog').showModal(); if (!sample && !revise) $('#project-name-input').focus();
 }
@@ -404,7 +411,7 @@ $('#pause-button').addEventListener('click', () => runAction(state.run?.status =
 $('#run-select').addEventListener('change', (event) => selectRun(event.target.value));
 $('#dismiss-error').addEventListener('click', clearError);
 $('#help-button').addEventListener('click', () => $('#help-dialog').showModal());
-$('#source-button').addEventListener('click', () => { if (!state.project) return; $('#source-title').textContent = state.project.source.filename; $('#source-content').textContent = state.project.source.content; $('#source-dialog').showModal(); });
+$('#source-button').addEventListener('click', () => { if (!state.project) return; $('#source-title').textContent = selectedSource().filename; $('#source-content').textContent = selectedSource().content; $('#source-dialog').showModal(); });
 $('#revise-source').addEventListener('click', () => { $('#source-dialog').close(); openProjectDialog({ revise: true }); });
 $('#project-dialog').addEventListener('cancel', (event) => { if (state.busy) event.preventDefault(); });
 document.addEventListener('click', (event) => {
@@ -437,7 +444,12 @@ async function initialize() {
     $('#connection-status').className = 'connection-status connected'; $('#connection-status').innerHTML = '<span></span>服务已连接';
     const modelOption = $('#mode-select option[value=model]'); modelOption.disabled = !model?.configured; modelOption.textContent = model?.configured ? `模型模式（${model.model || '已配置'}）` : '模型模式（未配置）';
     renderProjects();
-    if (projects.length && !state.project) await selectProject(projects[0].id);
+    if (projects.length && !state.project) {
+      let selection;
+      try { selection = JSON.parse(sessionStorage.getItem('taskflow-selection')); } catch { /* Start with the most recently updated project. */ }
+      const project = projects.find(item => item.id === selection?.projectId) || projects[0];
+      await selectProject(project.id, { runId: selection?.runId });
+    }
     else if (state.project) {
       const selectedRun = state.run?.id;
       await selectProject(state.project.id, { runId: selectedRun });
