@@ -43,9 +43,18 @@ test('问题编号由服务生成，客户端clarifications不能伪造答复或
   assert.throws(() => preparePlanningSpec(initial.spec, source, initial.specQuestions, { 'Q-999': '未知答复' }), { status: 400 });
   assert.throws(() => preparePlanningSpec(initial.spec, source, initial.specQuestions, { 'Q-001': 1 }), { status: 400 });
   assert.throws(() => preparePlanningSpec(initial.spec, source, initial.specQuestions, { 'Q-001': 'x'.repeat(5001) }), { status: 400 });
-  const changed = preparePlanningSpec({ ...initial.spec, questions: ['新增问题', initial.spec.questions[0]] }, source, initial.specQuestions);
+  const changed = preparePlanningSpec({ ...initial.spec, questions: ['新增问题', ...initial.spec.questions] }, source, initial.specQuestions);
   assert.equal(changed.specQuestions[1].id, initial.specQuestions[0].id);
   assert.notEqual(changed.specQuestions[0].id, changed.specQuestions[1].id);
+});
+
+test('不能通过删掉或改写未答问题解除阻塞；已答依据保留后才可移除', () => {
+  const initial = preparePlanningSpec(spec(), source);
+  assert.throws(() => preparePlanningSpec({ ...initial.spec, questions: [] }, source, initial.specQuestions), { status: 400 });
+  assert.throws(() => preparePlanningSpec({ ...initial.spec, questions: ['替换为另一个问题'] }, source, initial.specQuestions), { status: 400 });
+  const answered = preparePlanningSpec(initial.spec, source, initial.specQuestions,
+    Object.fromEntries(initial.specQuestions.map(item => [item.id, '已核对并采用本地验收安排'])));
+  assert.deepEqual(preparePlanningSpec({ ...answered.spec, questions: [] }, source, answered.specQuestions).specQuestions, []);
 });
 
 test('任务不仅校验图，还校验完整需求覆盖与可验收内容', () => {

@@ -22,12 +22,12 @@ const planner = {
   renderHandoff: (spec, tasks, review, feedback) => `# 交接\n${feedback}`,
 };
 
-async function start(t) {
+async function start(t, options = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'task-server-'));
   const publicDir = path.join(directory, 'public');
   await mkdir(publicDir);
   await writeFile(path.join(publicDir, 'index.html'), '<!doctype html><title>工作台</title>');
-  const app = await createApp({ dataDir: path.join(directory, 'data'), publicDir, stepDelayMs: 0, planner });
+  const app = await createApp({ dataDir: path.join(directory, 'data'), publicDir, stepDelayMs: 0, planner, ...options });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await app.close(); await rm(directory, { recursive: true, force: true }); });
   const base = `http://127.0.0.1:${app.server.address().port}`;
@@ -90,6 +90,27 @@ test('真实 HTTP 上传、生成、人工确认、单文件和文档包下载',
   assert.match(zip.toString('utf8'), /用户创建任务，团队查看开发进展/u);
   assert.doesNotMatch(zip.toString('utf8'), /后续需求不会进入历史导出/u);
   assert.equal((await request('/api/projects')).body.projects[0].lastRunStatus, 'succeeded');
+});
+
+test('在途阶段收到过早确认409后仍保留同一阶段引用并正常等待规格确认', async t => {
+  const { request, app } = await start(t, { stepDelayMs: 100 });
+  const project = (await request('/api/projects', { filename: 'in-flight.md', content: '用户可以创建并查询任务。' })).body.project;
+  const created = await request(`/api/projects/${project.id}/runs`, { mode: 'local' });
+  const runId = created.body.run.id;
+  let run;
+  for (let i = 0; i < 100; i++) {
+    run = app.store.getRun(project.id, runId).run;
+    if (run.stages.find(item => item.id === 'spec').status === 'running') break;
+    await delay(5);
+  }
+  const stage = run.stages.find(item => item.id === 'spec');
+  assert.equal(stage.status, 'running');
+  assert.equal((await request(`/api/projects/${project.id}/runs/${runId}/action`, { action: 'approve_spec', revision: 'not-ready' })).status, 409);
+  assert.equal(run.stages.find(item => item.id === 'spec'), stage);
+  for (let i = 0; i < 100 && run.status !== 'awaiting_spec'; i++) await delay(10);
+  assert.equal(run.status, 'awaiting_spec');
+  assert.equal(stage.status, 'succeeded');
+  assert.equal(run.stages.find(item => item.id === 'tasks').status, 'pending');
 });
 
 test('上传 DOCX 提取正文与实体，不把文档内文字当作指令执行', async t => {

@@ -45,6 +45,8 @@ sourceSnapshot为本次运行不可变原文，导出requirements.md也使用该
 
 approvals为`{spec:null|{revision,at,feedback},plan:null|{revision,specRevision,at,feedback}}`。specQuestions为`[{id,question,answer,blocking:true}]`；decisions记录`{action,revision,specRevision,at,feedback,newRevision?}`。revisionHistory.spec/plan为已替换版本`{version,revision,specRevision,at,spec,specQuestions,tasks,artifacts,stages,review,approvals}`。确认和修订不会把文档完成升级为代码完成。
 
+仍未答复的既有blocking问题不能通过删掉或替换questions解除，必须先答复并保存处理依据。页面计划审阅可返回规格编辑；保存新规格后旧确认失效，重新经过规格确认和规划。尚未保存的草稿不是已批准规格。
+
 ## 内部规划函数
 
 `lib/planner.mjs` 导出：
