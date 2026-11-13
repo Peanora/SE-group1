@@ -41,7 +41,7 @@ test('项目模型发送完整任务资料及固定Web契约，只返回规范�
       assert.equal(options.headers.Authorization, `Bearer ${config.apiKey}`);
       const body = JSON.parse(options.body);
       assert.equal(body.model, config.model);
-      assert.equal(body.max_tokens, 8192);
+      assert.equal(body.max_tokens, 16384);
       assert.deepEqual(body.thinking, { type: 'disabled' });
       assert.deepEqual(body.response_format, { type: 'json_object' });
       assert.deepEqual(JSON.parse(body.messages[1].content), { task, files, feedback });
@@ -305,4 +305,54 @@ test('path, permission, HTTP and truncated responses do not receive a format ret
   let sinkCalled = false;
   await assert.rejects(createProjectCodeModel({ config, fetchImpl: async () => new Response('provider rejected', { status: 401 }) })({ task, files, onReceipt: () => { sinkCalled = true; } }), error => error.code !== 'invalid_model_response');
   assert.equal(sinkCalled, false);
+});
+
+test('unrecognized finish metadata is unknown in receipts and never exposes provider secrets or grants a proposal', async () => {
+  const content = JSON.stringify({ files: replacement });
+  for (const finish_reason of [config.apiKey, 'provider-private-details', 'STOP', 'stop ', { secret: config.apiKey }, null, undefined]) {
+    let receipt, calls = 0;
+    const model = createProjectCodeModel({ config, fetchImpl: async () => {
+      calls++;
+      return responseFor(undefined, { model: config.apiKey, choices: [{ finish_reason, message: { content } }], usage: { prompt_tokens: 2, completion_tokens: 5 } });
+    } });
+    await assert.rejects(model({ task, files, onReceipt: async value => { receipt = value; } }), error => {
+      assert.equal(error.code, undefined);
+      assert.ok(!error.message.includes(config.apiKey) && !error.message.includes('provider-private-details'));
+      return true;
+    });
+    assert.equal(calls, 1);
+    assert.deepEqual(receipt, { model: config.model, finishReason: 'unknown', usage: { inputTokens: 2, outputTokens: 5 }, content });
+    assert.equal(JSON.stringify(receipt).includes(config.apiKey), false);
+  }
+});
+
+test('all non-stop finishes reject before null, missing, blank or malformed content can become format retries', async () => {
+  for (const finish_reason of ['length', 'content_filter', 'tool_calls', 'function_call', 'insufficient_system_resource', null, undefined]) {
+    for (const content of [null, undefined, '', '{"files":']) {
+      let receipt, calls = 0;
+      const model = createProjectCodeModel({ config, fetchImpl: async () => {
+        calls++; return responseFor(undefined, { choices: [{ finish_reason, message: { content } }] });
+      } });
+      await assert.rejects(model({ task, files, onReceipt: async value => { receipt = value; } }), error => error.code !== 'invalid_model_response');
+      assert.equal(calls, 1);
+      assert.equal(receipt.finishReason, typeof finish_reason === 'string' ? finish_reason : 'unknown');
+      assert.equal(receipt.content, typeof content === 'string' ? content : '');
+    }
+  }
+});
+
+test('project-only output budget is 16384 while a reported 8192-token truncation remains evidence and cannot retry as JSON', async () => {
+  // Synthetic replay of the reported live counters/size; private model text is neither copied nor invented here.
+  const content = 'x'.repeat(26_601);
+  let receipt;
+  const model = createProjectCodeModel({ config, fetchImpl: async (_url, options) => {
+    assert.equal(JSON.parse(options.body).max_tokens, 16384);
+    return responseFor(undefined, { choices: [{ finish_reason: 'length', message: { content } }], usage: { prompt_tokens: 2068, completion_tokens: 8192 } });
+  } });
+  await assert.rejects(model({ task, files, onReceipt: async value => { receipt = value; } }), error => {
+    assert.equal(error.code, undefined); assert.match(error.message, /截断/u); return true;
+  });
+  assert.equal(receipt.finishReason, 'length');
+  assert.equal(Buffer.byteLength(receipt.content), 26_601);
+  assert.deepEqual(receipt.usage, { inputTokens: 2068, outputTokens: 8192 });
 });

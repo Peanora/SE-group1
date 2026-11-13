@@ -9,6 +9,7 @@ const reply = raw => new Response(JSON.stringify({ choices: [{ finish_reason: 's
 test('project Review accepts the full allowed multi-file snapshot and never accepts candidate completion fields', async () => {
   const files = Array.from({ length: 24 }, (_, index) => ({ path: `src/module-${index}.mjs`, content: `// ${'x'.repeat(40_000)}\nexport const value=${index};` }));
   const model = createProjectReviewModel({ config, fetchImpl: async (_url, options) => {
+    assert.equal(JSON.parse(options.body).max_tokens, 4096);
     const context = JSON.parse(JSON.parse(options.body).messages[1].content);
     assert.deepEqual(context.files, files); assert.deepEqual(context.previousIssues, []);
     assert.equal(context.task, '按固定Web契约检查。');
@@ -143,5 +144,38 @@ test('Review transport limits, truncation and invalid evidence are not format re
     let called = false;
     await assert.rejects(createProjectReviewModel({ config, fetchImpl })({ task: '检查', files: candidateFiles, onReceipt: () => { called = true; } }), error => error.code !== 'invalid_model_response');
     assert.equal(called, false);
+  }
+});
+
+test('Review finish metadata is restricted to known constants, never provider text or the configured credential', async () => {
+  const content = JSON.stringify(clear);
+  for (const finish_reason of [config.apiKey, 'provider-private-details', 'STOP', 'stop ', { secret: config.apiKey }, null, undefined]) {
+    let receipt, calls = 0;
+    const model = createProjectReviewModel({ config, fetchImpl: async () => {
+      calls++;
+      return new Response(JSON.stringify({ model: config.apiKey, choices: [{ finish_reason, message: { content } }], usage: { prompt_tokens: 2, completion_tokens: 5 } }));
+    } });
+    await assert.rejects(model({ task: '检查', files: candidateFiles, onReceipt: async value => { receipt = value; } }), error => {
+      assert.equal(error.code, undefined);
+      assert.ok(!error.message.includes(config.apiKey) && !error.message.includes('provider-private-details')); return true;
+    });
+    assert.equal(calls, 1);
+    assert.deepEqual(receipt, { model: config.model, finishReason: 'unknown', usage: { inputTokens: 2, outputTokens: 5 }, content });
+    assert.equal(JSON.stringify(receipt).includes(config.apiKey), false);
+  }
+});
+
+test('Review non-stop finishes are not JSON-format errors even when content is absent or invalid', async () => {
+  for (const finish_reason of ['length', 'content_filter', 'tool_calls', 'function_call', 'insufficient_system_resource', null, undefined]) {
+    for (const content of [null, undefined, '', '{"summary":']) {
+      let receipt, calls = 0;
+      const model = createProjectReviewModel({ config, fetchImpl: async () => {
+        calls++; return new Response(JSON.stringify({ choices: [{ finish_reason, message: { content } }] }));
+      } });
+      await assert.rejects(model({ task: '检查', files: candidateFiles, onReceipt: async value => { receipt = value; } }), error => error.code !== 'invalid_model_response');
+      assert.equal(calls, 1);
+      assert.equal(receipt.finishReason, typeof finish_reason === 'string' ? finish_reason : 'unknown');
+      assert.equal(receipt.content, typeof content === 'string' ? content : '');
+    }
   }
 });
