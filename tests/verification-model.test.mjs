@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { createVerificationModel, verificationModelPolicy } from '../lib/verification-model.mjs';
 import { assertCompiledManifest, compileManifest, createVerificationControl, inspectVerificationProposal } from '../lib/verification-contract.mjs';
 
@@ -179,6 +180,54 @@ test('configured credential echoes are redacted and rejected including JSON unic
   let bounded;
   await assert.rejects(createVerificationModel({ config: { ...config, apiKey: '~' }, fetchImpl: async () => envelope('~'.repeat(70000)) })({ ...input(), onReceipt: value => { bounded = value; } }), { code: 'credential_response' });
   assert.ok(Buffer.byteLength(bounded.content) <= verificationModelPolicy.responseBytes); assert.equal(bounded.content.includes('~'), false);
+});
+
+test('original credential tokens in overwritten duplicate fields or malformed JSON are rejected before receipt persistence', async () => {
+  const escapedKey = config.apiKey.split('').map(letter => '\\u' + letter.charCodeAt(0).toString(16).padStart(4, '0')).join('');
+  const original = JSON.stringify(proposal());
+  const duplicate = original.replace('"name":"Resource HTTP contract"', `"name":"${escapedKey}","name":"Resource HTTP contract"`);
+  const escapedDuplicate = original.replace('"name":"Resource HTTP contract"', `"name":"${escapedKey}","na\\u006de":"Resource HTTP contract"`);
+  const nestedDuplicate = original.replace('"body":{"id":', `"body":{"id":"${escapedKey}","id":`);
+  for (const content of [duplicate, escapedDuplicate, nestedDuplicate]) assert.deepEqual(JSON.parse(content), proposal(), 'the secret is gone from the surviving object, but remains in the original text');
+  const malformed = `{"name":"${escapedKey}",`;
+  for (const content of [duplicate, escapedDuplicate, nestedDuplicate, malformed]) {
+    for (const finishReason of ['stop', 'length', 'content_filter', config.apiKey]) {
+      let receipt, calls = 0;
+      const model = createVerificationModel({ config, fetchImpl: async () => { calls++; return envelope(content, { finishReason, usage: { prompt_tokens: 13, completion_tokens: 17 } }); } });
+      await assert.rejects(model({ ...input(), onReceipt: value => { receipt = value; } }), error => {
+        assert.equal(error.code, 'credential_response'); assert.notEqual(error.code, 'invalid_model_response'); return masked(error);
+      });
+      assert.equal(calls, 1); assert.deepEqual(Object.keys(receipt), ['model', 'finishReason', 'usage', 'content']);
+      assert.deepEqual(receipt.usage, { inputTokens: 13, outputTokens: 17 }); assert.equal(receipt.finishReason, finishReason === config.apiKey ? 'unknown' : finishReason);
+      const persisted = JSON.parse(JSON.stringify(receipt)); assert.equal(persisted.content, '[REDACTED]');
+      assert.equal(persisted.content.includes(escapedKey), false); assert.equal(JSON.stringify(persisted).includes(config.apiKey), false);
+      await assert.rejects(model(input()), { code: 'credential_response' }); assert.equal(calls, 2, 'one transport request for each explicit adapter call, no retry');
+    }
+  }
+});
+
+test('nonleaking duplicate fields and malformed JSON preserve original receipts and existing unbranded semantics', async () => {
+  const duplicate = JSON.stringify(proposal()).replace('"name":"Resource HTTP contract"', '"name":"earlier safe value","name":"Resource HTTP contract"'); let receipt;
+  const result = await createVerificationModel({ config, fetchImpl: async () => envelope(duplicate) })({ ...input(), onReceipt: value => { receipt = value; } });
+  assert.deepEqual(result.proposal, proposal()); assert.equal(result.coverage, 'structural_only'); assert.equal(receipt.content, duplicate);
+  assert.throws(() => assertCompiledManifest(result.proposal, binding), /可信/u);
+  const malformed = '{"name":"safe \\u0041",';
+  await assert.rejects(createVerificationModel({ config, fetchImpl: async () => envelope(malformed) })({ ...input(), onReceipt: value => { receipt = value; } }), { code: 'invalid_model_response' });
+  assert.equal(receipt.content, malformed);
+});
+
+test('verification model policy binds the shared guard implementation hash and version', async () => {
+  async function policy(version, hash) {
+    const script = `import {mock} from 'node:test';mock.module(${JSON.stringify(new URL('../lib/model-content-guard.mjs', import.meta.url).href)},{namedExports:{guardModelContent:()=>{throw new Error('not called')},modelContentGuardPolicy:{version:${JSON.stringify(version)},hash:${JSON.stringify(hash)}}}});const{verificationModelPolicy}=await import(${JSON.stringify(new URL('../lib/verification-model.mjs', import.meta.url).href)});process.stdout.write(verificationModelPolicy.hash);`;
+    return new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['--experimental-test-module-mocks', '--input-type=module'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      let output = '', errors = ''; const timer = setTimeout(() => { child.kill(); reject(new Error('trusted policy probe timed out')); }, 10000);
+      child.stdout.on('data', value => { output += value; }); child.stderr.on('data', value => { errors += value; }); child.once('error', reject);
+      child.once('close', code => { clearTimeout(timer); code === 0 ? resolve(output) : reject(new Error(errors)); }); child.stdin.end(script);
+    });
+  }
+  const values = await Promise.all([policy('v1', 'a'.repeat(64)), policy('v1', 'b'.repeat(64)), policy('v2', 'a'.repeat(64))]);
+  for (const value of values) assert.match(value, /^[a-f0-9]{64}$/u); assert.equal(new Set(values).size, 3);
 });
 
 test('receipt failures remain private and do not become valid proposals or retries', async () => {
