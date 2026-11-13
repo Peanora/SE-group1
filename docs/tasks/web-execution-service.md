@@ -49,3 +49,11 @@ getPlanning必须返回与ID匹配的project/run；run需有workflowVersion=2、
 - `npm run check`：62个脚本语法通过；`git diff --check`通过。
 
 未连接HTTP路由或主网页；未真实运行正向模型编码、独立Review、已验收候选预览/下载和全仓回归；未迁移用户JSON或data，未推送或部署。下一步由主Agent在新固定提交上独立Review/测试，再串行接入HTTP/UI并重新验证集成版本。task-store未成为运行依赖，主Agent可只cherry-pick服务提交，忽略参考依赖提交c78e0c1。
+
+## E08：保留可复核的检查预期与观察结果
+
+根集成的真实失败路径发现：固定HTTP检查用expected/actual保存失败原因，原checkDto仅保留error，导致HTTP 503与预期200的差异从网页DTO丢失。本小修仅为selfCheck、独立HTTP与browser的checks增加可选`expected?:string`、`actual?:string`；只接受现有验收器的文本类型，复用safe净化已知密钥及私有路径，每字段最多2000字符。对象、进程元数据和原始日志不被序列化或复制；缺省字段继续缺省，原error字段保持兼容。固定清单、hash、验收门禁及a60历史不变。
+
+新增DTO回归同时覆盖三个检查分支：正常`HTTP 200`与`{"status":503}`保留，expected/actual中的已知key和Windows/Unix私有路径遮蔽，长文本截断，额外PID/stdout及非文本进程对象不透传，浏览器仅有error的旧形态继续兼容。
+
+本小修实际运行`node --test tests/web-execution-service.test.mjs`：29通过、真实MXC项1显式跳过，无失败；`npm run check`为62脚本通过，`git diff --check`通过。按本轮范围未重复真实MXC或付费模型，未改根集成树及网页。需在固定提交后短只读Review，再由主Agent串行接入并验证网页展示。

@@ -151,6 +151,31 @@ test('DTOs retain unknown usage and whitelist reports, bounded messages and no s
   entry.record.usage = { inputTokens: 0, outputTokens: 12 }; assert.deepEqual((await service.list(ids)).executions[0].usage, { inputTokens: 0, outputTokens: 12 });
 });
 
+test('check DTOs retain bounded comparison text while masking secrets and paths and excluding process objects', async t => {
+  const { service, state } = await fixture(t); await service.start(startInput);
+  const checks = [
+    { id: 'STATUS', name: 'HTTP状态', passed: false, expected: 'HTTP 200', actual: '{"status":503}' },
+    { id: 'SENSITIVE', passed: false, expected: `${config.apiKey} C:/private/expected.json`, actual: `${config.apiKey} /opt/private/actual.json` },
+    { id: 'BOUNDED', passed: false, expected: '期望'.repeat(2000), actual: '观察'.repeat(2000) },
+    { id: 'PRIVATE', passed: false, pid: 919191, stdout: 'private-raw-log', expected: { pid: 919191 }, actual: { stderr: 'private-raw-log', workspace: 'C:/private/workspace' } },
+    { id: 'OPTIONAL', passed: false, error: '浏览器未出现登录表单' },
+  ];
+  const result = { status: 'failed', terminationConfirmed: true, checks };
+  state.calls[0].record.versions = [{ commit: 'a'.repeat(40), sourceHash: 'b'.repeat(64), selfCheck: structuredClone(result),
+    acceptance: { status: 'changes_requested', test: structuredClone(result), browser: structuredClone(result) } }];
+  const version = (await service.list(ids)).executions[0].versions[0];
+  for (const branch of [version.selfCheck, version.acceptance.test, version.acceptance.browser]) {
+    assert.equal(branch.checks[0].expected, 'HTTP 200'); assert.equal(branch.checks[0].actual, '{"status":503}'); assert.equal(branch.checks[0].passed, false);
+    assert.ok(!branch.checks[1].expected.includes(config.apiKey) && !branch.checks[1].expected.includes('C:/private'));
+    assert.ok(!branch.checks[1].actual.includes(config.apiKey) && !branch.checks[1].actual.includes('/opt/private'));
+    assert.match(branch.checks[1].actual, /已隐藏/u); assert.match(branch.checks[1].expected, /本地路径/u);
+    assert.equal(branch.checks[2].expected.length, 2000); assert.equal(branch.checks[2].actual.length, 2000);
+    assert.ok(!('expected' in branch.checks[3]) && !('actual' in branch.checks[3]) && !('pid' in branch.checks[3]) && !('stdout' in branch.checks[3]));
+    assert.ok(!('expected' in branch.checks[4]) && !('actual' in branch.checks[4])); assert.equal(branch.checks[4].error, '浏览器未出现登录表单');
+    assert.ok(!JSON.stringify(branch).includes('919191') && !JSON.stringify(branch).includes('private-raw-log'));
+  }
+});
+
 test('restarting keeps failed history and does not re-run or overwrite completed attempts', async t => {
   const { service, state, open } = await fixture(t); await service.start(startInput); state.calls[0].finish(); await waitFor(service, value => value.executions[0].status === 'failed');
   await service.shutdown(); const next = await open(); const list = await next.list(ids);
