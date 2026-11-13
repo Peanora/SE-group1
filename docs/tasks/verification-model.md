@@ -48,3 +48,11 @@ policyHash 绑定固定提示、适配器源码和当前 DSL policyHash。covera
 新适配器专项22/22通过；与 DSL 真实 MXC 专项联合执行为40/40，无失败/跳过。修改的适配器与测试语法检查、git diff --check 通过；修复提交只包含本适配器、测试和本文三文件。无真实模型/API请求，不修改旧候选、报告或共享 guard 工作区。
 
 共用 helper 本身的独立 Review 与本适配器的新固定版本复验仍由根控制器掌握；依赖准备和自检结果不表示下游已获准集成或上线。原37项证据仅属于e5历史，不替代当前固定版本验收。
+
+## 跟进共用检查器 v2（准备，待独立复验）
+
+根控制器确认`1bcb325`另有leading stray quote P2后，本工作区单独cherry-pick修复`914e0de`为依赖提交`3f9c601`。原guard工作区保持冻结，本次不再修改guard文件，也不修改`ffeb75a`的适配器源码。只有模型专属回归及本文另行提交；依赖准备不是通过独立门禁的声明。
+
+当前检查器为`json-escape-credential-v2`，原文单次JSON escape检测解码不依赖引号配对。仅更新依赖、适配器源码diff仍为空时，运行时verificationModelPolicy已随helper版本/实现hash自动改变；原有三个模块mock策略绑定测试继续验证这一归属。模型专属回归增加leading stray quote、前后slash/quote错位及单引号框架下的转义凭据：stop/length/content_filter/unknown全部credential_response，四字段回执占位且usage/finish保留，无格式重试或提案返回；未提供回执入口仍拒绝。相同非回显畸形框架保留原文，仍按原JSON格式规则失败。
+
+实际检查：新模型专项23/23通过；与DSL真实MXC专项联合为41/41通过、无失败/跳过。修改的测试、适配器及当前helper分别node --check，git diff --check通过。本轮0真实模型/API，不更改旧候选或报告；等待共用helper的platform独立FIX后，再由根控制器安排web_contract对新模型固定树复验。

@@ -206,6 +206,29 @@ test('original credential tokens in overwritten duplicate fields or malformed JS
   }
 });
 
+test('leading stray quotes or escape framing reject encoded credentials with safe receipts, never format retries', async () => {
+  const { modelContentGuardPolicy } = await import('../lib/model-content-guard.mjs');
+  assert.equal(modelContentGuardPolicy.version, 'json-escape-credential-v2');
+  const escaped = config.apiKey.split('').map(letter => '\\u' + letter.charCodeAt(0).toString(16).padStart(4, '0')).join('');
+  const body = JSON.stringify({ ...proposal(), name: config.apiKey }).replaceAll(config.apiKey, escaped);
+  for (const [prefix, suffix] of [['"', ''], ['"', '"'], ['\\"', '\\'], ['"\\', '"\\"'], ["'", "'"]]) {
+    for (const finishReason of ['stop', 'length', 'content_filter', config.apiKey]) {
+      let receipt, calls = 0;
+      const model = createVerificationModel({ config, fetchImpl: async () => { calls++; return envelope(prefix + body + suffix, { finishReason, usage: { prompt_tokens: 5, completion_tokens: 7 } }); } });
+      await assert.rejects(model({ ...input(), onReceipt: value => { receipt = value; } }), error => {
+        assert.equal(error.code, 'credential_response'); assert.notEqual(error.code, 'invalid_model_response'); return masked(error);
+      });
+      assert.equal(calls, 1); assert.deepEqual(Object.keys(receipt), ['model', 'finishReason', 'usage', 'content']);
+      assert.deepEqual(receipt.usage, { inputTokens: 5, outputTokens: 7 }); assert.equal(receipt.finishReason, finishReason === config.apiKey ? 'unknown' : finishReason);
+      const stored = JSON.parse(JSON.stringify(receipt)); assert.equal(stored.content, '[REDACTED]'); assert.equal(stored.content.includes(escaped), false);
+      await assert.rejects(model(input()), { code: 'credential_response' }); assert.equal(calls, 2, 'one request per explicit adapter call');
+    }
+    const safe = prefix + JSON.stringify(proposal()) + suffix; let receipt;
+    await assert.rejects(createVerificationModel({ config, fetchImpl: async () => envelope(safe) })({ ...input(), onReceipt: value => { receipt = value; } }), { code: 'invalid_model_response' });
+    assert.equal(receipt.content, safe, 'nonleaking malformed framing stays byte-for-byte unchanged');
+  }
+});
+
 test('nonleaking duplicate fields and malformed JSON preserve original receipts and existing unbranded semantics', async () => {
   const duplicate = JSON.stringify(proposal()).replace('"name":"Resource HTTP contract"', '"name":"earlier safe value","name":"Resource HTTP contract"'); let receipt;
   const result = await createVerificationModel({ config, fetchImpl: async () => envelope(duplicate) })({ ...input(), onReceipt: value => { receipt = value; } });
