@@ -17,7 +17,7 @@ function execution(overrides = {}) {
     versions: [{ commit: 'a'.repeat(40), sourceHash: 'b'.repeat(64), diff: marker,
       selfCheck: { status: 'passed', checks: [{ id: 'self-1', passed: true }] },
       acceptance: { status: 'checking', test: { status: 'passed', checks: [{ id: 'HTTP-1', passed: true }] },
-        browser: { status: 'failed', checks: [{ id: 'BROWSER-1', passed: false, message: marker }] },
+        browser: { status: 'failed', checks: [{ id: 'BROWSER-1', passed: false, message: marker, expected: 'HTTP 200', actual: 'HTTP 503 ' + marker }] },
         review: { status: 'completed', summary: marker },
         issues: [{ id: 'ISSUE-1', status: 'resolved', title: marker, checkedCommit: 'a'.repeat(40) }], openIssues: [] } }],
     diff: marker, events: [{ sequence: 1, time: '2026-11-14T00:00:00.000Z', message: marker }], ...overrides,
@@ -206,6 +206,8 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
     assert.match(await page.locator('.ep-facts').textContent(), /输入用量：未知 token；输出用量：未知 token/);
     assert.match(await page.locator('.ep-body').textContent(), /HTTP-1/);
     assert.match(await page.locator('.ep-body').textContent(), /BROWSER-1/);
+    const finding = await page.locator('p.ep-muted').filter({ hasText: 'BROWSER-1' }).textContent();
+    assert.match(finding, /预期：HTTP 200/u); assert.match(finding, /实际：HTTP 503/u);
     assert.match(await page.locator('.ep-body').textContent(), /ISSUE-1/);
     assert.match(await page.locator('.ep-body').textContent(), /resolved/);
     state.executions[0].usage = { inputTokens: 0, outputTokens: 12 }; await refresh(page);

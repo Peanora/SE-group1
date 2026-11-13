@@ -33,6 +33,25 @@ function respond(response, status, body, contentType = 'application/json; charse
   response.end(bytes);
 }
 
+// Costly execution and its private records are local-workbench capabilities.
+// Bind Host to the listening port as well as loopback to reject DNS rebinding.
+function requireLocalExecutionRequest(request, server) {
+  let target;
+  try { target = new URL(`http://${request.headers.host}`); } catch { throw new HttpError(403, '请从本机工作台查看或操作代码执行。'); }
+  const address = server.address();
+  if (!address || typeof address !== 'object' || !['localhost', '127.0.0.1', '[::1]'].includes(target.hostname)
+    || target.username || target.password || target.pathname !== '/' || target.search || target.hash
+    || Number(target.port || 80) !== address.port || !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress)) {
+    throw new HttpError(403, '请从本机工作台查看或操作代码执行。');
+  }
+  if (request.headers['sec-fetch-site'] === 'cross-site') throw new HttpError(403, '请从本机工作台发起代码执行操作。');
+}
+
+function exactFields(body, fields) {
+  if (Object.keys(body).length !== fields.length || fields.some(field => typeof body[field] !== 'string' || !body[field])) throw new HttpError(400, '执行请求字段无效，请刷新范围与状态后重试。');
+  return body;
+}
+
 /** Load local dotenv values without dependencies, never overriding process variables. */
 export async function loadEnv(filename = path.join(ROOT, '.env')) {
   let contents;
@@ -51,7 +70,13 @@ export async function createApp(options = {}) {
   const planner = options.planner ?? await import('./lib/planner.mjs');
   const store = options.store ?? await new ProjectStore(options.dataDir ?? process.env.DATA_DIR ?? path.join(ROOT, 'data')).init();
   const orchestrator = new Orchestrator(store, planner, { stepDelayMs: options.stepDelayMs ?? process.env.WORKFLOW_STEP_DELAY_MS ?? 350 });
-  await orchestrator.init();
+  const executionService = options.executionService === null ? null : options.executionService ?? await (await import('./lib/web-execution-service.mjs')).createWebExecutionService({
+    rootDir: path.resolve(options.executionRootDir ?? path.join(store.directory, 'executions')),
+    getPlanning: async (projectId, runId) => structuredClone(store.getRun(projectId, runId)),
+  });
+  try { await orchestrator.init(); }
+  catch (cause) { try { await executionService?.shutdown(); } catch { cause.executionCleanupFailed = true; } throw cause; }
+  let closing;
   const publicDir = path.resolve(options.publicDir ?? path.join(ROOT, 'public'));
   const server = http.createServer(async (request, response) => {
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -64,6 +89,7 @@ export async function createApp(options = {}) {
       catch { throw new HttpError(400, '网址编码无效。'); }
       const method = request.method;
       if (segments[0] === 'api') {
+        if (closing) throw new HttpError(503, '工作台正在停止，请稍后重新连接。');
         // No cross-site mutations to a local workspace. The app uses same-origin JSON.
         if (method !== 'GET' && method !== 'HEAD' && request.headers.origin) {
           let origin;
@@ -87,6 +113,34 @@ export async function createApp(options = {}) {
         const runId = segments[4];
         const { project, run } = store.getRun(projectId, runId);
         if (segments.length === 5 && method === 'GET') return respond(response, 200, { run });
+        if (segments[5] === 'executions') {
+          requireLocalExecutionRequest(request, server);
+          if (!executionService) throw new HttpError(404, '当前服务尚未开放网页代码执行。');
+          const identity = { projectId, runId };
+          if (segments.length === 6) {
+            if (method !== 'GET') throw new HttpError(405, '执行记录仅支持读取。');
+            return respond(response, 200, await executionService.list(identity));
+          }
+          if (segments.length === 7 && segments[6] === 'start') {
+            if (method !== 'POST') throw new HttpError(405, '启动执行请使用POST请求。');
+            const body = exactFields(await readJson(request), ['profileId', 'contractRevision']);
+            return respond(response, 202, await executionService.start({ ...identity, ...body }));
+          }
+          if (segments.length === 8 && segments[7] === 'action') {
+            if (method !== 'POST') throw new HttpError(405, '执行动作请使用POST请求。');
+            const body = exactFields(await readJson(request), ['action']);
+            if (!['cancel', 'retry', 'preview', 'stop_preview'].includes(body.action)) throw new HttpError(400, '执行动作无效，请刷新后使用页面提供的操作。');
+            return respond(response, 200, await executionService.action({ ...identity, executionId: segments[6], action: body.action }));
+          }
+          if (segments.length === 8 && segments[7] === 'download') {
+            if (method !== 'GET') throw new HttpError(405, '源码下载仅支持读取。');
+            const file = await executionService.download({ ...identity, executionId: segments[6] });
+            return respond(response, 200, file.buffer, file.contentType, {
+              'Content-Disposition': `attachment; filename="verified-source.zip"; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+            });
+          }
+          throw new HttpError(404, '未找到该执行接口。');
+        }
         if (segments.length === 6 && segments[5] === 'action' && method === 'POST') return respond(response, 200, { run: await orchestrator.action(projectId, runId, await readJson(request)) });
         if (segments.length === 7 && segments[5] === 'artifacts' && method === 'GET') {
           const artifact = run.artifacts.find(item => item.name === segments[6]);
@@ -123,19 +177,25 @@ export async function createApp(options = {}) {
   });
   server.requestTimeout = 60_000;
   server.headersTimeout = 15_000;
-  const close = async () => {
-    await orchestrator.shutdown();
-    if (server.listening) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  const close = () => {
+    if (!closing) closing = (async () => {
+      const results = await Promise.allSettled([orchestrator.shutdown(), executionService?.shutdown()]);
+      if (server.listening) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+      const failure = results.find(result => result.status === 'rejected');
+      if (failure) throw failure.reason;
+    })();
+    return closing;
   };
-  return { server, store, orchestrator, close };
+  return { server, store, orchestrator, executionService, close };
 }
 
 export async function startServer(options = {}) {
-  await loadEnv();
+  if (options.loadEnv !== false) await loadEnv();
   const app = await createApp(options);
   const port = options.port ?? Number(process.env.PORT || 4317);
   const host = options.host ?? process.env.HOST ?? '127.0.0.1';
-  await new Promise((resolve, reject) => { app.server.once('error', reject); app.server.listen(port, host, resolve); });
+  try { await new Promise((resolve, reject) => { app.server.once('error', reject); app.server.listen(port, host, resolve); }); }
+  catch (cause) { try { await app.close(); } catch { cause.executionCleanupFailed = true; } throw cause; }
   const address = app.server.address();
   return { ...app, url: `http://${host}:${address.port}` };
 }

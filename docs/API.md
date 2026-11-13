@@ -96,7 +96,7 @@ approvals为`{spec:null|{revision,at,feedback},plan:null|{revision,specRevision,
 
 ### 多文件Web执行、复验与源码交付
 
-以下为可信内部组件及命令入口，尚无对应网页执行HTTP路由；既有规划下载仍是文档包。
+以下为可信内部组件及命令入口；网页固定参考执行路由见下一节，既有规划download继续是文档包。
 
 - `startWebExecution({outputDir,binding,provider,reviewer,providerKind?,reviewerKind?,executable?,signal?,maxCalls?,maxReviewCalls?,timeoutMs?,onEvent?,assertCurrent?})`返回`{id,cancel,done,snapshot}`。任务固定为`library-web-v1`，调用方提供project/run/task及spec/plan版本；候选增加attempt、Git提交、sourceHash、HTTP/browser清单与Review策略哈希。CLI为`npm run web:check -- --model`，默认编码/Review各3次、共600秒。
 - 允许最多60个、单文件128KiB、合计2MiB的文本源码文件，仅开放`src/public/migrations/tests/docs`及根README。package、lock、server、runtime和平台入口由控制器保护。模型不提交Shell命令、环境或验收结论。应用仅导出受保护worker约定的`createApp/handle`；候选仅在MXC内运行，不在宿主导入。
@@ -107,3 +107,18 @@ approvals为`{spec:null|{revision,at,feedback},plan:null|{revision,specRevision,
 - `inspectWebArchive(bytes)`有界检查平台ZIP格式、路径、CRC、清单与当前保护外壳；不在宿主导入包内代码。`revalidateWebArchive({archiveFile,outputDir,executable?,signal?,timeoutMs?})`在新副本执行固定HTTP/SQLite与Edge，默认120秒、上限600秒。成功为`checks_passed/taskAccepted:false/historicalAcceptanceVerified:false`，表示本次检查通过，未获得新的模型Review。命令为`npm run web:verify -- --archive <路径>`。
 
 停止请求与停止确认分开：源变化、预算耗尽或取消停止新阶段；未确认进程退出时保留PID和控制/预检目录，标为`reconciliation_required`。当前CLI仍无多Worker认领、后台恢复或任意需求执行承诺。
+
+### 网页固定参考项目执行
+
+入口为`/api/projects/:pid/runs/:rid/executions`。只允许实际回环连接、localhost/127.0.0.1/IPv6回环Host及当前监听端口，拒绝跨站访问与DNS重绑定Host；有Origin的更改还须与工作台同源。这是本机单用户边界，不是团队身份认证。
+
+- GET基础路径 → `{capabilities:{canStart,profiles:[{id,title,description,contractRevision}],reason,model:{name},budget},executions:[ExecutionDTO]}`。模型名称不包含凭据，未知用量为null。
+- POST基础路径`/start`，仅`{profileId,contractRevision}` → 202 `{execution}`。服务重新核对当前v2规格、计划、来源hash、双确认及结构检查，固定参考范围版本必须匹配；同一规划存在编码、预览或未确认停止时409。上传内容仅关联快照，不传给参考模型，不视为命令或完成范围。
+- POST基础路径`/:eid/action`，仅`{action:'cancel'|'retry'|'preview'|'stop_preview'}` → `{execution,preview?}`。cancel先记录请求，再等真实停止；retry使用当前审批新建尝试，不覆盖原历史。preview仅为当前已验收源码建立独立数据副本，有期限且占用活动槽；启动中停止保留实际PID及停止结果。
+- GET基础路径`/:eid/download` → `application/zip`。重新核对当前规划、源码文件/Git对象/保护外壳及完整验收门禁后才创建交付包；不接受客户端路径、报告、预算或通过标记。
+
+ExecutionDTO包含执行编号、尝试、范围、状态、是否通过、调用次数、用量/预算、版本/差异、事件、错误、预览及服务端actions许可。检查项只公开id/name/passed和净化后的可选error/expected/actual文本，每字段最多2000字符；不公开工作区路径、模型原始回执、PID/control/probe或进程stdout。Review问题含相对文件/行号与处理记录，全部作为文本展示。
+
+服务持久化在独立SQLite中，原规划JSON不迁移。owner与活动槽事务控制同run拒重；每次状态控制递增版本，异步结束重新核对，取消或待协调不能被迟到成功覆盖。`source_history`和`preview_history`私有保留正常及未知停止证据。旧双活存档迁移保留多个待协调历史而不撞唯一索引；未知进程不自动当作已停止，阻止新的活动。该单控制器生命周期不等于多Worker租约/可靠恢复，正式TaskStore及通用验收模型尚未接入此链路。
+
+可信程序可`createApp({executionService?,executionRootDir?})`注入服务；`executionService:null`明确关闭网页执行。`startServer({loadEnv:false})`允许测试/嵌入宿主跳过本地.env读取，默认仍加载配置。这些选项不通过HTTP暴露。

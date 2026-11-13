@@ -192,7 +192,7 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
           const findingId = String(finding.id ?? index); retainedFindings.add(findingId);
           let p = block.findingNodes.get(findingId);
           if (!p) { p = node('p', 'ep-muted'); block.findings.append(p); block.findingNodes.set(findingId, p); }
-          p.textContent = `${finding.id || `检查 ${index + 1}`} · ${name === 'issues' ? checkStatus(finding.status) : '未通过'}${finding.severity === 'blocking' ? ' · 阻塞问题' : ''}${finding.file ? ` · ${finding.file}${finding.line ? `:${finding.line}` : ''}` : ''}：${text(finding.message ?? finding.title ?? finding.name ?? finding.error ?? '服务端未提供说明')}${finding.resolution ? `；处理依据：${text(finding.resolution)}` : ''}`;
+          p.textContent = `${finding.id || `检查 ${index + 1}`} · ${name === 'issues' ? checkStatus(finding.status) : '未通过'}${finding.severity === 'blocking' ? ' · 阻塞问题' : ''}${finding.file ? ` · ${finding.file}${finding.line ? `:${finding.line}` : ''}` : ''}：${text(finding.message ?? finding.title ?? finding.name ?? finding.error ?? '服务端未提供说明')}${finding.expected ? `；预期：${text(finding.expected)}` : ''}${finding.actual ? `；实际：${text(finding.actual)}` : ''}${finding.resolution ? `；处理依据：${text(finding.resolution)}` : ''}`;
         }
         for (const [findingId, p] of block.findingNodes) if (!retainedFindings.has(findingId)) { p.remove(); block.findingNodes.delete(findingId); }
       }

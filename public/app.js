@@ -1,9 +1,26 @@
 import { createPlanningReview } from './planning-review.js';
+import { createExecutionPanel } from './execution-panel.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const escape = (value = '') => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const state = { health: null, projects: [], project: null, run: null, stageId: 'spec', taskId: null, artifactName: 'task.md', tab: 'events', raw: false, busy: false, epoch: 0, pollTimer: null, feedback: '', importFile: null, filename: 'requirements.md' };
+const state = { health: null, projects: [], project: null, run: null, stageId: 'spec', taskId: null, artifactName: 'task.md', tab: 'events', raw: false, busy: false, epoch: 0, selectionPending: false, pollTimer: null, feedback: '', importFile: null, filename: 'requirements.md' };
+let executionContextKey = '';
+function executionContext() {
+  if (state.selectionPending) return { projectId: '', runId: '', specRevision: '', planRevision: '', planningStatus: 'unconfirmed' };
+  const run = state.run;
+  const confirmed = run?.workflowVersion === 2 && run.approvals?.spec?.revision === run.specRevision
+    && run.approvals?.plan?.revision === run.planRevision && run.approvals?.plan?.specRevision === run.specRevision
+    && !!run.specRevision && !!run.planRevision && run.review?.passed === true;
+  return { projectId: state.project?.id ?? '', runId: run?.id ?? '', specRevision: run?.specRevision ?? '',
+    planRevision: run?.planRevision ?? '', planningStatus: confirmed ? 'confirmed' : 'unconfirmed' };
+}
+const executionPanel = createExecutionPanel({ api, getContext: executionContext, onError: error => showError(error) });
+void executionPanel.mount(document.querySelector('#execution-panel-host'));
+function syncExecutionPanel() {
+  const next = JSON.stringify(executionContext());
+  if (next !== executionContextKey) { executionContextKey = next; void executionPanel.refresh(); }
+}
 const ACTIVE = new Set(['running', 'paused', 'awaiting_spec', 'awaiting_review']);
 const STATUS = { pending: '待执行', running: '执行中', paused: '已暂停', succeeded: '已完成', failed: '执行失败', blocked: '被阻塞', awaiting_spec: '等待规格确认', awaiting_review: '等待计划确认', idle: '尚未开始' };
 const STAGES = [
@@ -276,7 +293,7 @@ function renderRecords() {
   for (const [name, pos] of Object.entries(savedScroll)) { const element = $(`.${name}`); if (element) { element.scrollLeft = pos.x; element.scrollTop = pos.y; } }
   if (state.tab === 'events' && followEvents && $('.event-list')) $('.event-list').scrollTop = $('.event-list').scrollHeight;
 }
-function renderRun() { renderControls(); renderWorkflow(); renderInspector(); renderRecords(); }
+function renderRun() { renderControls(); renderWorkflow(); renderInspector(); renderRecords(); syncExecutionPanel(); }
 function renderAll() { renderProjects(); renderHeader(); renderRun(); }
 
 function setBusy(value) { state.busy = value; renderControls(); $('#create-project-button').disabled = value; $('#create-project-button').textContent = value ? '正在创建…' : '创建项目'; $$('[data-close-dialog]', $('#project-dialog')).forEach((button) => { button.disabled = value; }); }
@@ -307,31 +324,38 @@ async function pollRun() {
 async function refreshProjects() { const { projects } = await api('/api/projects'); state.projects = projects; renderProjects(); }
 async function selectProject(id, { runId } = {}) {
   clearTimeout(state.pollTimer); const epoch = ++state.epoch;
+  state.selectionPending = true; syncExecutionPanel();
   try {
     const { project } = await api(`/api/projects/${encodeURIComponent(id)}`);
     if (epoch !== state.epoch) return;
+    state.selectionPending = false;
     state.project = { ...project, runs: project.runs || [] }; state.run = state.project.runs.find((run) => run.id === runId) || sortedRuns()[0] || null;
     rememberSelection();
     state.stageId = state.run?.status === 'failed' ? state.run.stages.find((stage) => stage.status === 'failed')?.id || 'spec' : 'spec';
     state.taskId = null; state.artifactName = 'task.md'; clearError(); renderAll(); schedulePoll();
   } catch (error) { if (epoch === state.epoch) showError(error); }
+  finally { if (epoch === state.epoch) { state.selectionPending = false; renderHeader(); syncExecutionPanel(); } }
 }
 async function selectRun(id) {
   clearTimeout(state.pollTimer); const epoch = ++state.epoch;
-  try { const { run } = await api(`/api/projects/${encodeURIComponent(state.project.id)}/runs/${encodeURIComponent(id)}`); if (epoch !== state.epoch) return; state.artifactName = 'task.md'; state.taskId = null; updateRun(run); renderHeader(); schedulePoll(); }
+  state.selectionPending = true; syncExecutionPanel();
+  try { const { run } = await api(`/api/projects/${encodeURIComponent(state.project.id)}/runs/${encodeURIComponent(id)}`); if (epoch !== state.epoch) return; state.selectionPending = false; state.artifactName = 'task.md'; state.taskId = null; updateRun(run); renderHeader(); schedulePoll(); }
   catch (error) { if (epoch === state.epoch) showError(error); }
+  finally { if (epoch === state.epoch) { state.selectionPending = false; renderHeader(); syncExecutionPanel(); } }
 }
 async function startRun() {
   if (!state.project || state.busy || ACTIVE.has(state.run?.status)) return;
   clearError(); setBusy(true); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
+  state.selectionPending = true; syncExecutionPanel();
   try {
     const options = { mode: $('#mode-select').value }; if ($('#failure-select').value) options.failOnceStage = $('#failure-select').value;
     const { run } = await api(`/api/projects/${encodeURIComponent(state.project.id)}/runs`, { method: 'POST', body: JSON.stringify(options) });
     if (epoch !== state.epoch) return;
+    state.selectionPending = false;
     state.stageId = 'intake'; state.taskId = null; state.artifactName = 'task.md'; state.tab = 'events';
     updateRun(run); renderHeader(); schedulePoll(); toast('编排已启动，可以点击节点查看过程');
   } catch (error) { if (epoch === state.epoch) showError(error); }
-  finally { setBusy(false); }
+  finally { if (epoch === state.epoch) { state.selectionPending = false; syncExecutionPanel(); } setBusy(false); }
 }
 async function runAction(action, stageId) {
   if (!state.run || state.busy) return;
