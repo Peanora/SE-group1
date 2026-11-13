@@ -30,6 +30,34 @@ test('complete escaped strings inside truncated or otherwise invalid JSON are st
   }
 });
 
+test('stray quote and escape prefixes/suffixes cannot misalign credential detection', () => {
+  const leaking = `{"value":"${unicode(secret)}"}`, safe = '{"value":"safe/value"}';
+  const prefixes = ['"', '""', '"""', "'", '\\', '\\"', '\\\\', '\\\\"', '"\\', '"\\\\', '\\u0022', 'noise"'];
+  const suffixes = ['', '"', '""', "'", '\\', '\\"', '\\\\', '"\\u0022'];
+  for (const prefix of prefixes) for (const suffix of suffixes) {
+    const content = prefix + leaking + suffix; assert.equal(content.includes(secret), false);
+    assert.deepEqual(guardModelContent(content, secret), { credentialResponse: true, content: '[REDACTED]' });
+    const nonleaking = prefix + safe + suffix;
+    assert.deepEqual(guardModelContent(nonleaking, secret), { credentialResponse: false, content: nonleaking });
+  }
+});
+
+test('backslash parity decodes exactly one layer despite malformed surrounding quotes', () => {
+  for (let count = 1; count <= 6; count++) {
+    const token = '"' + '\\'.repeat(count) + 'u' + secret.charCodeAt(0).toString(16).padStart(4, '0') + unicode(secret.slice(1)) + '"';
+    const expected = JSON.parse(token).includes(secret);
+    for (const prefix of ['', '"', '\\"', '"\\']) assert.equal(guardModelContent(prefix + token + '"\\', secret).credentialResponse, expected);
+    assert.equal(expected, count % 2 === 1);
+  }
+});
+
+test('maximum-role quote/escape noise stays bounded without overlapping reparses', { timeout: 5000 }, () => {
+  const budget = 128 * 1024, tail = `{"value":"${unicode(secret)}"}`, chunk = '"\\u0041';
+  const prefix = chunk.repeat(Math.floor((budget - tail.length) / chunk.length)), content = prefix + tail;
+  assert.ok(content.length <= budget); assert.equal(guardModelContent(content, secret, budget).credentialResponse, true);
+  const safe = prefix + '{"value":"safe"}'; assert.equal(guardModelContent(safe, secret, budget).content, safe);
+});
+
 test('normal and malformed nonleaking content is preserved byte for byte without repairing it', () => {
   for (const content of ['', ' \t\r\n ', '{"value":', '{"x":"\\q"}', '{"x":"unterminated', '{"text":"safe \\"}', '{"text":"safe \\\\\\" tail"}',
     '{"number":1e400}', JSON.stringify({ unrelated: 'safe/value', nested: [{ x: '普通中文' }], escaped: '\\u0041' })]) {

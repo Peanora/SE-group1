@@ -137,6 +137,20 @@ test('Review keeps nonleaking escaped JSON byte for byte and still enforces the 
   await assert.rejects(createProjectReviewModel({ config, fetchImpl: async () => reply(wrong) })({ task: '检查', files: candidateFiles }), /证据与候选代码不一致/u);
 });
 
+test('stray quote and escape framing cannot retain Review credentials or make them correctable JSON failures', async () => {
+  const escaped = config.apiKey.split('').map(letter => '\\u' + letter.charCodeAt(0).toString(16).padStart(4, '0')).join('');
+  const body = JSON.stringify({ ...clear, summary: config.apiKey }).replaceAll(config.apiKey, escaped);
+  for (const [prefix, suffix] of [['"', ''], ['"', '"'], ['\\"', '\\'], ['"\\', '"\\"'], ["'", "'"]]) {
+    for (const finishReason of ['stop', 'length', null]) {
+      let receipt, calls = 0;
+      const model = createProjectReviewModel({ config, fetchImpl: async () => { calls++; return envelopeFor(prefix + body + suffix, { finishReason, usage: { prompt_tokens: 5, completion_tokens: 7 } }); } });
+      await assert.rejects(model({ task: '检查', files: candidateFiles, onReceipt: value => { receipt = value; } }), error => error.code === 'credential_response' && !error.message.includes(config.apiKey));
+      assert.equal(calls, 1); assert.deepEqual(receipt.usage, { inputTokens: 5, outputTokens: 7 }); assert.equal(receipt.finishReason, finishReason ?? 'unknown');
+      const stored = JSON.parse(JSON.stringify(receipt)); assert.equal(stored.content, '[REDACTED]'); assert.equal(stored.content.includes(escaped), false);
+    }
+  }
+});
+
 test('Review sink failures and cancellation cannot publish opinions or expose sink exceptions', async () => {
   const model = createProjectReviewModel({ config, fetchImpl: async () => reply(clear) });
   await assert.rejects(model({ task: '检查', files: candidateFiles, onReceipt: async () => { throw new Error(`${config.apiKey} https://private.invalid`); } }), error => {

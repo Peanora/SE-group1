@@ -293,6 +293,20 @@ test('nonleaking escaped file JSON keeps the exact receipt while the normal prop
   assert.deepEqual(result.files, normalized(replacement)); assert.equal(receipt.content, content);
 });
 
+test('stray quote and escape framing cannot retain encoded coding credentials or turn them into format retries', async () => {
+  const escaped = config.apiKey.split('').map(letter => '\\u' + letter.charCodeAt(0).toString(16).padStart(4, '0')).join('');
+  const body = JSON.stringify({ files: [{ path: 'src/app.mjs', content: config.apiKey }] }).replaceAll(config.apiKey, escaped);
+  for (const [prefix, suffix] of [['"', ''], ['"', '"'], ['\\"', '\\'], ['"\\', '"\\"'], ["'", "'"]]) {
+    for (const finish_reason of ['stop', 'length', null]) {
+      let receipt, calls = 0;
+      const model = createProjectCodeModel({ config, fetchImpl: async () => { calls++; return responseFor(undefined, { choices: [{ finish_reason, message: { content: prefix + body + suffix } }], usage: { prompt_tokens: 5, completion_tokens: 7 } }); } });
+      await assert.rejects(model({ task, files, onReceipt: value => { receipt = value; } }), error => error.code === 'credential_response' && !error.message.includes(config.apiKey));
+      assert.equal(calls, 1); assert.deepEqual(receipt.usage, { inputTokens: 5, outputTokens: 7 }); assert.equal(receipt.finishReason, finish_reason ?? 'unknown');
+      const stored = JSON.parse(JSON.stringify(receipt)); assert.equal(stored.content, '[REDACTED]'); assert.equal(stored.content.includes(escaped), false);
+    }
+  }
+});
+
 test('receipt failures and cancellation fail closed, hide sink errors and never become format retries', async () => {
   const model = createProjectCodeModel({ config, fetchImpl: async () => responseFor() });
   await assert.rejects(model({ task, files, onReceipt: async () => { throw new Error(`${config.apiKey} https://private.invalid`); } }), error => {
