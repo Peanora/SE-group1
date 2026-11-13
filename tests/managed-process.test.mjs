@@ -22,6 +22,14 @@ test('real process returns stdin, stderr, and nonzero exit without a shell', asy
   assert.equal(result.stopReason, null);
 });
 
+test('process evidence identifies the actual child and its start time', async () => {
+  const result = await runProcess(process.execPath, ['-e', 'process.stdout.write(String(process.pid))']);
+  assert.equal(result.pid, Number(result.stdout));
+  assert.ok(Number.isInteger(result.pid) && result.pid > 0);
+  assert.ok(Number.isFinite(Date.parse(result.startedAt)));
+  assert.equal(result.terminationConfirmed, true);
+});
+
 test('timeout terminates a real process', async () => {
   const result = await runProcess(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { timeoutMs: 100 });
   assert.equal(result.stopReason, 'timeout');

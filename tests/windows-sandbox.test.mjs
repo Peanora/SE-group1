@@ -3,7 +3,49 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { createWindowsSandbox } from '../lib/windows-sandbox.mjs';
+
+test('unconfirmed sandbox stop preserves the owned control directory and process evidence', { skip: process.platform !== 'win32' }, async t => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'taskflow-control-test-'));
+  t.after(async () => {
+    const relative = path.relative(path.resolve(os.tmpdir()), workspace);
+    assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+    await rm(workspace, { recursive: true, force: true });
+  });
+  await mkdir(path.join(workspace, '.platform'));
+  await writeFile(path.join(workspace, '.platform', 'runner.cjs'), '// trusted mock never executes candidate code');
+  const script = `
+    import {mock} from 'node:test';
+    const moduleUrl=${JSON.stringify(new URL('../lib/managed-process.mjs', import.meta.url).href)};
+    const {minimalEnv}=await import(moduleUrl);
+    let calls=0;
+    mock.module(moduleUrl,{namedExports:{minimalEnv,runProcess:async()=>{
+      calls++;
+      const base={exitCode:0,signal:null,stdout:'',stderr:'',truncated:false,terminationConfirmed:true,stopReason:null,pid:424242,startedAt:'2026-01-01T00:00:00.000Z'};
+      if(calls===1)return {...base,stdout:'codex-cli mocked'};
+      if(calls===2)return {...base,stdout:JSON.stringify({insideWrite:true,outsideReadDenied:true,outsideWriteDenied:true,networkDenied:true})};
+      return {...base,exitCode:null,terminationConfirmed:false,stopReason:'timeout'};
+    }}});
+    const {createWindowsSandbox}=await import(${JSON.stringify(new URL('../lib/windows-sandbox.mjs', import.meta.url).href)});
+    const workspace=${JSON.stringify(workspace)};
+    const sandbox=createWindowsSandbox({executable:process.execPath});await sandbox.preflight({workspace});
+    process.stdout.write(JSON.stringify(await sandbox.run({workspace,runnerFile:workspace+'/.platform/runner.cjs'})));
+  `;
+  const result = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--experimental-test-module-mocks', '--input-type=module'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    const timer = setTimeout(() => { child.kill(); reject(new Error('trusted control test timed out')); }, 10_000);
+    child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('error', reject); child.once('close', code => { clearTimeout(timer); code === 0 ? resolve(JSON.parse(stdout)) : reject(new Error(stderr)); });
+    child.stdin.end(script);
+  });
+  assert.equal(result.terminationConfirmed, false); assert.equal(result.pid, 424242);
+  const relative = path.relative(path.resolve(os.tmpdir()), result.controlDirectory);
+  assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative) && path.basename(result.controlDirectory).startsWith('task-sandbox-control-'));
+  assert.deepEqual(await (await import('node:fs/promises')).readdir(result.controlDirectory), []);
+  await rm(result.controlDirectory, { recursive: true, force: true });
+});
 
 test('unconfigured sandbox fails closed and never falls back to host execution', async () => {
   const sandbox = createWindowsSandbox({ executable: '', nodeExecutable: process.execPath });
