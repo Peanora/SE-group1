@@ -828,6 +828,64 @@ test('an old list read cannot revive capability or task acceptance after a sourc
   await assert.rejects(f.service.download({ ...ids, executionId }), { code: 'not_accepted' }); assert.equal(f.state.deliveries.length, 0);
 });
 
+test('a multi-row list withdraws every completed DTO permission when a new source is published behind its last pending row', async t => {
+  const f = await recheckFixture(t), acceptedId = await accept(f.service, f.state), before = await f.service.list(ids);
+  assert.equal(before.executions[0].taskAccepted, true); assert.equal(before.executions[1].actions.canRetry, true); assert.equal(before.executions[1].actions.canRecheck, true);
+  const entered = deferred(), release = deferred(); let reads = 0;
+  f.state.getPlanning = async () => { const value = structuredClone(f.state.planning); if (++reads === 3) { entered.resolve(); await release.promise; } return value; };
+  const pending = f.service.list(ids); await entered.promise; await new Promise(resolve => setImmediate(resolve));
+  await f.service.withProjectCheckpoint(ids.projectId, () => {
+    const source = { content: '# New current requirement\nA different source version.', filename: 'new.md' };
+    f.state.planning.project.source = source; f.state.planning.project.currentSourceRevision = contentRevision(source); f.state.planning.run.sourceSuperseded = true;
+  });
+  release.resolve(); const result = await pending; assert.equal(result.capabilities.canStart, false);
+  for (const execution of result.executions) {
+    assert.equal(execution.taskAccepted, false); assert.equal(execution.preview, null);
+    for (const action of ['canRetry', 'canRecheck', 'canPreview', 'canDownload']) assert.equal(execution.actions[action], false, `${execution.id}: ${action}`);
+  }
+  assert.equal(result.executions[0].status, 'accepted'); assert.equal(result.executions[1].status, 'failed');
+  assert.equal((await f.service.list(ids)).executions.every(value => !value.taskAccepted), true);
+  await assert.rejects(f.service.download({ ...ids, executionId: acceptedId }), { code: 'not_accepted' }); assert.equal(f.state.deliveries.length, 0);
+});
+
+test('multi-row list generation withdrawal is conservative after checkpoint success or failure and a fresh read restores unchanged context', async t => {
+  for (const rejectedWork of [false, true]) {
+    const f = await recheckFixture(t); await accept(f.service, f.state); const entered = deferred(), release = deferred(); let reads = 0;
+    f.state.getPlanning = async () => { const value = structuredClone(f.state.planning); if (++reads === 3) { entered.resolve(); await release.promise; } return value; };
+    const pending = f.service.list(ids); await entered.promise; await new Promise(resolve => setImmediate(resolve));
+    if (rejectedWork) { const error = new Error('trusted no-publication failure'); await assert.rejects(f.service.withProjectCheckpoint(ids.projectId, () => { throw error; }), value => value === error); }
+    else await f.service.withProjectCheckpoint(ids.projectId, () => 'unchanged');
+    release.resolve(); const result = await pending;
+    for (const execution of result.executions) { assert.equal(execution.taskAccepted, false); assert.equal(execution.preview, null); for (const action of ['canRetry', 'canRecheck', 'canPreview', 'canDownload']) assert.equal(execution.actions[action], false); }
+    const fresh = await f.service.list(ids); assert.equal(fresh.capabilities.canStart, true); assert.equal(fresh.executions[0].taskAccepted, true);
+    assert.equal(fresh.executions[1].actions.canRetry, true); assert.equal(fresh.executions[1].actions.canRecheck, true);
+  }
+});
+
+test('an invalid batch admission clears source permissions and preview links while keeping actual cancel and stop handles', async t => {
+  for (const preview of [false, true]) {
+    const f = await fixture(t, { previewTimeoutMs: 5000 });
+    const executionId = preview ? await accept(f.service, f.state) : (await f.service.start(startInput)).execution.id;
+    if (preview) await f.service.action({ ...ids, executionId, action: 'preview' }); let once = true;
+    f.state.getPlanning = async () => { if (once) { once = false; throw Object.assign(new Error('context temporarily unavailable'), { status: 409 }); } return f.state.planning; };
+    const result = await f.service.list(ids), execution = result.executions[0]; assert.equal(result.capabilities.canStart, false); assert.equal(execution.taskAccepted, false); assert.equal(execution.preview, null);
+    for (const action of ['canRetry', 'canRecheck', 'canPreview', 'canDownload']) assert.equal(execution.actions[action], false);
+    assert.equal(execution.actions.canCancel, !preview); assert.equal(execution.actions.canStopPreview, preview);
+    if (preview) { const fresh = await f.service.list(ids); assert.equal(fresh.executions[0].taskAccepted, true); assert.ok(fresh.executions[0].preview.url); await f.service.action({ ...ids, executionId, action: 'stop_preview' }); }
+  }
+});
+
+test('a list begun inside an open checkpoint remains unapproved even when publication releases it before the old read returns', async t => {
+  const f = await recheckFixture(t); await accept(f.service, f.state); const workEntered = deferred(), publish = deferred(), readEntered = deferred(), releaseRead = deferred();
+  const checkpoint = f.service.withProjectCheckpoint(ids.projectId, async () => { workEntered.resolve(); await publish.promise;
+    f.state.planning.project.currentSourceRevision = contentRevision({ content: 'published while the list waited', filename: 'new.md' }); f.state.planning.run.sourceSuperseded = true;
+  });
+  await workEntered.promise; let once = true;
+  f.state.getPlanning = async () => { const value = structuredClone(f.state.planning); if (once) { once = false; readEntered.resolve(); await releaseRead.promise; } return value; };
+  const pending = f.service.list(ids); await readEntered.promise; publish.resolve(); await checkpoint; releaseRead.resolve(); const result = await pending;
+  assert.equal(result.capabilities.canStart, false); assert.equal(result.executions.every(execution => !execution.taskAccepted && !execution.actions.canPreview && !execution.actions.canDownload && !execution.actions.canRetry && !execution.actions.canRecheck && execution.preview === null), true);
+});
+
 test('a changed current source blocks a pending preview and coding assertion before any new runtime or model use', async t => {
   const entered = deferred(), release = deferred(), f = await fixture(t, { dependencies: { verifySource: async () => { entered.resolve(); await release.promise; return { files: structuredClone(files), shellHash: 'c'.repeat(64) }; } } });
   const executionId = await accept(f.service, f.state), pending = f.service.action({ ...ids, executionId, action: 'preview' }); await entered.promise;

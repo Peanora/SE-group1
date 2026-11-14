@@ -12,6 +12,16 @@
 
 实际验证：`node --test tests/web-execution-service.test.mjs`为58通过、原实际MXC项1明确跳过（22863.3393ms），按根的原生资源安排先仅运行普通专项；随后获准且资源空闲，显式`TASKFLOW_TEST_REAL_SANDBOX=1`及已验证执行程序，运行`node --test --test-name-pattern='real MXC' tests/web-execution-service.test.mjs`，**1/1通过、0跳过**（2411.7411ms），真实薄候选仍自检失败、源码下载关闭、用量未知、无付费模型。两次合计59个不同测试均已实际通过，未将第一轮skip写作执行成功。`npm run check`为85脚本通过，`git diff --check`通过。最终仅补本记录，不再改被测脚本；3个授权文件固定后待不同作者独立复验及根F05串行集成，未改原树、store/server/公共UI/真实QA或用户数据，未推送/部署。
 
+### 92099dc独立审查P2：多记录批次统一撤回过期许可
+
+旧版59项虽已独立执行通过，审查探针仍复现：list并行构建多行DTO时，第一行已完成、第二行等待规划读取，期间checkpoint发布实际新需求对象及contentRevision；旧list只撤capabilities.canStart，先完成行仍可返回taskAccepted和预览/下载许可。后端操作会重新拒绝，未证实旧源码实际交付，但该DTO宣称违反当前需求门禁，920因此未放行。
+
+本修订在批次开始记录generation及admission是否开放，全部DTO结束后在无await的同一段同步核最终barrier/generation及初始准入结论。批次失效统一清所有行的taskAccepted、preview URL及retry/recheck/preview/download许可，真实cancel/stop句柄许可保留；不改原行status/检查历史/用量，也不永久废弃未变化内容。即使checkpoint已释放、callback失败未发布内容，或批次初始准入409后后续行读取暂时恢复，也先保守撤回，下一次完整当前读取可正常恢复许可。list在已开放barrier内开始、更新完成后旧规划读取才返回时，同样不能将旧批准重新发布。
+
+新增四项回归：实际新source/hash发布的多row交错；checkpoint成功/失败后过期批次撤回且fresh读取恢复；初始准入错误清预览URL并保留真实cancel/stop；始于barrier的旧读取晚返回。先在920源码运行前三项，3/3均明确复现失败；修后四项定向通过。本轮仍仅原3文件，未改root/原服务322、原需求或独立审查证据，0API/付费。
+
+本修订最终检查：普通服务专项63项为62通过、原真实项1显式跳过（23987.5837ms）；随后显式启用真实执行环境定向运行原薄MXC负例，1/1通过、0跳过（2570.3356ms）。两次合计63个不同测试均实际执行通过，原59项保留；真实负例仍为fixture传输、真实失败自检和关闭交付，不是正向业务验收。85脚本语法、git diff --check通过。之后只补本文，不再修改脚本；固定新提交后交原独立Reviewer复验，未推送或部署。
+
 基准`9a07615`。独立分支`codex/web-execution-service`，仅新增服务模块、专测及本文。已授权的task-store提交在工作树作参考；本服务不依赖其接口。当前执行器自行生成attemptId并内部多轮候选，与task-store的租约/候选唯一发布模型不同，首版不拼接或伪造Worker语义。
 
 目标：可信HTTP集成层可调用`await createWebExecutionService({rootDir,getPlanning,config?,executable?,budget?,previewTimeoutMs?,dependencies?})`，返回`list/start/action/download/shutdown`。getPlanning(projectId,runId)返回可信`{project,run}`；所有对外方法只接受ID、profileId/contractRevision或动作，不接受路径、报告、passed和预算。错误带status和code；DTO沿执行面板约定。HTTP路由及主网页由主Agent后续串行接入。
