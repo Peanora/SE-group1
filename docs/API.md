@@ -77,6 +77,16 @@ approvals为`{spec:null|{revision,at,feedback},plan:null|{revision,specRevision,
 
 ## 状态和持久化
 
+### 规格模型预算与回执
+
+`GET /api/health`的modelPlanning增加specificationMaxCalls和specificationTimeoutMs，默认新运行最多3次规格尝试、每次90秒，工程设计预算独立披露。只由可信服务构造选项配置，客户端运行请求不能扩大。网页模型模式启动前显示预算；旧服务缺少字段时拒绝启动新模型运行，保留本地规则模式。
+
+首次新model规格调用冻结Run.specificationBudget，specificationCalls按预留尝试计数，失败不退回；重启后的有效上限取原冻结预算与当前控制器限制的较小值。specificationHistory保存attempt/sourceRevision/status/times/model/usage/finishReason/code、receiptState/requestState和receipt的id/sha256/bytes；未知token为null，不能当0。旧已存记录不伪造回执、用量或预算。尝试次数并不等于已证实的收费API请求次数。
+
+规格适配器取得受控signal/timeoutMs/onReceipt。正常stop、私有回执持久化、与返回规格按现有解析规则等价、当前source/run和最后保存都确认后才能发布规格；保存失败恢复原规格与文档，不发布审批。回执原文仅在data/.private/specification-receipts，JSON/API中只有元数据，导出plan.json不携带这些调用历史或私有路径。失败回执也可保留已知用量，安全回执缺失时保持未知。
+
+本地适配器Promise结束不表示远端模型服务已确认停止。不合作provider或回执写入被标记unconfirmed，超时/关闭可有界结束阶段；同控制器真实在途任务settle前，项目检查点、新建和重试均拒绝。重启保留中断及未知历史，不自动重跑或声称远端已停。这不代表跨阶段共享费用预算或可靠外部Worker恢复。
+
 ### 同项目需求输入版本
 
 基础路径`/api/projects/:pid/changes`要求本机回环、匹配监听端口的Host及同源变更请求。源文件、规划绑定和应用权限均由服务读取；客户端不能传工作区、执行报告、回调或审批状态。

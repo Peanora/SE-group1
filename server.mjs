@@ -74,7 +74,9 @@ export async function loadEnv(filename = path.join(ROOT, '.env')) {
 export async function createApp(options = {}) {
   const planner = options.planner ?? await import('./lib/planner.mjs');
   const store = options.store ?? await new ProjectStore(options.dataDir ?? process.env.DATA_DIR ?? path.join(ROOT, 'data')).init();
-  const orchestrator = new Orchestrator(store, planner, { stepDelayMs: options.stepDelayMs ?? process.env.WORKFLOW_STEP_DELAY_MS ?? 350 });
+  const orchestrator = new Orchestrator(store, planner, { stepDelayMs: options.stepDelayMs ?? process.env.WORKFLOW_STEP_DELAY_MS ?? 350,
+    ...(options.specificationMaxCalls === undefined ? {} : { specificationMaxCalls: options.specificationMaxCalls }),
+    ...(options.specificationTimeoutMs === undefined ? {} : { specificationTimeoutMs: options.specificationTimeoutMs }) });
   const executionService = options.executionService === null ? null : options.executionService ?? await (await import('./lib/web-execution-service.mjs')).createWebExecutionService({
     rootDir: path.resolve(options.executionRootDir ?? path.join(store.directory, 'executions')),
     getPlanning: async (projectId, runId) => store.getPersistedRun(projectId, runId),
@@ -114,7 +116,8 @@ export async function createApp(options = {}) {
         if (method === 'GET' && segments.length === 2 && segments[1] === 'health') {
           const config = planner.getModelConfig();
           return respond(response, 200, { ok: true, model: { configured: config.configured, model: config.model ?? '' },
-            modelPlanning: { engineeringMaxCalls: orchestrator.engineeringMaxCalls, engineeringTimeoutMs: orchestrator.engineeringTimeoutMs },
+            modelPlanning: { engineeringMaxCalls: orchestrator.engineeringMaxCalls, engineeringTimeoutMs: orchestrator.engineeringTimeoutMs,
+              specificationMaxCalls: orchestrator.specificationMaxCalls, specificationTimeoutMs: orchestrator.specificationTimeoutMs },
             supportedFormats: ['.md', '.txt', '.docx'] });
         }
         if (segments[1] !== 'projects') throw new HttpError(404, '未找到该接口。');

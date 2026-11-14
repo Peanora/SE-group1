@@ -195,12 +195,20 @@ function renderControls() {
   modelNotice.hidden = run?.mode !== 'model' && $('#mode-select').value !== 'model';
   const knownBudget = Number.isSafeInteger(modelBudget?.engineeringMaxCalls) && modelBudget.engineeringMaxCalls > 0
     && Number.isSafeInteger(modelBudget?.engineeringTimeoutMs) && modelBudget.engineeringTimeoutMs > 0;
-  modelNotice.textContent = `${run?.mode === 'model' && run.workflowVersion !== 2 ? '当前显示旧版运行，按原流程仅整理规格。' : ''}新版模型运行会发送需求以整理规格；确认规格后，还会请求工程设计并产生用量。${knownBudget ? `每次运行工程设计最多尝试 ${modelBudget.engineeringMaxCalls} 次，单次最多 ${modelBudget.engineeringTimeoutMs / 1000} 秒。` : '工程设计预算尚未获取，请刷新核对。'}架构与任务共用一次设计请求，结果仍需你审阅。`;
+  const knownSpecBudget = Number.isSafeInteger(modelBudget?.specificationMaxCalls) && modelBudget.specificationMaxCalls > 0
+    && Number.isSafeInteger(modelBudget?.specificationTimeoutMs) && modelBudget.specificationTimeoutMs > 0;
+  modelNotice.textContent = `${run?.mode === 'model' && run.workflowVersion !== 2 ? '当前显示旧版运行，按原流程仅整理规格。' : ''}新版模型运行会发送需求以整理规格；确认规格后，还会请求工程设计并产生用量。${knownSpecBudget ? `每次运行规格整理最多尝试 ${modelBudget.specificationMaxCalls} 次，单次最多 ${modelBudget.specificationTimeoutMs / 1000} 秒。` : '当前服务未提供规格调用预算，请重启本地服务并刷新核对。'}${knownBudget ? `每次运行工程设计最多尝试 ${modelBudget.engineeringMaxCalls} 次，单次最多 ${modelBudget.engineeringTimeoutMs / 1000} 秒。` : '工程设计预算尚未获取，请刷新核对。'}架构与任务共用一次设计请求，结果仍需你审阅。`;
+  const specification = run?.specificationHistory?.at(-1);
+  const frozenSpecification = run?.specificationBudget;
+  if (run?.mode === 'model' && knownSpecBudget && Number.isSafeInteger(frozenSpecification?.maxCalls) && frozenSpecification.maxCalls > 0
+    && Number.isSafeInteger(frozenSpecification.timeoutMs) && frozenSpecification.timeoutMs > 0) modelNotice.textContent += ` 当前运行规格整理上限：${Math.min(modelBudget.specificationMaxCalls, frozenSpecification.maxCalls)} 次、每次 ${Math.min(modelBudget.specificationTimeoutMs, frozenSpecification.timeoutMs) / 1000} 秒；已尝试 ${Number.isSafeInteger(run.specificationCalls) ? run.specificationCalls : '未知'} 次。`;
+  if (specification) modelNotice.textContent += ` 最近规格：${({ running: '处理中', succeeded: '规格已整理', failed: '失败', interrupted: '已中断' })[specification.status] || '状态未知'}；输入 ${Number.isSafeInteger(specification.usage?.inputTokens) ? specification.usage.inputTokens : '未知'}、输出 ${Number.isSafeInteger(specification.usage?.outputTokens) ? specification.usage.outputTokens : '未知'} token。`;
+  else if (run?.mode === 'model' && run.stages?.some(stage => stage.id === 'spec' && stage.attempt > 0)) modelNotice.textContent += ' 这次规格整理没有可核对的用量记录，用量为未知。';
   const design = run?.engineeringHistory?.at(-1);
   if (design) modelNotice.textContent += ` 最近设计：${({ running: '处理中', succeeded: '草案已生成', failed: '失败', interrupted: '已中断' })[design.status] || '状态未知'}；输入 ${Number.isSafeInteger(design.usage?.inputTokens) ? design.usage.inputTokens : '未知'}、输出 ${Number.isSafeInteger(design.usage?.outputTokens) ? design.usage.outputTokens : '未知'} token。`;
   const historical = historicalRun(run), active = !historical && ACTIVE.has(run?.status);
   const changing = state.busy || state.selectionPending;
-  $('#start-run').disabled = !state.project || changing || active;
+  $('#start-run').disabled = !state.project || changing || active || ($('#mode-select').value === 'model' && (!knownSpecBudget || !knownBudget));
   $('#start-run span').textContent = run ? '再次编排' : '开始编排';
   $('#mode-select').disabled = changing || active;
   $('#failure-select').disabled = changing || active;
@@ -394,6 +402,7 @@ async function selectRun(id) {
 }
 async function startRun() {
   if (!state.project || state.busy || state.selectionPending || (!historicalRun() && ACTIVE.has(state.run?.status))) return;
+  if ($('#start-run').disabled) return;
   clearError(); setBusy(true); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   state.selectionPending = true; syncExecutionPanel();
   try {
