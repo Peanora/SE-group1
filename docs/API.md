@@ -126,12 +126,16 @@ approvals为`{spec:null|{revision,at,feedback},plan:null|{revision,specRevision,
 
 - GET基础路径 → `{capabilities:{canStart,profiles:[{id,title,description,contractRevision}],reason,model:{name},budget},executions:[ExecutionDTO]}`。模型名称不包含凭据，未知用量为null。
 - POST基础路径`/start`，仅`{profileId,contractRevision}` → 202 `{execution}`。服务重新核对当前v2规格、计划、来源hash、双确认及结构检查，固定参考范围版本必须匹配；同一规划存在编码、预览或未确认停止时409。上传内容仅关联快照，不传给参考模型，不视为命令或完成范围。
-- POST基础路径`/:eid/action` → `{execution,preview?}`。收费动作retry/recheck必须提交`{action,profileId,contractRevision}`，匹配当前明确选择的参考范围；缺少400、过期409，旧页面不能按新契约自动收费。cancel/preview/stop_preview只接受`{action}`。cancel先记录请求，再等真实停止；retry使用当前审批新建编码尝试，不覆盖原历史。recheck仅复用服务自有、已正常停止的原始模型候选，创建0编码的新检查尝试，完整重跑HTTP/SQLite、浏览器及最多2次Review；旧验收规则的代码可以重检，旧通过结论不能继承。preview仅为当前已验收源码建立独立数据副本，有期限且占用活动槽；启动中停止保留实际PID及停止结果。
+- POST基础路径`/:eid/action` → `{execution,preview?}`。收费动作retry/recheck/repair必须提交`{action,profileId,contractRevision}`，匹配当前明确选择的参考范围；缺少400、过期409，旧页面不能按新契约自动收费。cancel/preview/stop_preview只接受`{action}`。cancel先记录请求，再等真实停止；retry使用当前审批新建编码尝试，不覆盖原历史。recheck仅复用服务自有、已正常停止的原始模型候选，创建0编码的新检查尝试，完整重跑HTTP/SQLite、浏览器及最多2次Review；旧验收规则的代码可以重检，旧通过结论不能继承。preview仅为当前已验收源码建立独立数据副本，有期限且占用活动槽；启动中停止保留实际PID及停止结果。
 - GET基础路径`/:eid/download` → `application/zip`。重新核对当前规划、源码文件/Git对象/保护外壳及完整验收门禁后才创建交付包；不接受客户端路径、报告、预算或通过标记。
 
 ExecutionDTO包含执行编号、尝试、范围、状态、是否通过、调用次数、用量/预算、版本/差异、事件、错误、预览及服务端actions许可。检查项只公开id/name/passed和净化后的可选error/expected/actual文本，每字段最多2000字符；不公开工作区路径、模型原始回执、PID/control/probe或进程stdout。Review问题含相对文件/行号与处理记录，全部作为文本展示。
 
 复验DTO另有kind:web_recheck、来源服务执行编号/提交、recheckBudget和当前复验范围版本；actions.canRecheck仅为轻量按钮条件，实际动作在模型调用前深查原私有报告/真实Git/回执和当前归属。来源根、输出根和绑定只由服务私有记录派生，客户端不能传。预览/下载对复验快照另外重验来源provenance和全部文件字节，不以缺少.git放宽原始编码候选的Git校验。
+
+repair用于当前失败候选具有有效、完整、同代码版本的阻塞Review时“保留代码并修复”。服务从自有记录派生原始编码来源和发现问题来源，深查原始Git/私有模型回执/源码hash/报告文件与SQLite记录及当前审批，拷贝源码与完整逐字行证据后，在独立工作区建立真实新Git基线。不得从客户端接收initialSource/previousIssues/来源路径/报告/预算。新记录kind仍为web_execution，私有operation为repair，DTO增加actions.canRepair、repairContractRevision、repairBudget、sourceExecutionId/sourceCommit及findingExecutionId；这些公开编号不授予来源路径权限。
+
+准入从建立行时计入总时长，核心只取得剩余预算；未知停止继续占用活动槽。新候选至少一次编码、源码hash及提交变化，原阻塞问题跨轮保留并明确逐项resolved，自检、独立HTTP/SQLite、真实Edge及Review共同通过后才能accepted。恢复到完整原seed、遗漏原问题、来源中途变化、版本失效均不能发布通过。当前用量只记新调用，原失败及成本不覆盖；下载/预览再查来源与当前候选完整性。
 
 服务持久化在独立SQLite中，原规划JSON不迁移。owner与活动槽事务控制同run拒重；每次状态控制递增版本，异步结束重新核对，取消或待协调不能被迟到成功覆盖。`source_history`和`preview_history`私有保留正常及未知停止证据。旧双活存档迁移保留多个待协调历史而不撞唯一索引；未知进程不自动当作已停止，阻止新的活动。该单控制器生命周期不等于多Worker租约/可靠恢复，正式TaskStore及通用验收模型尚未接入此链路。
 

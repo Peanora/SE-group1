@@ -46,6 +46,7 @@ test('execution routes preserve server project/run identity, exact payloads and 
   response = await fetch(`${route}/execution-1/action`, json({ action: 'cancel' })); assert.equal(response.status, 200);
   response = await fetch(`${route}/execution-1/action`, json({ action: 'recheck', profileId: 'library-web-v1', contractRevision: 'fixed-contract' })); assert.equal(response.status, 200);
   response = await fetch(`${route}/execution-1/action`, json({ action: 'retry', profileId: 'library-web-v1', contractRevision: 'fixed-contract' })); assert.equal(response.status, 200);
+  response = await fetch(`${route}/execution-1/action`, json({ action: 'repair', profileId: 'library-web-v1', contractRevision: 'fixed-contract' })); assert.equal(response.status, 200);
   response = await fetch(`${route}/execution-1/download`); assert.equal(response.status, 200);
   assert.equal(response.headers.get('content-type'), 'application/zip');
   assert.match(response.headers.get('content-disposition'), /filename\*=UTF-8''%E5%9B%BE/u);
@@ -54,7 +55,8 @@ test('execution routes preserve server project/run identity, exact payloads and 
     ['list', identity], ['start', { ...identity, profileId: 'library-web-v1', contractRevision: 'fixed-contract' }],
     ['action', { ...identity, executionId: 'execution-1', action: 'cancel' }],
     ['action', { ...identity, executionId: 'execution-1', action: 'recheck', profileId: 'library-web-v1', contractRevision: 'fixed-contract' }],
-    ['action', { ...identity, executionId: 'execution-1', action: 'retry', profileId: 'library-web-v1', contractRevision: 'fixed-contract' }], ['download', { ...identity, executionId: 'execution-1' }],
+    ['action', { ...identity, executionId: 'execution-1', action: 'retry', profileId: 'library-web-v1', contractRevision: 'fixed-contract' }],
+    ['action', { ...identity, executionId: 'execution-1', action: 'repair', profileId: 'library-web-v1', contractRevision: 'fixed-contract' }], ['download', { ...identity, executionId: 'execution-1' }],
   ]);
 });
 
@@ -80,12 +82,24 @@ test('extra client identity, paths, budget or results cannot enter execution con
   for (const body of [{}, { action: 'cancel', executionId: 'other' }, { action: 'cancel', path: '../other' }, { action: 'force_pass' },
     { action: 'recheck', sourceReportPath: 'C:/private/execution.json' }, { action: 'recheck', sourceBinding: { projectId: 'other' } },
     { action: 'recheck', outputDir: 'C:/other' }, { action: 'recheck', budget: { maxReviewCalls: 999 } },
-    { action: 'recheck' }, { action: 'retry' }, { action: 'recheck', profileId: 'library-web-v1' },
+    { action: 'recheck' }, { action: 'retry' }, { action: 'repair' }, { action: 'recheck', profileId: 'library-web-v1' },
+    { action: 'repair', profileId: 'library-web-v1' },
+    ...['projectId', 'runId', 'executionId', 'sourceCommit', 'sourceReportPath', 'sourceBinding', 'initialSource', 'previousIssues', 'outputDir', 'budget', 'report'].map(field => ({ action: 'repair', profileId: 'library-web-v1', contractRevision: 'fixed-contract', [field]: 'client-capability' })),
     { action: 'cancel', profileId: 'library-web-v1', contractRevision: 'fixed-contract' },
   ]) {
     assert.equal((await fetch(`${route}/execution-1/action`, json(body))).status, 400);
   }
   assert.deepEqual(calls, []);
+});
+
+test('repair admission conflicts are returned without turning the original candidate into a success', async t => {
+  const { service, calls, dto } = stub();
+  service.action = async input => { calls.push(['action', input]); throw Object.assign(new Error('原源码或阻塞意见已改变，请核对当前记录。'), { status: 409 }); };
+  const { route, identity } = await fixture(t, service);
+  const response = await fetch(`${route}/execution-1/action`, json({ action: 'repair', profileId: 'library-web-v1', contractRevision: 'fixed-contract' }));
+  assert.equal(response.status, 409); assert.match((await response.json()).error, /原源码/);
+  assert.deepEqual(calls, [['action', { ...identity, executionId: 'execution-1', action: 'repair', profileId: 'library-web-v1', contractRevision: 'fixed-contract' }]]);
+  assert.equal(dto.status, 'failed'); assert.equal(dto.taskAccepted, false);
 });
 
 test('unsupported verbs and absent services retain explicit failures; controller conflicts cannot become successful actions', async t => {
