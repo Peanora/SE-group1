@@ -276,8 +276,8 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
     refs.repair.disabled ||= !confirmed(context) || !refs.consent.checked || !repairScope || !repairBudgetKnown;
     refs.repairNotice.hidden = execution.operation !== 'repair' && actions.canRepair !== true;
     refs.repairNotice.textContent = execution.operation === 'repair'
-      ? `本次从原提交 ${text(execution.repairSourceCommit)} 修复；原编码记录 ${text(execution.repairSourceExecutionId)}，阻塞意见记录 ${text(execution.repairFindingExecutionId)}。新代码与全部检查归本次尝试，旧失败和用量保留。`
-      : `保留提交 ${text(execution.versions?.at(-1)?.commit)} 的代码及有效阻塞意见，由模型修复形成新版本。${budgetText(repairBudget)}。原问题必须逐项复核关闭，检查和Review全新执行。`;
+      ? `本次从原提交 ${text(execution.repairSourceCommit)} 修复；原编码记录 ${text(execution.repairSourceExecutionId)}，阻塞意见记录 ${text(execution.repairFindingExecutionId)}。会保留该代码历史中的全部已知有效阻塞意见。新代码与全部检查归本次尝试，旧失败和用量保留。`
+      : `保留提交 ${text(execution.versions?.at(-1)?.commit)} 的代码及其历史中的全部已知有效阻塞意见，由模型修复形成新版本。${budgetText(repairBudget)}。所有问题必须逐项复核关闭，检查和Review全新执行。`;
     refs.recheckNotice.hidden = execution.kind !== 'web_recheck' && actions.canRecheck !== true;
     refs.recheckNotice.textContent = execution.kind === 'web_recheck'
       ? `本次固定原提交 ${text(execution.sourceCommit)}；来源记录 ${text(execution.sourceExecutionId)}。本次编码调用：${count(execution.calls)} 次；检查和Review均为本次全新执行，旧记录及用量保留。`

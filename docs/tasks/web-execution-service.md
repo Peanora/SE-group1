@@ -129,3 +129,19 @@ getPlanning必须返回与ID匹配的project/run；run需有workflowVersion=2、
 阻塞识别及问题DTO的文件位置改用现有validateProjectFiles的canonical路径校验，不再另写更窄的前缀/字符规则。README.md、docs/a..b.md及Unicode合法文件问题都保留定位并撤销同代码早期accepted的当前验收/预览/下载/再检；越界和保留路径仍由canonical规则拒绝。Review意见/证据的真实性仍由core validator核对源码行，服务不降低核心验收要求。
 
 本修订实际验证：先运行新增定向回归，再显式启用`TASKFLOW_TEST_REAL_SANDBOX=1`及已验证本地执行程序运行完整服务专项，**48/48通过、0失败/跳过**，含原有真实Git/MXC薄失败候选；新增6项覆盖异步100ms/25ms预算与同步超时、部分预算传递、迟到core通过、超时及取消不合作核对/清理等待/迟到私有停止结果/重启、abort后unknown停止、三类canonical合法文件阻塞。真实系统Edge平台fixture **20/20通过**（19场景及父项），77脚本语法及`git diff --check`通过。最后只更新任务记录，不再修改被测脚本。新增正向及停止探针仍为可信依赖测试，0付费；原QA、core和其他工作树未改。本提交只修5个原授权文件，public组件代码不需改变；待不同作者重新复验，不把前版独立测试数量当作放行证据。
+
+## 1c754e4 独立审查：修复入口必须保留同代码的所有已知阻塞意见
+
+基准为独立服务/UI版本1c754e4，其73项服务专项和23项Edge虽通过，独立issue-history探针发现确定P2，故未放行：原编码报告提出A，同代码复验称A已解决但新增B；选旧编码记录修复时只携带A，新候选仅关闭A即可错误通过。旧提交、原失败报告及独立证据全部保留。本轮仅修改原授权六个文件，沿用已独立FIX的checkpoint和core seed依赖，不修改core/server/存储/路由。
+
+修复继续使用`action:'repair'`及当前`profileId/contractRevision`三字段收费契约，无客户端报告、路径、意见、预算或回调输入。新attempt独立计本轮编码/Review预算，原attempt和用量不覆盖。来源仍需自有当前绑定的终止失败记录、真实编码来源inspector和完整当前gate；普通Git候选要求、取消/总deadline/停止待协调及checkpoint门禁保持原规则。
+
+现在按相同project/run、完整私有source/spec/plan绑定、当前contract和Review/检查清单策略、同一sourceHash聚合历史。只采用自有已结束记录中完整绑定的completed model Review，遍历其所有候选版本，包含原编码、复验和以前失败修复候选。真实coded报告的模型来源按core既有record.reviewerKind确认，不要求core未写入的review.kind；复验仍要求其原有review.kind=model，显式非模型类型不接受。相同字节上的后续“resolved”不删除历史义务：此次保守策略要求全部已知阻塞意见在真正改变的候选上重新逐项关闭，不实现意见争议或原地撤销。重复ID只有内容、位置、证据及originCommit一致才合并；冲突明确拒绝，不能静默覆盖。最多20个独立问题、64份候选意见证据，超过上限拒绝而不截断；单份合法Review的旧问题加新问题超过20时同样拒绝，不能忽略该份历史。
+
+list只作私有元数据资格检查，不周期运行Git。实际收费前对每份聚合报告执行服务目录/普通文件/读取稳定性/原始字节hash/SQLite内容一致性核对；复验报告额外核对它的原编码row、五字段binding和provenance。每个Review复用canonical validator核对真实源文件、逐字行证据和先前问题resolution，阻塞列表必须完整对应其有效新意见或仍open的旧意见。聚合问题只按稳定ID排序，不把审查文本当指令。
+
+私有repairProof新增`findingSetHash`及`findingReports:[{id,hash}]`，不进入DTO。集合固定后、每次模型assertCurrent和最终发布前均重新核对集合成员、所有报告hash和当前来源；发布阶段还重跑原始Git/回执inspector。期间新增或改变有效finding会撤回本次权限/发布，即使用户仍选旧入口。新候选若回到另一份已经有有效阻塞意见的相同字节，也不得凭新commit和随机通过结论放行。成功修复仍须实际新代码、新Git候选和全部原问题显式closed；未关B不能发布。该集合后续变化也撤回旧repair当前taskAccepted/preview/download，历史报告不改。旧版未带完整集合proof的repair不自动升级为通过。
+
+本轮最终实际验证：`TASKFLOW_TEST_REAL_SANDBOX=1`、显式已验证MXC程序下完整服务专项 **81/81通过，失败/跳过0，46116.0316ms**，其中仍只有原有1个真实Git/MXC薄失败候选；全部正向修复/聚合/报告竞态使用可信注入和临时伪造回执，不能当作真实业务或模型修复验收。真实系统Edge平台UI专项 **23/23通过，0跳过，14611.3529ms**，含桌面、390×844、费用勾选、跨运行迟到、错误保留和新全量意见说明。87脚本语法、`git diff --check`通过。新增8项服务回归覆盖旧/新两个入口A+B全量传递、只关闭A拒发布、真实coded Review格式、重复身份冲突/合并与上限、报告/Review深查、准入/模型/发布/下载期间新finding、失败修复早期候选和相同bytes不同commit。
+
+旧独立探针和helper复制到主树忽略目录`output/verification/owned-repair-issue-history-fix-20261114/`后复跑，原输入保持，修复版断言core收到A+B、两项显式resolution后才accepted；原独立失败证据未覆盖。该探针仍为trusted fixture、0付费。未重跑真实e312正向模型修复、主HTTP集成和全仓验收，未写原QA/.env/用户data，未推送或部署；固定后交非作者独立Review，再由主Agent集成及开展已授权的真实同源修复。

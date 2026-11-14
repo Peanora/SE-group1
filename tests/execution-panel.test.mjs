@@ -341,7 +341,7 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
     const page = await pageFor(); state.capabilities.repairBudget = repairBudget; state.executions = [repairRecord({ usage: { inputTokens: 29897, outputTokens: 924 } })]; await refresh(page);
     const button = page.getByRole('button', { name: '保留代码并修复', exact: true }), profiles = page.getByRole('combobox', { name: '执行范围', exact: true });
     assert.equal(await button.isDisabled(), true); await consent(page).check(); assert.equal(await button.isEnabled(), true); await button.focus(); await refresh(page); assert.equal(await button.evaluate(element => document.activeElement === element), true);
-    assert.match(await page.locator('.ep-scope').textContent(), /根据原代码及有效阻塞意见生成新版本/u); assert.match(await page.locator('.ep-body').textContent(), /原问题必须逐项复核关闭/u);
+    assert.match(await page.locator('.ep-scope').textContent(), /根据原代码及有效阻塞意见生成新版本/u); assert.match(await page.locator('.ep-body').textContent(), /历史中的全部已知有效阻塞意见/u); assert.match(await page.locator('.ep-body').textContent(), /所有问题必须逐项复核关闭/u);
     state.executions[0].repairBudget = { ...repairBudget, maxCalls: null }; await refresh(page); assert.equal(await consent(page).isChecked(), false); await consent(page).check(); assert.equal(await button.isDisabled(), true);
     state.executions[0].repairBudget = repairBudget; state.executions[0].repairContractRevision = 'old-contract'; await refresh(page); await consent(page).check(); assert.equal(await button.isDisabled(), true);
     state.executions[0].repairContractRevision = 'contract-1'; await refresh(page); assert.equal(await consent(page).isChecked(), false);
@@ -354,7 +354,7 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
     await button.click(); await page.waitForFunction(() => document.querySelector('select[aria-label="执行记录"]').value === 'repair-attempt-2');
     assert.deepEqual(requests.filter(item => item.method === 'POST').at(-1).body, { action: 'repair', profileId: 'library-web-v1', contractRevision: 'contract-1' });
     assert.equal(await consent(page).isChecked(), false); assert.match(await page.locator('.ep-facts').textContent(), /编码调用：1 次/u); assert.match(await page.locator('.ep-facts').textContent(), /输入用量：未知/u);
-    assert.match(await page.locator('.ep-body').textContent(), /阻塞意见记录 execution-1/u); assert.equal(await download(page).count(), 0);
+    assert.match(await page.locator('.ep-body').textContent(), /阻塞意见记录 execution-1/u); assert.match(await page.locator('.ep-body').textContent(), /该代码历史中的全部已知有效阻塞意见/u); assert.equal(await download(page).count(), 0);
     await page.getByRole('combobox', { name: '执行记录', exact: true }).selectOption('execution-1'); assert.match(await page.locator('.ep-facts').textContent(), /输入用量：29897/u);
   });
 

@@ -147,7 +147,11 @@ async function repairFixture(t) {
   Object.assign(failed.versions[0].acceptance.review, { kind: 'model', resolutions: [], openBlockingIssues: 1, issues: [{ severity: issue.severity, file: issue.file, line: issue.line, message: issue.message, evidence: issue.evidence }] });
   await finding.pass({ status: 'failed', acceptanceStatus: 'changes_requested', versions: failed.versions });
   await writeFile(finding.record.reportPath, JSON.stringify(finding.record)); await waitFor(f.service, value => value.executions[0].status === 'failed');
-  Object.assign(f.state, { findingId: execution.id, finding: finding.record, issue, repairs: [], repairFiles: new Map() });
+  Object.assign(f.state, { findingId: execution.id, finding: finding.record, issue });
+  installRepairStub(f); return f;
+}
+function installRepairStub(f) {
+  Object.assign(f.state, { repairs: [], repairFiles: new Map() });
   f.state.startRepair = options => {
     const done = deferred(), changedFiles = files.map(file => ({ ...file, content: file.content + '\n// trusted repair fixture changed source\n' }));
     const record = { id: randomUUID(), ...options.binding, kind: 'web_execution', attemptId: randomUUID(), profileId: 'library-web-v1', providerKind: 'model', reviewerKind: 'model',
@@ -171,11 +175,58 @@ async function repairFixture(t) {
     f.state.repairs.push(entry); return { id: record.id, snapshot: () => structuredClone(record), done: entry.ready.then(() => done.promise),
       cancel() { entry.cancelled++; if (!f.state.manualRepairCancel) entry.finish({ status: 'stopped' }); } };
   };
-  return f;
 }
 async function waitRepair(f) {
   for (let i = 0; i < 300; i++) { if (f.state.repairs.length) { await f.state.repairs.at(-1).ready; return f.state.repairs.at(-1); } await new Promise(resolve => setTimeout(resolve, 5)); }
   assert.fail('trusted repair executor was not constructed');
+}
+async function savePrivateFixture(f, id, record, snapshot = null) {
+  const db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite'));
+  try {
+    db.prepare('UPDATE executions SET record=? WHERE id=?').run(JSON.stringify(record), id);
+    if (snapshot) db.prepare('UPDATE executions SET snapshot=? WHERE id=?').run(JSON.stringify(snapshot), id);
+  } finally { db.close(); }
+  await writeFile(record.reportPath, JSON.stringify(record));
+}
+const reviewOpinion = issue => Object.fromEntries(['severity', 'file', 'line', 'message', 'evidence'].map(key => [key, issue[key]]));
+async function historyRepairFixture(t, nativeCodedReview = false) {
+  const f = await recheckFixture(t), original = structuredClone(f.state.original), gate = original.versions[0].acceptance;
+  const issueA = { id: 'ISSUE-A-original', severity: 'blocking', status: 'open', file: files[0].path, line: 1,
+    message: 'Original blocking problem A', evidence: files[0].content.trim(), originCommit: original.candidateCommit };
+  Object.assign(original, { reviewPolicyHash: projectReviewPolicy.hash, acceptanceStatus: 'changes_requested' });
+  Object.assign(gate, { status: 'changes_requested', issues: [issueA], openIssues: [issueA] });
+  Object.assign(gate.review, { status: 'completed', kind: 'model', openBlockingIssues: 1, issues: [reviewOpinion(issueA)], resolutions: [] });
+  if (nativeCodedReview) delete gate.review.kind;
+  validateProjectReviewResponse(gate.review, { files });
+  await savePrivateFixture(f, f.state.sourceId, original); f.state.original = original; f.state.reportHash = hash(await readFile(original.reportPath, 'utf8'));
+  const { execution } = await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }), finding = await waitRecheck(f), failed = acceptedRecord(finding);
+  const issueB = { ...issueA, id: 'ISSUE-B-new-recheck', message: 'Additional blocking problem B' }, review = failed.versions[0].acceptance;
+  Object.assign(review, { status: 'changes_requested', issues: [{ ...issueA, status: 'resolved', checkedCommit: failed.candidateCommit, resolution: 'Recheck considers A resolved' }, issueB], openIssues: [issueB] });
+  Object.assign(review.review, { kind: 'model', issues: [reviewOpinion(issueB)], openBlockingIssues: 1, resolutions: [{ id: issueA.id, status: 'resolved', reason: 'Recheck considers A resolved' }] });
+  validateProjectReviewResponse(review.review, { files, previousIssues: [issueA] });
+  await finding.pass({ status: 'failed', acceptanceStatus: 'changes_requested', versions: failed.versions });
+  await writeFile(finding.record.reportPath, JSON.stringify(finding.record)); await waitFor(f.service, value => value.executions[0].status === 'failed');
+  Object.assign(f.state, { findingId: execution.id, finding: finding.record, issueA, issueB }); installRepairStub(f); return f;
+}
+// Append an independently completed synthetic audit to temporary private history. Never writes real reports.
+async function appendFindingFixture(f, issues, mutate = () => {}) {
+  const db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite')); let row;
+  try { row = db.prepare('SELECT * FROM executions WHERE id=?').get(f.state.findingId); } finally { db.close(); }
+  const id = randomUUID(), record = structuredClone(f.state.finding), snapshot = JSON.parse(row.snapshot);
+  record.id = randomUUID(); record.attemptId = randomUUID(); record.finishedAt = new Date().toISOString();
+  const directory = path.join(f.rootDir, 'executions', id, 'web-recheck-history'); await mkdir(path.join(directory, 'workspace'), { recursive: true });
+  record.workspace = path.join(directory, 'workspace'); record.reportPath = path.join(directory, 'execution.json');
+  const gate = record.versions[0].acceptance; gate.binding.attemptId = record.attemptId; gate.review.binding.attemptId = record.attemptId;
+  Object.assign(gate, { issues: [{ ...f.state.issueA, status: 'resolved', checkedCommit: record.candidateCommit, resolution: 'Same bytes do not erase the original obligation' }, ...issues], openIssues: issues });
+  Object.assign(gate.review, { issues: issues.map(reviewOpinion), openBlockingIssues: issues.length });
+  mutate(record, snapshot);
+  await mkdir(record.workspace, { recursive: true });
+  await writeFile(record.reportPath, JSON.stringify(record));
+  const store = new DatabaseSync(path.join(f.rootDir, 'service.sqlite'));
+  try { store.prepare('INSERT INTO executions(id,project_id,run_id,attempt,owner,binding,snapshot,record,status,active,created_at) VALUES(?,?,?,?,?,?,?,?,?,0,?)')
+    .run(id, row.project_id, row.run_id, 900 + store.prepare('SELECT COUNT(*) n FROM executions').get().n, row.owner, row.binding, JSON.stringify(snapshot), JSON.stringify(record), 'failed', record.finishedAt); }
+  finally { store.close(); }
+  return { id, record, snapshot };
 }
 
 test('capabilities are explicit reference-only, and start checks current content plus both approvals', async t => {
@@ -1074,16 +1125,116 @@ test('finding tampering during publication inspection cannot pass the final sour
 });
 
 test('an original coded failed row can repair its own valid feedback and simultaneous repair requests reserve only one attempt', async t => {
-  const f = await repairFixture(t), original = structuredClone(f.state.original), gate = original.versions[0].acceptance;
-  original.reviewPolicyHash = projectReviewPolicy.hash; Object.assign(gate, { status: 'changes_requested', issues: [f.state.issue], openIssues: [f.state.issue] });
-  Object.assign(gate.review, { kind: 'model', status: 'completed', resolutions: [], openBlockingIssues: 1, issues: [f.state.issue] });
-  const db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite')); db.prepare('UPDATE executions SET record=? WHERE id=?').run(JSON.stringify(original), f.state.sourceId); db.close();
-  f.state.original = original; await writeFile(original.reportPath, JSON.stringify(original)); f.state.reportHash = createHash('sha256').update(await readFile(original.reportPath)).digest('hex');
+  const f = await historyRepairFixture(t), original = f.state.original;
   assert.equal((await f.service.list(ids)).executions.find(value => value.id === f.state.sourceId).actions.canRepair, true);
   const input = { ...startInput, executionId: f.state.sourceId, action: 'repair' }, requests = await Promise.allSettled([f.service.action(input), f.service.action(input)]);
   assert.equal(requests.filter(value => value.status === 'fulfilled').length, 1); const entry = await waitRepair(f); assert.equal(f.state.repairs.length, 1);
+  assert.deepEqual(entry.options.previousIssues.map(issue => issue.id), [f.state.issueA.id, f.state.issueB.id]);
   assert.equal(entry.options.initialSource.sourceExecutionId, original.id); assert.equal(entry.options.initialSource.reviewSourceExecutionId, original.id); await entry.pass();
   await waitFor(f.service, value => value.executions[0].taskAccepted);
+});
+
+test('repair from either historical entry carries every known blocking obligation even when an unchanged-source recheck called an older issue resolved', async t => {
+  for (const selected of ['sourceId', 'findingId']) {
+    const f = await historyRepairFixture(t), sourceBefore = await readFile(f.state.original.reportPath), findingBefore = await readFile(f.state.finding.reportPath);
+    await f.service.action({ ...startInput, executionId: f.state[selected], action: 'repair' }); const entry = await waitRepair(f);
+    assert.deepEqual(entry.options.previousIssues, [f.state.issueA, f.state.issueB]);
+    await entry.pass(); const result = await waitFor(f.service, value => value.executions[0].status === 'accepted');
+    assert.equal(result.executions[0].taskAccepted, true); assert.equal(entry.record.versions[0].acceptance.review.resolutions.length, 2);
+    assert.deepEqual(await readFile(f.state.original.reportPath), sourceBefore); assert.deepEqual(await readFile(f.state.finding.reportPath), findingBefore);
+    const db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite')), proof = JSON.parse(db.prepare('SELECT snapshot FROM executions WHERE id=?').get(result.executions[0].id).snapshot).repairProof; db.close();
+    assert.equal(proof.findingReports.length, 2); assert.match(proof.findingSetHash, /^[a-f0-9]{64}$/u);
+    assert.ok(!JSON.stringify(result).includes(proof.findingSetHash)); assert.ok(!JSON.stringify(result).includes(f.rootDir));
+  }
+});
+
+test('closing only the selected older issue cannot publish a new repair while another valid same-source issue is unresolved', async t => {
+  const f = await historyRepairFixture(t); await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'repair' }); const entry = await waitRepair(f);
+  await entry.pass(record => { record.versions[0].acceptance.issues = record.versions[0].acceptance.issues.filter(issue => issue.id === f.state.issueA.id);
+    record.versions[0].acceptance.review.resolutions = record.versions[0].acceptance.review.resolutions.filter(issue => issue.id === f.state.issueA.id); return record; });
+  const result = await waitFor(f.service, value => value.executions[0].status === 'failed'); assert.equal(result.executions[0].taskAccepted, false);
+  assert.equal(result.executions[0].actions.canDownload, false); assert.equal(result.executions[0].actions.canPreview, false);
+});
+
+test('native core coded Review uses record reviewerKind and still contributes its blocking history without an invented review.kind field', async t => {
+  const f = await historyRepairFixture(t, true);
+  assert.equal(f.state.original.versions[0].acceptance.review.kind, undefined);
+  assert.equal((await f.service.list(ids)).executions.find(row => row.id === f.state.sourceId).actions.canRepair, true);
+  await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'repair' }); const entry = await waitRepair(f);
+  assert.deepEqual(entry.options.previousIssues, [f.state.issueA, f.state.issueB]); await entry.pass(); await waitFor(f.service, value => value.executions[0].taskAccepted);
+});
+
+test('same-source issue identity conflicts and more than twenty obligations fail closed without truncation or coding', async t => {
+  for (const field of ['message', 'evidence', 'originCommit', 'limit', 'single-report-limit']) {
+    const f = await historyRepairFixture(t);
+    const issues = ['limit', 'single-report-limit'].includes(field) ? Array.from({ length: field === 'limit' ? 19 : 20 }, (_, i) => ({ ...f.state.issueB, id: `ISSUE-extra-${i}`, message: `Additional obligation ${i}` }))
+      : [{ ...f.state.issueB, [field]: field === 'originCommit' ? 'e'.repeat(40) : `${f.state.issueB[field]} changed` }];
+    await appendFindingFixture(f, issues, record => {
+      if (field === 'single-report-limit') { const gate = record.versions[0].acceptance; gate.openIssues.push(f.state.issueA); gate.issues[0] = f.state.issueA;
+        gate.review.resolutions[0].status = 'open'; gate.review.openBlockingIssues = gate.openIssues.length;
+        validateProjectReviewResponse(gate.review, { files, previousIssues: [f.state.issueA] }); }
+    });
+    assert.equal((await f.service.list(ids)).executions.find(row => row.id === f.state.sourceId).actions.canRepair, false);
+    await assert.rejects(f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'repair' }), { code: 'cannot_repair' }); assert.equal(f.state.repairs.length, 0);
+  }
+});
+
+test('each aggregated historical report needs canonical Review evidence, exact binding and its private immutable report', async t => {
+  for (const kind of ['evidence', 'resolutions', 'report', 'policy', 'binding']) {
+    const f = await historyRepairFixture(t), issue = { ...f.state.issueB, id: 'ISSUE-C-history', message: 'Third finding' };
+    const added = await appendFindingFixture(f, [issue], record => {
+      if (kind === 'evidence') { record.versions[0].acceptance.openIssues[0].evidence = 'not present in the source'; record.versions[0].acceptance.issues.at(-1).evidence = 'not present in the source'; }
+      if (kind === 'resolutions') record.versions[0].acceptance.review.resolutions = [];
+      if (kind === 'policy') record.reviewPolicyHash = '0'.repeat(64);
+      if (kind === 'binding') record.versions[0].acceptance.review.binding.planRevision = '0'.repeat(64);
+    });
+    if (kind === 'report') await writeFile(added.record.reportPath, JSON.stringify({ ...added.record, error: 'Report differs from private SQLite history' }));
+    await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'repair' });
+    if (['policy', 'binding'].includes(kind)) { const entry = await waitRepair(f); assert.deepEqual(entry.options.previousIssues.map(issue => issue.id), [f.state.issueA.id, f.state.issueB.id]); entry.finish(); }
+    else { const result = await waitFor(f.service, value => value.executions[0].status === 'failed'); assert.equal(result.executions[0].calls, 0); assert.equal(f.state.repairs.length, 0); }
+  }
+});
+
+test('new same-source valid findings invalidate the pinned set during admission, model assertion, publication and delivery', async t => {
+  for (const phase of ['admission', 'assertion', 'publication', 'download']) {
+    const f = await historyRepairFixture(t), add = () => appendFindingFixture(f, [{ ...f.state.issueB, id: 'ISSUE-C-concurrent', message: 'Concurrent same-source blocking finding' }]);
+    if (phase === 'admission') f.state.inspectHook = async (_options, value) => { const inspected = value(); f.state.inspectHook = null; await add(); return inspected; };
+    const started = await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'repair' });
+    if (phase === 'admission') { const result = await waitFor(f.service, value => value.executions.find(row => row.id === started.execution.id)?.status === 'failed'); assert.equal(f.state.repairs.length, 0); assert.equal(result.executions.find(row => row.id === started.execution.id).calls, 0); continue; }
+    const entry = await waitRepair(f);
+    if (phase === 'publication') { f.state.inspectHook = async (_options, value) => { const inspected = value(); f.state.inspectHook = null; await add(); return inspected; }; await entry.pass(); }
+    else {
+      if (phase === 'download') { await entry.pass(); await waitFor(f.service, value => value.executions[0].taskAccepted); }
+      await add();
+      if (phase === 'assertion') { await assert.rejects(entry.options.assertCurrent(entry.options.binding), { code: 'source_changed' }); await entry.pass(); }
+      else { assert.equal((await f.service.list(ids)).executions.find(row => row.id === started.execution.id).taskAccepted, false); await assert.rejects(f.service.download({ ...ids, executionId: started.execution.id }), { code: 'source_changed' }); }
+    }
+    const result = await waitFor(f.service, value => value.executions.find(row => row.id === started.execution.id)?.status === 'failed'); assert.equal(result.executions.find(row => row.id === started.execution.id).taskAccepted, false);
+    assert.equal(f.state.deliveries.length, 0);
+  }
+});
+
+test('earlier failed repair candidates on the same bytes remain obligations and every pinned witness report stays immutable', async t => {
+  const f = await historyRepairFixture(t), issue = { ...f.state.issueB, id: 'ISSUE-C-failed-repair', message: 'Problem found in an earlier repair candidate' };
+  const added = await appendFindingFixture(f, [issue], (record, snapshot) => {
+    delete snapshot.sourceProof; snapshot.operation = 'repair'; record.kind = 'web_execution'; delete record.provenance;
+    record.calls = 1; record.repairSource = { previousIssues: [f.state.issueA] };
+    const old = record.versions[0]; record.versions.push({ ...structuredClone(old), commit: 'e'.repeat(40), sourceHash: 'f'.repeat(64), acceptance: { status: 'error' } }); record.candidateCommit = 'e'.repeat(40);
+    record.reportPath = record.reportPath.replace('web-recheck-history', 'web-execution-history'); record.workspace = record.workspace.replace('web-recheck-history', 'web-execution-history');
+  });
+  await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'repair' }); const entry = await waitRepair(f);
+  assert.deepEqual(entry.options.previousIssues.map(issue => issue.id), [f.state.issueA.id, f.state.issueB.id, issue.id]);
+  await writeFile(added.record.reportPath, (await readFile(added.record.reportPath, 'utf8')) + '\n');
+  await assert.rejects(entry.options.assertCurrent(entry.options.binding), { code: 'source_changed' }); entry.finish();
+});
+
+test('a new commit returning to other known-blocked bytes cannot wash that history with a passing synthetic gate', async t => {
+  const f = await historyRepairFixture(t); await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'repair' }); const entry = await waitRepair(f);
+  await appendFindingFixture(f, [{ ...f.state.issueB, id: 'ISSUE-C-same-bytes', message: 'These replacement bytes already have a known blocker' }], record => {
+    record.versions[0].sourceHash = hash(entry.files); record.versions[0].acceptance.binding.sourceHash = hash(entry.files); record.versions[0].acceptance.review.binding.sourceHash = hash(entry.files);
+  });
+  await entry.pass(); const result = await waitFor(f.service, value => value.executions.find(row => row.id !== f.state.sourceId && row.operation === 'repair')?.status === 'failed');
+  assert.equal(result.executions.find(row => row.operation === 'repair').taskAccepted, false);
 });
 
 test('real MXC executes exactly one thin failed candidate through the default executor without model calls', {
