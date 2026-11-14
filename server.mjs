@@ -52,6 +52,11 @@ function exactFields(body, fields) {
   return body;
 }
 
+function dataFields(body, fields) {
+  if (Object.keys(body).length !== fields.length || fields.some(field => !Object.hasOwn(body, field))) throw new HttpError(400, '变更请求字段无效，请刷新当前输入版本后重试。');
+  return body;
+}
+
 /** Load local dotenv values without dependencies, never overriding process variables. */
 export async function loadEnv(filename = path.join(ROOT, '.env')) {
   let contents;
@@ -76,6 +81,16 @@ export async function createApp(options = {}) {
   });
   try { await orchestrator.init(); }
   catch (cause) { try { await executionService?.shutdown(); } catch { cause.executionCleanupFailed = true; } throw cause; }
+  let sourceChangeService;
+  try {
+    sourceChangeService = options.sourceChangeService === null ? null : options.sourceChangeService ?? await (await import('./lib/source-change-service.mjs')).createSourceChangeService({
+      rootDir: path.resolve(options.sourceChangeRootDir ?? path.join(store.directory, 'source-changes')), store,
+      withCheckpoint: (projectId, work) => orchestrator.withProjectCheckpoint(projectId, () => {
+        if (typeof executionService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '当前执行服务无法确认项目安全检查点，变更仍可保存为待应用。');
+        return executionService.withProjectCheckpoint(projectId, work);
+      }),
+    });
+  } catch (cause) { await Promise.allSettled([orchestrator.shutdown(), executionService?.shutdown()]); throw cause; }
   let closing;
   const publicDir = path.resolve(options.publicDir ?? path.join(ROOT, 'public'));
   const server = http.createServer(async (request, response) => {
@@ -110,6 +125,30 @@ export async function createApp(options = {}) {
         }
         const projectId = segments[2];
         if (segments.length === 3 && method === 'GET') return respond(response, 200, { project: store.get(projectId) });
+        if (segments[3] === 'changes') {
+          requireLocalExecutionRequest(request, server); store.get(projectId);
+          if (!sourceChangeService) throw new HttpError(404, '当前服务尚未开放需求输入变更。');
+          if (segments.length === 4 && method === 'GET') {
+            const changes = await sourceChangeService.list({ projectId });
+            const current = store.getSourceVersion(projectId), project = store.getPersistedProject(projectId);
+            return respond(response, 200, { current, versions: project.sourceVersions ?? [{ ...current, at: project.createdAt, changeId: null }],
+              changes, capabilities: { canApply: typeof executionService?.withProjectCheckpoint === 'function',
+                ...(typeof executionService?.withProjectCheckpoint === 'function' ? {} : { reason: '当前执行服务无法确认安全检查点，暂时只允许保存待应用变更。' }) } });
+          }
+          if (segments.length === 4 && method === 'POST') {
+            const body = dataFields(await readJson(request), ['baseRevision', 'source', 'reason', 'kind', 'requestKey']);
+            return respond(response, 201, { change: await sourceChangeService.request({ ...body, projectId }) });
+          }
+          if (segments.length === 5 && segments[4] === 'parse' && method === 'POST') {
+            const input = await readJson(request), body = dataFields(input, Object.hasOwn(input, 'fileBase64') ? ['filename', 'fileBase64'] : ['filename', 'content']);
+            return respond(response, 200, { source: parseDocument(body).source });
+          }
+          if (segments.length === 6 && segments[5] === 'apply' && method === 'POST') {
+            const body = dataFields(await readJson(request), ['baseRevision', 'generation']);
+            return respond(response, 200, { change: await sourceChangeService.apply({ ...body, projectId, changeId: segments[4] }) });
+          }
+          throw new HttpError(['GET', 'POST'].includes(method) ? 404 : 405, '未找到该变更接口或请求方法不受支持。');
+        }
         if (segments[3] !== 'runs') throw new HttpError(404, '未找到该接口。');
         if (segments.length === 4 && method === 'POST') return respond(response, 201, { run: await orchestrator.createRun(projectId, await readJson(request)) });
         const runId = segments[4];
@@ -182,14 +221,14 @@ export async function createApp(options = {}) {
   server.headersTimeout = 15_000;
   const close = () => {
     if (!closing) closing = (async () => {
-      const results = await Promise.allSettled([orchestrator.shutdown(), executionService?.shutdown()]);
+      const results = await Promise.allSettled([orchestrator.shutdown(), executionService?.shutdown(), sourceChangeService?.shutdown()]);
       if (server.listening) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       const failure = results.find(result => result.status === 'rejected');
       if (failure) throw failure.reason;
     })();
     return closing;
   };
-  return { server, store, orchestrator, executionService, close };
+  return { server, store, orchestrator, executionService, sourceChangeService, close };
 }
 
 export async function startServer(options = {}) {
