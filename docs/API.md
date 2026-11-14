@@ -164,6 +164,8 @@ repair用于当前失败候选具有有效、完整、同代码版本的阻塞Re
 
 准入从建立行时计入总时长，核心只取得剩余预算；未知停止继续占用活动槽。新候选至少一次编码、源码hash及提交变化，原阻塞问题跨轮保留并明确逐项resolved，自检、独立HTTP/SQLite、真实Edge及Review共同通过后才能accepted。恢复到完整原seed、遗漏原问题、来源中途变化、版本失效均不能发布通过。当前用量只记新调用，原失败及成本不覆盖；下载/预览再查来源与当前候选完整性。
 
+修复义务按同规划绑定、当前规则及相同源码hash聚合所有合法Review中的历史open blocking，不因选择较早的失败记录、同代码的新提交或之后的重审而删除。模型输入和发布条件包含全部这些问题，私有proof固定发现记录与原报告hash集合，每次模型调用及发布再次核对；新发现、报告改变、重复ID内容冲突或超过20问题/64记录边界都保守拒绝，不能截断问题。普通编码Review允许当前core的缺省kind，但必须有record.reviewerKind=model的实际来源；复验Review仍要求kind=model，诊断不能授权。
+
 服务持久化在独立SQLite中，原规划JSON不迁移。owner与活动槽事务控制同run拒重；每次状态控制递增版本，异步结束重新核对，取消或待协调不能被迟到成功覆盖。`source_history`和`preview_history`私有保留正常及未知停止证据。旧双活存档迁移保留多个待协调历史而不撞唯一索引；未知进程不自动当作已停止，阻止新的活动。该单控制器生命周期不等于多Worker租约/可靠恢复，正式TaskStore及通用验收模型尚未接入此链路。
 
 可信程序可`createApp({executionService?,executionRootDir?})`注入服务；`executionService:null`明确关闭网页执行。`startServer({loadEnv:false})`允许测试/嵌入宿主跳过本地.env读取，默认仍加载配置。这些选项不通过HTTP暴露。

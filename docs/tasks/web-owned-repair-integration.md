@@ -7,3 +7,7 @@
 HTTP只接收action/profileId/contractRevision三字段，来源执行编号来自路由，再由服务派生原编码记录与发现问题记录。recheck仍为0编码新检查，不能冲掉已有有效新阻塞；retry为新起点，repair保留当前源和问题。格式错误Review没有可信阻塞，不开放repair。
 
 实际root接线检查：8/8 HTTP专项通过，覆盖准确3字段与路径身份、缺字段/任意来源与seed注入拒绝、来源变化409不变为成功、同源访问及关闭回归。组件作者73项服务（含薄真实MXC负例）及23项Edge属组件证据，正向仍可信依赖，不当作真实模型业务验收。固定集成后需要本轮全量、独立Review，以及同一私有真实失败候选的网页付费修复、预览/源码下载及干净复现；尚未执行的步骤不能写成完成。
+
+1c754独立探针BLOCK：原coded的A后，在同代码recheck复核A但发现新B；选旧coded仅传A，合成完整新gate可漏掉B而通过。原独立证据保留。ef1d153修复按同binding/currentpolicy/sourceHash聚合全部合法历史blocking，固定每个owned报告hash及集合，调用/发布再次核对；只关A不得通过，冲突/超限拒绝，不用旧Review洗掉义务。普通coded Review按真实core缺省kind兼容但保持model来源，复验必须显式model。作者最终81服务（显式原薄MXC）/23真实Edge/87语法通过；本树pick为2731b8b，尚待非作者复验。
+
+本树又串行合入已独立FIX的F05 f176（相同checkpoint三文件blob已核对后解决重复cherry-pick冲突），其P3跨项目toast在380/620修复及真实Edge新项验证；并引入规格预算/回执91d49及根health/UI接线，相关独立Review另行记录。这是新的组合版本，必须重新全量和独立检查，不能拼接各组件通过宣称已验收。
