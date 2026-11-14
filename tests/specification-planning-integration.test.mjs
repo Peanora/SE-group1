@@ -111,7 +111,8 @@ test('a non-cooperative provider times out, blocks new work until truly settled,
 });
 
 test('shutdown interrupts ownership promptly; late completion does not alter history and a restart can explicitly retry', async t => {
-  const gate = deferred(); const x = await setup(t, { provider: () => gate.promise }); await waitFor(() => x.run.specificationHistory?.length === 1);
+  const gate = deferred(), entered = deferred(); const x = await setup(t, { provider: () => { entered.resolve(); return gate.promise; } });
+  await entered.promise; assert.equal(x.invocations(), 1); assert.equal(x.run.specificationHistory[0].requestState, 'running');
   const started = Date.now(); await x.orchestrator.shutdown(); assert.ok(Date.now() - started < 1000); const old = structuredClone(x.run.specificationHistory[0]);
   assert.equal(old.code, 'cancelled'); assert.equal(old.requestState, 'unconfirmed'); assert.equal(x.run.spec, null);
   const store = await new ProjectStore(x.directory).init(), next = new Orchestrator(store, { ...x.trusted, analyzeWithModel: x.actual }, { stepDelayMs: 0 }); x.register(next); await next.init();
@@ -119,6 +120,23 @@ test('shutdown interrupts ownership promptly; late completion does not alter his
   await next.action(project.id, run.id, { action: 'retry', stageId: 'spec' }); await waitFor(() => run.status === 'awaiting_spec' && !next.state(run).active.size && !next.state(run).driving);
   gate.resolve({ title: 'late previous controller' }); await delay(15); assert.deepEqual(run.specificationHistory[0], old); assert.equal(run.specificationHistory.length, 2); assert.equal(run.specificationCalls, 2);
   assert.deepEqual(x.run.specificationHistory[0], old); assert.equal(x.run.spec, null);
+});
+
+test('shutdown before a reserved specification is dispatched records not_started and never enters the provider', async t => {
+  const entered = deferred(), release = deferred(); let originalSave;
+  const x = await setup(t, { provider: () => assert.fail('派发前关闭不能调用模型'), beforeRun: x => {
+    originalSave = x.store.save.bind(x.store); let held = false;
+    x.store.save = async project => { if (!held && project.runs.some(run => run.specificationHistory?.length === 1)) { held = true; entered.resolve(); await release.promise; } return originalSave(project); };
+  } });
+  try {
+    await entered.promise; assert.equal(x.invocations(), 0);
+    const stopping = x.orchestrator.shutdown(); release.resolve(); await stopping;
+    const attempt = x.run.specificationHistory[0]; assert.equal(attempt.code, 'cancelled'); assert.equal(attempt.requestState, 'not_started');
+    assert.equal(x.invocations(), 0); assert.equal(x.run.spec, null); assert.equal(x.run.approvals.spec, null);
+    let callbackEntered = false;
+    await assert.rejects(x.orchestrator.withProjectCheckpoint(x.project.id, () => { callbackEntered = true; }), { status: 409, code: 'project_checkpoint' });
+    assert.equal(callbackEntered, false);
+  } finally { release.resolve(); x.store.save = originalSave; }
 });
 
 test('a hung receipt writer is bounded and its late success or error cannot mutate finalized metadata', async t => {
