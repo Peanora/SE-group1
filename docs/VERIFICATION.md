@@ -161,3 +161,10 @@ passed只表示固定`library-borrow-v1`在当前清单和Review规则下通过�
 原7fd源报告SHA256仍565f25d74b888d107a7656a4c7d5f9609f7fa27a0aa5e5fa7353cfc7f9be7aac，原源码hash仍3c3cfa5f34432544b1771033dfe4d957762fc58109caeea9a6ebc1bcbdb01804；没有覆盖旧失败或重复计量。临时平台79852的非PTY stdin已关闭，不能发送STOP；在只读核对活动0、无预览、PID/命令和端口归属后停止该已知QA进程，52086不再监听，applicationShutdownAcknowledged:false。停止证据second-trial-platform-stop.json保留，不宣称取得正常应答；此限制只涉及临时平台关闭，测试应用/浏览器在此前已正常收尾。用户4317服务未动。
 
 实际工程规划另在独立FIX代码20363ee验证：原source/spec revision及规格字节不变，工程尝试1的invalid_input在历史保留；只重试工程阶段，新增规格0、实际工程1、3447输入/2406输出，生成17需求映射下2实体/4接口/2页面/6任务，确认并导出规划包。engineeringCalls=2是本地尝试总数，不能说两次收费；首次规格调用用量未记录。包SHA256 6adc95ead5e485650625fc898d65b6200e36f02fca9302d6abde54143707e22f、78070bytes；包内plan字节/engineering hash一致，私有回执摘要hash匹配，未发现配置密钥或私有回执标记。证据output/real-engineering-planning-9HYn7w/archive-proof.json。该次code0/businessAccepted:false，临时服务正常关闭。203与主集成工程策略hash已实核相同，仍不推导任意业务生成或整体F02充分性。
+# 2026-11-14 同项目需求输入版本集成 f17671f
+
+固定`f17671f48caffcdf08a702671e2938989986b2be`已集成。主检95脚本及显式真实MXC/Edge全量590/590，0失败/取消/跳过，102035.5745ms；非作者独立同版本95脚本、590/590，0失败/取消/跳过，101908.6853ms，前后Git干净。测试文件并发4；此前24文件并发未知停止的根因未确定，不据此宣称已解决。
+
+新增真实产品HTTP5项和Edge2项验证标准DOCX到草稿、保存/应用分离、双服务检查点、旧输入与审批只读、新run新sourceGeneration和重新双确认导出、外部发布轮询撤权、窄屏焦点/草稿保留；独立组合探针1项额外使用真实HTTP/JSON/双SQLite确认异步批量DTO全撤权和重开一致。独立FIX保留通知P3：父级刷新迟到可在另一项目显示旧成功toast，数据与权限未变。下一组合380f83a/620246d已有修复及实际Edge回归，组合尚未放行。证据`output/verification/independent-source-change-integration-f17671f-20261114/RESULT.md`，root日志在独立集成树的忽略输出中。
+
+source-panel原4e2专项虽13/13，独立发现交错GET漏onApplied后BLOCK；63b修复经另一非作者16/16 Edge及原post503/overlap探针新副本FIX。repair service原1c754专项73/73真实MXC与23/23 Edge虽过，独立同源历史问题探针证实旧记录遗漏新blocking，仍BLOCK返工，未作真实模型修复。两次旧真实候选的报告/源码hash保持原样，修复前私有校验记录`output/reference-web-ui-FYeJdW/pre-repair-root-proof.json`不授予通过。此阶段零付费调用、未动4317用户服务，未推送或部署；需求输入发布不等于目标业务代码或迁移已执行。
