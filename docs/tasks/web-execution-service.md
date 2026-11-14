@@ -57,3 +57,23 @@ getPlanning必须返回与ID匹配的project/run；run需有workflowVersion=2、
 新增DTO回归同时覆盖三个检查分支：正常`HTTP 200`与`{"status":503}`保留，expected/actual中的已知key和Windows/Unix私有路径遮蔽，长文本截断，额外PID/stdout及非文本进程对象不透传，浏览器仅有error的旧形态继续兼容。
 
 本小修实际运行`node --test tests/web-execution-service.test.mjs`：29通过、真实MXC项1显式跳过，无失败；`npm run check`为62脚本通过，`git diff --check`通过。按本轮范围未重复真实MXC或付费模型，未改根集成树及网页。需在固定提交后短只读Review，再由主Agent串行接入并验证网页展示。
+
+## 自有原始候选的网页固定代码复验（本轮实现，待独立复验）
+
+基准2365067，独立树codex/web-owned-recheck-service，仅修改服务/UI与其测试和两份任务记录。新增action:recheck、actions.canRecheck及“重新检查固定代码”，费用确认仍绑定当前双审批、范围及预算。新attempt不编码，仅使用原提交重新运行全部检查和新Review；旧失败及旧用量保留，新row只计新Review。list只作元数据准入，不周期运行Git。
+
+来源路径及五字段sourceBinding只能从服务私有原始row导出；不接受HTTP路径、报告或绑定。深准入使用core inspector，在Review前核对原回执、Git、报告、停止证据及上下文，新快照存到新row根。复验来源禁止递归；已通过复验的无.git快照必须通过单独provenance分支复核当前快照、原报告哈希、原Git、原上下文及完整bytes，普通编码候选的Git要求不放宽。core扩展由独立Agent唯一写入，固定后作为依赖集成。本轮不写真实来源、不调用付费API。
+
+已集成独立FIX的core c16e259（本树cherry-pick为7c2257d），API保持`inspectRecheckSource/startRecheck`仅可信构造注入。list的轻量资格仅解析私有元数据，实际Review前完整inspector必须与原SQLite record逐项JSON内容一致，summary的root、五字段context、report/hash、commit/sourceHash/shellHash也必须相符；新快照归属root/executions/新row，而原root从sourceServiceExecutionId派生。复验preview/download每次重新验证原报告哈希、Git及回执，再对当前无.git快照逐字节哈希和保护壳核对。
+
+验收contract升级不阻止代码复用：原row的旧contract必须存在且为合法hash，profile/task和当前source/spec/plan上下文仍完全一致。新row使用当前contract、当前全部检查及新Review；原accepted行仍须当前contract及完整gate才可直接预览或下载。私有snapshot保存sourceContractRevision，旧通过结论不能转移。
+
+当前收费动作契约收紧为`action({projectId,runId,executionId,action:'retry'|'recheck',profileId,contractRevision})`；缺当前两字段为400，旧版/错误值为409且不启动模型。非收费动作仍仅允许原四字段，客户端路径、binding、report、functions或budget全部拒绝。旧retry请求不再自动补当前contract，必须刷新重选并确认费用。新增DTO仅含kind、sourceExecutionId（服务UUID）、sourceCommit、recheckContractRevision（当前可选范围）、recheckBudget及actions.canRecheck；不暴露原始路径/收据。
+
+服务专项的新增回归使用明确可信fake inspector/recheck及fabricated receipts，只证明生命周期/版本/完整门禁接线，不证明真实业务软件验收。覆盖0coding及只计新Review、原失败/用量/原文件保留、并发拒重、错误路径/回执/binding、旧contract新检但旧accepted不可下载、stale/cancel/unknown/重启、阻塞与新失败不继承旧passed、无.git预览/下载、快照或报告hash篡改。真实正向网页复验及付费Review由根在固定且独立通过后另行验收，本轮没有执行。
+
+新增有效阻塞问题不能通过反复重审被清空：仅检查同project/run、相同commit和sourceHash的私有已结束复验元数据，要求完整model Review状态、版本/上下文/策略绑定和真实问题字段。原报告已有问题仍走core的previousIssues及显式resolution；复验新发现的open blocking在当前实现没有跨复验resolution通道，因此保守禁止该提交继续recheck，并撤下同代码早期accepted行当前taskAccepted、预览和下载权限，历史状态与原报告保持不变。可使用当前收费契约retry形成新代码版本；正式问题争议与修复入口尚未实现。格式错误的Review响应、不同提交的问题不会触发此限制，list不为此运行Git。
+
+本轮最终实际验证：显式启用`TASKFLOW_TEST_REAL_SANDBOX=1`并指定已验证本地执行程序，`node --test tests/web-execution-service.test.mjs`为**42/42通过、0跳过**。其中只有原有薄失败候选使用真实执行器/Git/MXC，模型返回由可信薄fixture提供，产生真实文件与失败自检，仍未验收、用量未知、下载关闭、0付费；新增正向复验及预览/下载路径使用可信依赖注入，不能称为真实业务全流程通过。`node --test tests/execution-panel.test.mjs`真实系统Edge平台UI fixture为**19/19通过**（18场景及父项），覆盖桌面与390×844；`npm run check`为77脚本通过，`git diff --check`通过。最后仅补本文及UI任务记录，不再更改被测脚本。
+
+固定后待不同作者独立专项及根HTTP/UI串行集成回归；本树未写真实QA/data或主树，未发起真实API，未推送或部署。服务仍为单控制器SQLite生命周期，重启未知进程保留reconciliation_required；未新增多Worker恢复能力或task-store接入。

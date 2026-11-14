@@ -10,7 +10,7 @@ const context = { projectId: 'project-a', runId: 'run-a', planningStatus: 'confi
 const marker = '<img src=x onerror="window.uiInjected=true"><script>window.uiInjected=true</script>';
 function execution(overrides = {}) {
   return {
-    id: 'execution-1', status: 'awaiting_acceptance', stage: '独立检查', taskAccepted: false,
+    id: 'execution-1', profileId: 'library-web-v1', contractRevision: 'contract-1', status: 'awaiting_acceptance', stage: '独立检查', taskAccepted: false,
     calls: 1, reviewCalls: 1, usage: { inputTokens: null, outputTokens: null },
     budget: { maxCalls: 3, maxReviewCalls: 3, timeoutMs: 600000 }, error: null,
     actions: { canCancel: true, canRetry: false, canPreview: false, canStopPreview: false, canDownload: false },
@@ -82,7 +82,10 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
   const start = page => page.getByRole('button', { name: '使用配置模型开始执行', exact: true });
   const consent = page => page.getByRole('checkbox');
   const download = page => page.getByRole('link', { name: '下载已验收源码' });
-  async function pendingPostPage() {
+  const recheckBudget = { maxCalls: 0, maxReviewCalls: 2, timeoutMs: 180000 };
+  const recheckRecord = overrides => execution({ status: 'failed', profileId: 'library-web-v1', contractRevision: 'contract-1', recheckBudget,
+    actions: { canRecheck: true, canRetry: true }, ...overrides });
+  async function pendingPostPage({ recheck = false } = {}) {
     const page = await pageFor();
     await page.evaluate(async ({ initialContext, runA, runB }) => {
       window.panel.destroy();
@@ -94,19 +97,20 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
         window.crossRequests.push({ url, method });
         if (method === 'GET') return Promise.resolve(structuredClone(states[runId]));
         return new Promise((resolve, reject) => {
-          window.crossPosts.push({ runId, complete(response) {
+          window.crossPosts.push({ runId, body: JSON.parse(options.body), complete(response) {
             states[runId].executions = [response.execution]; resolve(response);
           }, fail() { reject(Object.assign(new Error('旧运行操作失败，不应显示在新运行'), { status: 409 })); } });
         });
       };
       window.panel = createExecutionPanel({ api, getContext: () => window.context, onError: error => window.errors.push(error.message) });
       await window.panel.mount(document.querySelector('#panel'));
-    }, { initialContext: context, runA: fixture({ executions: [execution({ id: 'run-a-record' })] }), runB: fixture({ executions: [execution({ id: 'run-b-record' })] }) });
+    }, { initialContext: context, runA: fixture({ executions: [(recheck ? recheckRecord : execution)({ id: 'run-a-record' })] }), runB: fixture({ executions: [(recheck ? recheckRecord : execution)({ id: 'run-b-record' })] }) });
     return page;
   }
-  async function assertPendingPostIsolation({ oldResult = 'success', revisit = false }) {
-    const page = await pendingPostPage();
-    await consent(page).check(); await start(page).click();
+  async function assertPendingPostIsolation({ oldResult = 'success', revisit = false, action = 'start' }) {
+    const page = await pendingPostPage({ recheck: action === 'recheck' });
+    const trigger = action === 'recheck' ? page.getByRole('button', { name: '重新检查固定代码', exact: true }) : start(page);
+    await consent(page).check(); await trigger.click();
     await page.waitForFunction(() => window.crossPosts.length === 1);
     await page.evaluate(async () => { window.context.runId = 'run-b'; await window.panel.refresh(); });
     const selected = page.getByRole('combobox', { name: '执行记录', exact: true });
@@ -118,7 +122,7 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
       assert.equal(await selected.inputValue(), 'run-a-record');
     }
     const currentRun = revisit ? 'run-a' : 'run-b';
-    await consent(page).check(); assert.equal(await start(page).isEnabled(), true); await start(page).click();
+    await consent(page).check(); assert.equal(await trigger.isEnabled(), true); await trigger.click();
     await page.waitForFunction(() => window.crossPosts.length === 2);
     assert.equal(await page.evaluate(() => window.crossPosts[1].runId), currentRun);
     const reads = await page.evaluate(() => window.crossRequests.filter(item => item.method === 'GET').length);
@@ -227,6 +231,9 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
     await consent(page).check();
     assert.equal(await page.getByRole('button', { name: '重新执行', exact: true }).isEnabled(), true);
     assert.deepEqual(requests.find(item => item.method === 'POST').body, { action: 'cancel' });
+    postExecution = execution({ id: 'retry-attempt', status: 'preparing', actions: {} });
+    await page.getByRole('button', { name: '重新执行', exact: true }).click(); await page.waitForFunction(() => document.querySelector('select[aria-label="执行记录"]').value === 'retry-attempt');
+    assert.deepEqual(requests.filter(item => item.method === 'POST').at(-1).body, { action: 'retry', profileId: 'library-web-v1', contractRevision: 'contract-1' });
   });
 
   await t.test('source download requires both backend permission and explicit task acceptance', async () => {
@@ -275,6 +282,45 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
     assert.equal(await page.getByRole('button', { name: '启动本地预览', exact: true }).count(), 0);
   });
 
+  await t.test('fixed-code recheck requires cost acknowledgement, matching scope and known zero-coding budget', async () => {
+    const page = await pageFor(); state.capabilities.recheckBudget = recheckBudget; state.executions = [recheckRecord({ usage: { inputTokens: 900, outputTokens: 100 } })]; await refresh(page);
+    const button = page.getByRole('button', { name: '重新检查固定代码', exact: true }), profiles = page.getByRole('combobox', { name: '执行范围', exact: true });
+    assert.equal(await button.isDisabled(), true); await consent(page).check(); assert.equal(await button.isEnabled(), true);
+    await button.focus(); await refresh(page); assert.equal(await button.evaluate(element => document.activeElement === element), true);
+    assert.match(await page.locator('.ep-scope').textContent(), /编码最多 0 次/u);
+    await profiles.selectOption('library-web-v2'); await consent(page).check(); assert.equal(await button.isDisabled(), true);
+    await profiles.selectOption('library-web-v1'); await consent(page).check();
+    state.executions[0].contractRevision = 'old-contract'; state.executions[0].recheckContractRevision = 'contract-1'; await refresh(page);
+    assert.equal(await button.isEnabled(), true, 'old QA contract must not block current-contract recheck');
+    state.executions[0].recheckBudget = { ...recheckBudget, maxCalls: null }; await refresh(page); assert.equal(await button.isDisabled(), true);
+    state.executions[0].recheckBudget = recheckBudget; state.capabilities.recheckBudget = { ...recheckBudget, maxReviewCalls: 1 }; await refresh(page);
+    assert.equal(await consent(page).isChecked(), false);
+    await page.evaluate(() => { window.context.planningStatus = 'succeeded'; }); await refresh(page); await consent(page).check(); assert.equal(await button.isDisabled(), true);
+    await page.evaluate(() => { window.context.planningStatus = 'confirmed'; }); await refresh(page); await consent(page).check();
+    postStatus = 409; await button.click(); await page.getByRole('alert').waitFor({ state: 'visible' });
+    assert.equal(await consent(page).isChecked(), true); assert.equal(await profiles.inputValue(), 'library-web-v1');
+    postStatus = 200; await refresh(page); postExecution = recheckRecord({ id: 'recheck-attempt-2', kind: 'web_recheck', sourceExecutionId: 'execution-1', sourceCommit: 'a'.repeat(40),
+      calls: 0, reviewCalls: 0, usage: { inputTokens: null, outputTokens: null }, budget: recheckBudget, versions: [], status: 'preparing', actions: { canCancel: true, canDownload: true } });
+    await button.click(); await page.waitForFunction(() => document.querySelector('select[aria-label="执行记录"]').value === 'recheck-attempt-2');
+    assert.deepEqual(requests.filter(item => item.method === 'POST').at(-1).body, { action: 'recheck', profileId: 'library-web-v1', contractRevision: 'contract-1' });
+    assert.match(await page.locator('.ep-facts').textContent(), /编码调用：0 次/u); assert.match(await page.locator('.ep-facts').textContent(), /输入用量：未知/u);
+    assert.match(await page.locator('.ep-body').textContent(), /本次编码调用：0 次/u); assert.equal(await download(page).count(), 0);
+    state.executions[0].calls = null; await refresh(page); assert.match(await page.locator('.ep-body').textContent(), /本次编码调用：未知 次/u);
+    await page.getByRole('combobox', { name: '执行记录', exact: true }).selectOption('execution-1'); assert.match(await page.locator('.ep-facts').textContent(), /输入用量：900/u);
+  });
+
+  await t.test('fixed-code recheck action and source notice fit desktop and 390×844 without overflow', async () => {
+    for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
+      const page = await pageFor(viewport); state.capabilities.recheckBudget = recheckBudget; state.executions = [recheckRecord()]; await refresh(page); await consent(page).check();
+      const button = page.getByRole('button', { name: '重新检查固定代码', exact: true }); assert.equal(await button.isEnabled(), true);
+      const box = await button.boundingBox(); assert.ok(box.x >= 0 && box.x + box.width <= viewport.width);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      if (process.env.EXECUTION_PANEL_SCREENSHOTS === '1') {
+        await mkdir(new URL('output/playwright/', root), { recursive: true }); await page.screenshot({ path: fileURLToPath(new URL(`output/playwright/recheck-panel-${viewport.width}.png`, root)), fullPage: true });
+      }
+    }
+  });
+
   await t.test('desktop and 390×844 have usable controls, visible evidence and no horizontal overflow', async () => {
     for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
       const page = await pageFor(viewport); state.executions[0].id = 'execution-' + 'long-id'.repeat(80); await refresh(page);
@@ -309,6 +355,10 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
 
   await t.test('revisiting a run keeps the newer action token even when the old POST has the same context key', async () => {
     for (const oldResult of ['success', 'error']) await assertPendingPostIsolation({ oldResult, revisit: true });
+  });
+
+  await t.test('late fixed-code recheck replies preserve the newer action token across a run revisit', async () => {
+    for (const oldResult of ['success', 'error']) await assertPendingPostIsolation({ oldResult, revisit: true, action: 'recheck' });
   });
 
   await t.test('an action supersedes an old read without stopping subsequent polling', async () => {

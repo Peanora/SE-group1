@@ -120,7 +120,7 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
     const errorBox = node('p', 'ep-notice ep-error'); errorBox.setAttribute('role', 'alert');
     const scope = node('div', 'ep-scope');
     scope.append(node('p', '', '首版仅开放服务端列出的固定示例，不支持将任意需求直接生成软件。执行使用服务端已配置的模型，会产生正常用量。'));
-    const profileDescription = node('p'), model = node('p', 'ep-muted'), budget = node('p', 'ep-muted'); scope.append(profileDescription, model, budget);
+    const profileDescription = node('p'), model = node('p', 'ep-muted'), budget = node('p', 'ep-muted'), recheckBudget = node('p', 'ep-muted'); scope.append(profileDescription, model, budget, recheckBudget);
     const profiles = node('select'); profiles.setAttribute('aria-label', '执行范围');
     const startButton = button('使用配置模型开始执行', () => { void perform('start'); }, true);
     const controls = node('div', 'ep-controls'); controls.append(field('执行范围', profiles), startButton);
@@ -134,20 +134,21 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
     const identity = node('p'), calls = node('p'), usage = node('p'), executionBudget = node('p'); facts.append(identity, calls, usage, executionBudget);
     const actions = node('div', 'ep-actions');
     const cancel = button('请求停止', () => { void perform('cancel'); }), retry = button('重新执行', () => { void perform('retry'); });
+    const recheck = button('重新检查固定代码', () => { void perform('recheck'); });
     const showPreview = button('启动本地预览', () => { void perform('preview'); }), stopPreview = button('停止预览', () => { void perform('stop_preview'); });
     const previewLink = node('a', 'ep-link', '打开本地预览'); previewLink.target = '_blank'; previewLink.rel = 'noopener noreferrer';
     const download = node('a', 'ep-link', '下载已验收源码'); download.setAttribute('download', '');
-    actions.append(cancel, retry, showPreview, stopPreview, previewLink, download);
-    const previewNotice = node('p', 'ep-muted'), versions = node('div');
+    actions.append(cancel, retry, recheck, showPreview, stopPreview, previewLink, download);
+    const recheckNotice = node('p', 'ep-muted'), previewNotice = node('p', 'ep-muted'), versions = node('div');
     const diff = section('本次代码差异', detail), diffText = node('pre'); diff.body.append(diffText);
     const eventSection = section('真实执行事件', detail, true), eventList = node('ol', 'ep-event-list'), noEvents = node('p', 'ep-muted', '尚无执行事件。');
     eventSection.body.append(noEvents, eventList);
-    detail.prepend(result, state, failure, facts, actions, previewNotice, node('h3', '', '代码版本与独立检查'), versions);
-    refs = { refreshButton, notice, errorBox, profileDescription, model, budget, profiles, startButton, consent, revisions, executions, empty, detail,
-      result, state, failure, identity, calls, usage, executionBudget, cancel, retry, showPreview, stopPreview, previewLink, download, previewNotice, versions, diffText, eventList, noEvents };
+    detail.prepend(result, state, failure, facts, recheckNotice, actions, previewNotice, node('h3', '', '代码版本与独立检查'), versions);
+    refs = { refreshButton, notice, errorBox, profileDescription, model, budget, recheckBudget, profiles, startButton, consent, revisions, executions, empty, detail,
+      result, state, failure, identity, calls, usage, executionBudget, cancel, retry, recheck, recheckNotice, showPreview, stopPreview, previewLink, download, previewNotice, versions, diffText, eventList, noEvents };
     profiles.addEventListener('change', () => { consent.checked = false; render(); });
     consent.addEventListener('change', render);
-    executions.addEventListener('change', () => { selectedId = executions.value; preview = null; render(); });
+    executions.addEventListener('change', () => { selectedId = executions.value; consent.checked = false; preview = null; render(); });
     element.append(root);
   }
 
@@ -216,13 +217,15 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
     if (!refs || destroyed) return;
     const busy = activeAction !== null;
     const ready = loadState === 'ready', capabilities = data?.capabilities || {}, profiles = Array.isArray(capabilities.profiles) ? capabilities.profiles : [];
-    const signature = JSON.stringify([profiles, capabilities.model, capabilities.budget]);
+    const signature = JSON.stringify([profiles, capabilities.model, capabilities.budget, capabilities.recheckBudget]);
     if (signature !== profileSignature) { refs.consent.checked = false; profileSignature = signature; }
     const profileId = updateOptions(refs.profiles, profiles.map(item => ({ id: item.id, label: item.title || item.id })), refs.profiles.value, '暂无可执行范围');
     const profile = profiles.find(item => item.id === profileId);
     refs.profileDescription.textContent = profile ? `${profile.description || '服务端尚未提供范围说明。'}（范围版本：${text(profile.contractRevision)}）` : '服务端尚未提供可执行范围。';
     refs.model.textContent = `配置模型：${capabilities.model?.name || '名称未知，以服务端配置为准'}`;
     refs.budget.textContent = `本轮预算：${budgetText(capabilities.budget)}`;
+    refs.recheckBudget.hidden = !capabilities.recheckBudget;
+    refs.recheckBudget.textContent = capabilities.recheckBudget ? `固定代码重新检查的独立预算：${budgetText(capabilities.recheckBudget)}。保留原提交，全部检查和Review重新执行，旧失败和用量保留。` : '';
     refs.revisions.textContent = `当前规格版本：${text(context.specRevision)}；计划版本：${text(context.planRevision)}`;
     refs.notice.hidden = false;
     refs.notice.textContent = !context.projectId || !context.runId ? '选择一个已确认规格与计划的运行后查看执行。'
@@ -252,10 +255,19 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
     refs.usage.textContent = `输入用量：${count(execution.usage?.inputTokens)} token；输出用量：${count(execution.usage?.outputTokens)} token`;
     refs.executionBudget.textContent = `执行预算：${budgetText(execution.budget)}`;
     const actions = execution.actions || {};
-    for (const [element, permission] of [[refs.cancel, 'canCancel'], [refs.retry, 'canRetry'], [refs.showPreview, 'canPreview'], [refs.stopPreview, 'canStopPreview']]) {
+    for (const [element, permission] of [[refs.cancel, 'canCancel'], [refs.retry, 'canRetry'], [refs.recheck, 'canRecheck'], [refs.showPreview, 'canPreview'], [refs.stopPreview, 'canStopPreview']]) {
       element.hidden = actions[permission] !== true; element.disabled = busy || !ready || actions[permission] !== true;
     }
-    refs.retry.disabled ||= !confirmed(context) || !refs.consent.checked;
+    refs.retry.disabled ||= !confirmed(context) || !refs.consent.checked || !profile?.id || !profile.contractRevision || profile.id !== execution.profileId;
+    const checkBudget = execution.recheckBudget ?? capabilities.recheckBudget;
+    const recheckScope = profile?.id === execution.profileId && profile?.contractRevision === (execution.recheckContractRevision ?? execution.contractRevision);
+    const recheckBudgetKnown = checkBudget?.maxCalls === 0 && Number.isInteger(checkBudget.maxReviewCalls) && checkBudget.maxReviewCalls >= 1 && checkBudget.maxReviewCalls <= 2
+      && Number.isInteger(checkBudget.timeoutMs) && checkBudget.timeoutMs > 0;
+    refs.recheck.disabled ||= !confirmed(context) || !refs.consent.checked || !recheckScope || !recheckBudgetKnown;
+    refs.recheckNotice.hidden = execution.kind !== 'web_recheck' && actions.canRecheck !== true;
+    refs.recheckNotice.textContent = execution.kind === 'web_recheck'
+      ? `本次固定原提交 ${text(execution.sourceCommit)}；来源记录 ${text(execution.sourceExecutionId)}。本次编码调用：${count(execution.calls)} 次；检查和Review均为本次全新执行，旧记录及用量保留。`
+      : `重新检查固定代码会保留提交 ${text(execution.versions?.at(-1)?.commit)}，不修改源码；${budgetText(checkBudget)}。全部检查与Review重新执行，原记录不覆盖。`;
     refs.download.hidden = !ready || actions.canDownload !== true || execution.taskAccepted !== true;
     if (refs.download.hidden) refs.download.removeAttribute('href'); else refs.download.href = `${basePath()}/${encodeURIComponent(execution.id)}/download`;
     const previewValue = Object.hasOwn(execution, 'preview') ? execution.preview : preview, url = previewURL(previewValue);
@@ -296,10 +308,12 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
     if (activeAction) return;
     const execution = currentExecution(), profile = data?.capabilities?.profiles?.find(item => item.id === refs.profiles.value);
     const permitted = action === 'start' ? !refs.startButton.disabled
-      : loadState === 'ready' && execution?.actions?.[{ cancel: 'canCancel', retry: 'canRetry', preview: 'canPreview', stop_preview: 'canStopPreview' }[action]] === true;
-    if (!permitted || (action === 'retry' && (!confirmed(context) || !refs.consent.checked))) return;
+      : loadState === 'ready' && execution?.actions?.[{ cancel: 'canCancel', retry: 'canRetry', recheck: 'canRecheck', preview: 'canPreview', stop_preview: 'canStopPreview' }[action]] === true;
+    if (!permitted || (['retry', 'recheck'].includes(action) && (!confirmed(context) || !refs.consent.checked))
+      || (action === 'retry' && refs.retry.disabled) || (action === 'recheck' && refs.recheck.disabled)) return;
     const savedKey = key, path = action === 'start' ? `${basePath()}/start` : `${basePath()}/${encodeURIComponent(execution.id)}/action`;
-    const payload = action === 'start' ? { profileId: profile.id, contractRevision: profile.contractRevision } : { action };
+    const payload = action === 'start' ? { profileId: profile.id, contractRevision: profile.contractRevision }
+      : { action, ...(['retry', 'recheck'].includes(action) ? { profileId: profile.id, contractRevision: profile.contractRevision } : {}) };
     // Context changes detach the pending action without claiming its backend
     // work stopped. A unique token also rejects stale replies after A→B→A.
     const token = { key: savedKey }; activeAction = token;
@@ -311,7 +325,7 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
       const next = response.execution, executions = data?.executions || [], index = executions.findIndex(item => item.id === next.id);
       data.executions = index < 0 ? [next, ...executions] : executions.map(item => item.id === next.id ? next : item);
       selectedId = next.id; loadState = 'ready';
-      if (action === 'stop_preview' || action === 'cancel' || action === 'retry' || action === 'start') preview = null;
+      if (action === 'stop_preview' || action === 'cancel' || action === 'retry' || action === 'recheck' || action === 'start') preview = null;
       if (response.preview) { next.preview = response.preview; preview = response.preview; if (!previewURL(preview)) setError('服务端返回的预览地址不符合本机安全范围或已过期。'); }
     } catch (cause) {
       if (activeAction === token && isCurrent(savedKey)) { loadState = Number(cause?.status ?? cause?.statusCode) === 404 ? 'unavailable' : 'error'; setError(cause); }

@@ -48,3 +48,15 @@ execution：`{ id, status, taskAccepted, stage?, versions: [{ commit, sourceHash
 验证记录：先在旧代码运行新增真实 Edge 回归，明确复现新运行没有 GET/记录的故障；修复后 `node --test tests/execution-panel.test.mjs` 为16/16通过（15场景及父项），无失败/跳过。新回归分别控制旧 POST 成功和失败，在旧请求仍未返回时切换运行并读取、启动新 POST，再结束旧请求并确认新 POST 仍锁定；同时覆盖 A→B→A 的成功/失败迟到边界、旧 finally 不触发多余 GET、新操作完成后才解锁、旧响应的错误/预览/验收下载不污染新视图。原桌面、390×844、焦点、轮询、调用确认、错误保留、纯文本安全及预览/下载门禁场景仍通过。测试使用固定平台 UI API 内存 Promise 和真实系统 Edge，不调用付费模型或业务执行服务。
 
 仅修改原授权三个文件；两个脚本语法检查及 git diff --check 通过。固定新提交后交另一 Agent 独立复验；未改主分支、server、package 或用户数据，也未进行主应用集成回归。
+
+## 自有固定代码重新检查入口
+
+本轮基准2365067，独立树codex/web-owned-recheck-service。新增“重新检查固定代码”，只在后端actions.canRecheck、当前双确认、当前所选profile、完整契约版本、已知0coding/最多2次Review预算和费用勾选同时满足时启用。复验说明明确原提交不变、全部检查与Review全新执行、原失败和原用量保留，新row独立计费；实际调用和用量仍按服务端数值显示，null保持未知。
+
+旧contract原代码可选择当前规则复验；UI以当前capabilities及execution.recheckContractRevision判断新操作范围，不拿旧历史contract冒充新授权。retry/recheck的POST均发送`{action,profileId,contractRevision}`，数据来自当前选择；非收费动作仍只发送action。profile/model/任一预算变更、上下文和所选执行变化均清除或重新要求费用确认。旧客户端的缺字段收费动作由后端拒绝，不静默补当前版本。
+
+保留activeAction唯一token，复验旧POST成功/失败和finally在A→B→A后不能覆盖新运行、解除新操作锁或发布旧预览/下载。新增真实系统Edge固定平台UI fixture回归覆盖：费用/范围/预算门禁、旧contract新scope、失败后输入与选择保留、实际POST字段、0coding和unknown数值区分、原历史用量保留、桌面/390×844无溢出与焦点、复验跨运行迟到token。截图在忽略的output/playwright/recheck-panel-1440.png及recheck-panel-390.png，已实际查看窄屏布局。固定fixture不调用业务模型，也不是目标业务应用的浏览器验收。
+
+本组件不实现HTTP路由；根维护server精确字段及API文档。只有服务完整当前gate、原来源provenance与快照核对通过，才沿用既有预览和源码下载权限；UI不自行由旧QA成功推出新任务成功。
+
+最终实际检查：`node --test tests/execution-panel.test.mjs`真实系统Edge为19/19通过（18场景及父项），0失败/跳过；新增复验按钮的桌面/窄屏、旧contract当前scope、费用ack、失败保留与跨运行token场景通过。并行服务专项显式启用真实执行程序为42/42通过、0跳过，其中新增复验正向仍为可信依赖fixture；`npm run check`为77脚本通过，`git diff --check`通过。截图只作为布局证据，交互由断言验证。最后只更新任务记录，未更改被测脚本；固定后待不同作者和根集成复验，0付费、未推送/部署。

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, mkdir, symlink } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, symlink, writeFile, readFile, stat } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, createHash } from 'node:crypto';
 import path from 'node:path';
@@ -85,6 +85,55 @@ async function accept(service, state) {
   await waitFor(service, value => value.executions[0].taskAccepted); return execution.id;
 }
 
+// Controller integration fixtures only: neither these fabricated receipts nor mock inspectors prove business acceptance.
+async function recheckFixture(t) {
+  let f;
+  const inspected = options => {
+    const source = structuredClone(f.state.original), summary = { sourceExecutionRoot: path.dirname(path.dirname(source.reportPath)), sourceBinding: { ...f.state.calls[0].options.binding },
+      sourceExecutionId: source.id, sourceReport: source.reportPath, sourceReportHash: f.state.reportHash || 'f'.repeat(64), sourceWorkspace: source.workspace,
+      sourceCommit: source.candidateCommit, sourceHash: source.versions.at(-1).sourceHash, sourceUsage: source.usage, sourceCodingCalls: 1, sourceModelCalls: 2,
+      codingReceipts: [{ attempt: 1, receiptPath: source.modelCalls[0].receiptPath, receiptHash: source.modelCalls[0].receiptHash, model: 'trusted-fixture' }], sourceShellHash: source.shellHash };
+    delete summary.sourceBinding.sourceRevision;
+    return { source, summary, files: structuredClone(files) };
+  };
+  f = await fixture(t, { dependencies: {
+    inspectRecheckSource: async options => {
+      f.state.inspections.push(options); if (f.state.inspectHook) return f.state.inspectHook(options, () => inspected(options)); return inspected(options);
+    },
+    startRecheck(options) {
+      const finished = deferred(), record = { id: randomUUID(), ...options.sourceBinding, attemptId: randomUUID(), kind: 'web_recheck', profileId: 'library-web-v1', providerKind: 'model', reviewerKind: 'model', reviewPolicyHash: projectReviewPolicy.hash,
+        status: 'validating', calls: 0, reviewCalls: 0, usage: { inputTokens: null, outputTokens: null }, budget: { maxCalls: 0, maxReviewCalls: options.maxReviewCalls, timeoutMs: options.timeoutMs },
+        versions: [], events: [], gitCommands: [] };
+      const entry = { record, options: { ...options, binding: options.sourceBinding }, cancelled: 0,
+        finish(change = {}) { Object.assign(record, { status: 'failed', finishedAt: new Date().toISOString() }, change); finished.resolve(structuredClone(record)); },
+        async pass(change = {}) { await entry.ready; const passed = acceptedRecord(entry); passed.versions[0].acceptance.review.kind = 'model'; entry.finish({ ...passed, kind: 'web_recheck', calls: 0, budget: record.budget,
+          workspace: record.workspace, reportPath: record.reportPath, shellHash: record.shellHash, provenance: record.provenance, usage: { inputTokens: 5, outputTokens: 7 }, ...change }); },
+      };
+      entry.ready = (async () => { await mkdir(options.outputDir, { recursive: true }); const directory = await mkdtemp(path.join(options.outputDir, 'web-recheck-'));
+        record.workspace = path.join(directory, 'workspace'); record.reportPath = path.join(directory, 'execution.json'); await mkdir(record.workspace);
+        record.shellHash = (await installWebShell({ workspace: record.workspace })).hash; await applyProjectFiles({ workspace: record.workspace, files }); record.provenance = inspected(options).summary;
+      })();
+      f.state.rechecks.push(entry); return { id: record.id, snapshot: () => structuredClone(record), done: entry.ready.then(() => finished.promise),
+        cancel() { entry.cancelled++; if (!f.state.manualRecheckCancel) entry.finish({ status: 'stopped' }); } };
+    },
+  } });
+  Object.assign(f.state, { rechecks: [], inspections: [] });
+  const { execution } = await f.service.start(startInput), originalEntry = f.state.calls[0], original = acceptedRecord(originalEntry);
+  const directory = path.join(originalEntry.options.outputDir, 'web-execution-source'); await mkdir(directory, { recursive: true }); original.workspace = path.join(directory, 'workspace');
+  original.reportPath = path.join(directory, 'execution.json'); await mkdir(original.workspace); original.shellHash = (await installWebShell({ workspace: original.workspace })).hash;
+  await applyProjectFiles({ workspace: original.workspace, files }); await mkdir(path.join(original.workspace, '.git'));
+  original.versions[0].attempt = 1; original.versions[0].selfCheck.processes.forEach((process, index) => { process.pid = 61000 + index; });
+  original.modelCalls = [{ role: 'coding', kind: 'model', attempt: 1, model: 'trusted-fixture', receiptHash: 'e'.repeat(64), receiptPath: path.join(directory, 'model-coding-1.json') }, { role: 'review', kind: 'model', attempt: 1 }];
+  Object.assign(original, { status: 'failed', acceptanceStatus: 'error', calls: 1, reviewCalls: 1, totalModelCalls: 2, usage: { inputTokens: 900, outputTokens: 100 }, error: 'Original Review had no valid line evidence' });
+  original.versions[0].acceptance.status = 'error'; original.versions[0].acceptance.review.status = 'error';
+  originalEntry.finish(original); f.state.original = structuredClone(originalEntry.record); f.state.sourceId = execution.id;
+  await writeFile(original.reportPath, JSON.stringify(f.state.original)); await waitFor(f.service, value => value.executions[0].status === 'failed'); return f;
+}
+async function waitRecheck(f) {
+  for (let i = 0; i < 200; i++) { if (f.state.rechecks.length) { await f.state.rechecks.at(-1).ready; return f.state.rechecks.at(-1); } await new Promise(resolve => setTimeout(resolve, 5)); }
+  assert.fail('mock recheck was not dispatched');
+}
+
 test('capabilities are explicit reference-only, and start checks current content plus both approvals', async t => {
   const { service, state } = await fixture(t); const list = await service.list(ids);
   assert.equal(list.capabilities.canStart, true); assert.match(list.capabilities.profiles[0].description, /不代表任意上传业务/u);
@@ -117,7 +166,7 @@ test('cancel remains requested until the executor stops; retry makes a new immut
   assert.equal(result.execution.status, 'cancel_requested'); assert.equal(result.execution.taskAccepted, false); assert.equal(entry.cancelled, 1);
   await assert.rejects(service.start(startInput), { code: 'execution_active' });
   entry.finish({ status: 'stopped' }); await waitFor(service, value => value.executions[0].status === 'stopped');
-  const retry = await service.action({ ...ids, executionId: execution.id, action: 'retry' });
+  const retry = await service.action({ ...startInput, executionId: execution.id, action: 'retry' });
   assert.notEqual(retry.execution.id, execution.id); assert.equal(retry.execution.attempt, 2);
   const list = await service.list(ids); assert.equal(list.executions.length, 2); assert.equal(list.executions[1].status, 'stopped'); state.manualCancel = false;
 });
@@ -188,7 +237,7 @@ test('unknown prior execution or preview becomes reconciliation_required and can
   await service.shutdown();
   const db = new DatabaseSync(path.join(rootDir, 'service.sqlite')); db.exec("UPDATE executions SET active=1,status='generating',preview_state='running'"); db.close();
   const next = await open(), list = await next.list(ids); assert.equal(list.executions[0].status, 'reconciliation_required'); assert.equal(list.capabilities.canStart, false);
-  await assert.rejects(next.action({ ...ids, executionId: list.executions[0].id, action: 'retry' }), { code: 'cannot_retry' }); assert.equal(state.calls.length, 1);
+  await assert.rejects(next.action({ ...startInput, executionId: list.executions[0].id, action: 'retry' }), { code: 'cannot_retry' }); assert.equal(state.calls.length, 1);
 });
 
 test('expired controller callbacks cannot overwrite a new owner after simulated process loss', async t => {
@@ -398,6 +447,158 @@ test('all nonempty known keys including one-to-three-character keys are masked i
     const { service, state } = await fixture(t, { config: { ...config, apiKey: key }, dependencies: { codeModel: () => async () => {} } });
     await service.start(startInput); state.calls[0].record.events = [{ sequence: 1, message: `echo=${key}` }]; state.calls[0].record.error = `echo=${key}`;
     const dto = (await service.list(ids)).executions[0]; assert.ok(!dto.events[0].message.includes(key)); assert.ok(!dto.error.includes(key));
+  }
+});
+
+test('owned recheck creates a zero-coding attempt, deep admits before Review, and keeps original history and usage', async t => {
+  const f = await recheckFixture(t), { service, state } = f;
+  assert.equal((await service.list(ids)).executions[0].actions.canRecheck, true); await service.list(ids); assert.equal(state.inspections.length, 0, 'polling must not run Git admission');
+  const before = await readFile(state.original.reportPath), started = await service.action({ ...startInput, executionId: state.sourceId, action: 'recheck' });
+  assert.notEqual(started.execution.id, state.sourceId); assert.equal(started.execution.calls, 0); assert.equal(started.execution.budget.maxCalls, 0); assert.equal(started.execution.budget.maxReviewCalls, 2);
+  assert.deepEqual(started.execution.usage, { inputTokens: null, outputTokens: null });
+  const entry = await waitRecheck(f); assert.equal(state.calls.length, 1); assert.equal(state.inspections.length, 1);
+  assert.equal(entry.options.outputDir, path.join(f.rootDir, 'executions', started.execution.id));
+  assert.equal(entry.options.executionRoot, path.join(f.rootDir, 'executions', state.sourceId));
+  assert.deepEqual(Object.keys(entry.options.sourceBinding).sort(), ['planRevision', 'projectId', 'runId', 'specRevision', 'taskId']);
+  await entry.pass(); const result = await waitFor(service, value => value.executions[0].taskAccepted), current = result.executions[0], original = result.executions[1];
+  assert.equal(current.calls, 0); assert.equal(current.reviewCalls, 1); assert.deepEqual(current.usage, { inputTokens: 5, outputTokens: 7 });
+  assert.equal(current.sourceExecutionId, state.sourceId); assert.equal(current.sourceCommit, state.original.candidateCommit);
+  assert.equal(original.status, 'failed'); assert.deepEqual(original.usage, { inputTokens: 900, outputTokens: 100 });
+  assert.equal(current.actions.canRecheck, false); await assert.rejects(service.action({ ...startInput, executionId: current.id, action: 'recheck' }), { code: 'cannot_recheck' });
+  await assert.rejects(stat(path.join(entry.record.workspace, '.git')), { code: 'ENOENT' });
+  await service.download({ ...ids, executionId: current.id }); assert.ok(state.inspections.length >= 3, 'delivery revalidates original provenance');
+  const preview = await service.action({ ...ids, executionId: current.id, action: 'preview' }); assert.equal(preview.execution.taskAccepted, true);
+  await service.action({ ...ids, executionId: current.id, action: 'stop_preview' });
+  assert.equal(state.deliveries[0].binding.candidateCommit, state.original.candidateCommit); assert.deepEqual(await readFile(state.original.reportPath), before);
+  const json = JSON.stringify(result); assert.ok(!json.includes('sourceReport') && !json.includes('codingReceipts') && !json.includes(f.rootDir));
+});
+
+test('recheck atomic slot rejects simultaneous starts and refuses all client provenance or budget fields', async t => {
+  const f = await recheckFixture(t), input = { ...startInput, executionId: f.state.sourceId, action: 'recheck' };
+  for (const extra of [{ sourceReportPath: '/host/report.json' }, { sourceBinding: {} }, { outputDir: '/host' }, { budget: { maxCalls: 0 } }]) await assert.rejects(f.service.action({ ...input, ...extra }), { status: 400 });
+  const results = await Promise.allSettled([f.service.action(input), f.service.action(input)]); assert.equal(results.filter(item => item.status === 'fulfilled').length, 1);
+  const entry = await waitRecheck(f); await entry.pass(); await waitFor(f.service, value => value.executions[0].taskAccepted); assert.equal(f.state.rechecks.length, 1);
+});
+
+test('both paid actions require an explicit current profile contract while free actions refuse those extra fields', async t => {
+  const f = await recheckFixture(t);
+  for (const action of ['retry', 'recheck']) {
+    const input = { ...ids, executionId: f.state.sourceId, action };
+    await assert.rejects(f.service.action(input), { status: 400 });
+    await assert.rejects(f.service.action({ ...input, profileId: 'library-web-v1' }), { status: 400 });
+    await assert.rejects(f.service.action({ ...input, profileId: 'library-web-v1', contractRevision: '0'.repeat(64) }), { code: 'contract_changed' });
+    await assert.rejects(f.service.action({ ...input, profileId: 'another-profile', contractRevision: webExecutionContractRevision }), { code: 'contract_changed' });
+  }
+  await assert.rejects(f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'cancel' }), { status: 400 });
+  assert.equal(f.state.calls.length, 1); assert.equal(f.state.rechecks.length, 0); assert.equal(f.state.inspections.length, 0);
+});
+
+test('old validation contract can reuse its original code only through a new current-contract recheck', async t => {
+  const f = await recheckFixture(t), db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite'));
+  Object.assign(f.state.original, { status: 'accepted', acceptanceStatus: 'passed' }); f.state.original.versions[0].acceptance.status = 'passed'; f.state.original.versions[0].acceptance.review.status = 'completed';
+  assert.equal(isWebTaskAccepted(f.state.original), true);
+  const snapshot = JSON.parse(db.prepare('SELECT snapshot FROM executions WHERE id=?').get(f.state.sourceId).snapshot); snapshot.contractRevision = '0'.repeat(64);
+  db.prepare('UPDATE executions SET record=?,snapshot=?,status=? WHERE id=?').run(JSON.stringify(f.state.original), JSON.stringify(snapshot), 'accepted', f.state.sourceId); db.close();
+  await writeFile(f.state.original.reportPath, JSON.stringify(f.state.original));
+  const old = (await f.service.list(ids)).executions[0]; assert.equal(old.taskAccepted, false); assert.equal(old.actions.canDownload, false); assert.equal(old.actions.canRecheck, true);
+  assert.equal(old.recheckContractRevision, webExecutionContractRevision); await assert.rejects(f.service.download({ ...ids, executionId: f.state.sourceId }), { code: 'not_accepted' });
+  const { execution } = await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }); assert.equal(execution.contractRevision, webExecutionContractRevision); assert.equal(execution.taskAccepted, false);
+  const entry = await waitRecheck(f); await entry.pass(); const result = await waitFor(f.service, value => value.executions[0].taskAccepted); assert.equal(result.executions[0].calls, 0); assert.equal(result.executions[1].taskAccepted, false);
+});
+
+test('recheck rejects foreign report paths, missing receipts and stale current approvals before dispatch', async t => {
+  const f = await recheckFixture(t), db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite'));
+  const original = db.prepare('SELECT record FROM executions WHERE id=?').get(f.state.sourceId).record;
+  for (const mutate of [value => value.reportPath = path.join(f.rootDir, 'elsewhere', 'execution.json'), value => value.modelCalls[0].receiptHash = null]) {
+    const changed = JSON.parse(original); mutate(changed); db.prepare('UPDATE executions SET record=? WHERE id=?').run(JSON.stringify(changed), f.state.sourceId);
+    assert.equal((await f.service.list(ids)).executions[0].actions.canRecheck, false);
+    await assert.rejects(f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }), { code: 'cannot_recheck' });
+  }
+  db.prepare('UPDATE executions SET record=? WHERE id=?').run(original, f.state.sourceId); db.close(); f.state.planning.run.approvals.plan = null;
+  await assert.rejects(f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }), { code: 'cannot_recheck' }); assert.equal(f.state.inspections.length, 0);
+});
+
+test('deep inspector mismatched binding or original report stops a new recheck before any Review', async t => {
+  for (const kind of ['binding', 'source']) {
+    const f = await recheckFixture(t); f.state.inspectHook = async (_options, value) => { const result = value(); if (kind === 'binding') result.summary.sourceBinding.runId = 'foreign-run'; else result.source.candidateCommit = '0'.repeat(40); return result; };
+    await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' });
+    const result = await waitFor(f.service, value => value.executions[0].status === 'failed'); assert.equal(result.executions[0].calls, 0); assert.equal(result.executions[0].reviewCalls, 0); assert.equal(f.state.rechecks.length, 0);
+    assert.equal(result.executions[1].status, 'failed'); assert.equal(result.executions[1].usage.inputTokens, 900);
+  }
+});
+
+test('recheck admission cancellation prevents a late inspector from constructing a Review executor', async t => {
+  const f = await recheckFixture(t), entered = deferred(), release = deferred();
+  f.state.inspectHook = async (_options, value) => { entered.resolve(); await release.promise; return value(); };
+  const { execution } = await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }); await entered.promise;
+  const result = await f.service.action({ ...ids, executionId: execution.id, action: 'cancel' }); assert.equal(result.execution.status, 'cancel_requested'); release.resolve();
+  await waitFor(f.service, value => value.executions[0].status === 'stopped'); assert.equal(f.state.rechecks.length, 0);
+});
+
+test('late recheck pass cannot override cancellation or a new planning version', async t => {
+  for (const kind of ['cancel', 'stale']) {
+    const f = await recheckFixture(t); f.state.manualRecheckCancel = true; const { execution } = await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }), entry = await waitRecheck(f);
+    if (kind === 'cancel') await f.service.action({ ...ids, executionId: execution.id, action: 'cancel' }); else f.state.planning.run.approvals.spec = null;
+    await entry.pass(); const result = await waitFor(f.service, value => ['stopped', 'superseded'].includes(value.executions[0].status));
+    assert.equal(result.executions[0].taskAccepted, false); assert.equal(result.executions[0].actions.canDownload, false); assert.equal(result.executions[1].calls, 1);
+  }
+});
+
+test('recheck unknown source termination remains private and blocked across restart', async t => {
+  const f = await recheckFixture(t); f.state.inspectHook = async () => { throw Object.assign(new Error('private unknown source'), { reconciliationRequired: true, result: { pid: 878787, terminationConfirmed: false, controlDirectory: 'C:/private/recheck-control' }, probeDirectory: 'C:/private/recheck-probe' }); };
+  const { execution } = await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' });
+  const result = await waitFor(f.service, value => value.executions[0].status === 'reconciliation_required'); assert.equal(result.executions[0].calls, 0); assert.equal(f.state.rechecks.length, 0);
+  const db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite')), proof = JSON.parse(db.prepare('SELECT record FROM source_history WHERE execution_id=?').get(execution.id).record); db.close(); assert.equal(proof.result.pid, 878787);
+  assert.ok(!JSON.stringify(result).includes('878787') && !JSON.stringify(result).includes('recheck-control')); await f.service.shutdown();
+  const next = await f.open(); assert.equal((await next.list(ids)).capabilities.canStart, false); assert.equal((await next.list(ids)).executions[0].status, 'reconciliation_required');
+});
+
+test('recheck Review blocking or fresh check failure never inherits original passing HTTP/browser evidence', async t => {
+  for (const kind of ['review', 'http']) {
+    const f = await recheckFixture(t); await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }); const entry = await waitRecheck(f), result = acceptedRecord(entry);
+    if (kind === 'review') { result.versions[0].acceptance.review.openBlockingIssues = 1; result.versions[0].acceptance.review.issues.push({ severity: 'blocking' }); }
+    else result.versions[0].acceptance.test.checks[0].passed = false;
+    await entry.pass({ versions: result.versions }); const report = await waitFor(f.service, value => value.executions[0].status === 'failed');
+    assert.equal(report.executions[0].taskAccepted, false); assert.equal(report.executions[0].actions.canPreview, false); assert.equal(report.executions[1].versions[0].acceptance.test.status, 'passed');
+  }
+});
+
+test('a new valid blocking Review revokes publication of the same old accepted commit and cannot be washed by another recheck', async t => {
+  const f = await recheckFixture(t), db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite'));
+  Object.assign(f.state.original, { status: 'accepted', acceptanceStatus: 'passed', error: null }); f.state.original.versions[0].acceptance.status = 'passed'; f.state.original.versions[0].acceptance.review.status = 'completed';
+  db.prepare('UPDATE executions SET record=?,status=? WHERE id=?').run(JSON.stringify(f.state.original), 'accepted', f.state.sourceId); db.close();
+  await writeFile(f.state.original.reportPath, JSON.stringify(f.state.original)); assert.equal((await f.service.list(ids)).executions[0].taskAccepted, true);
+  await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }); const entry = await waitRecheck(f), result = acceptedRecord(entry);
+  const issue = { id: 'ISSUE-known-new', severity: 'blocking', status: 'open', file: 'src/app.mjs', line: 1, message: 'The fixed route has a reproducible business error', evidence: files[0].content.trim(), originCommit: result.candidateCommit };
+  const gate = result.versions[0].acceptance; gate.status = 'changes_requested'; gate.review.kind = 'model'; gate.review.openBlockingIssues = 1;
+  gate.review.issues = [{ severity: issue.severity, file: issue.file, line: issue.line, message: issue.message, evidence: issue.evidence }]; gate.issues = [issue]; gate.openIssues = [issue];
+  await entry.pass({ status: 'failed', acceptanceStatus: 'changes_requested', versions: result.versions });
+  const list = await waitFor(f.service, value => value.executions[0].status === 'failed'), old = list.executions.find(value => value.id === f.state.sourceId);
+  assert.equal(old.status, 'accepted', 'historical state remains intact'); assert.equal(old.taskAccepted, false); assert.equal(old.actions.canDownload, false); assert.equal(old.actions.canPreview, false); assert.equal(old.actions.canRecheck, false);
+  assert.equal(old.actions.canRetry, true); assert.match(old.error, /先修复形成新代码版本/u);
+  await assert.rejects(f.service.download({ ...ids, executionId: f.state.sourceId }), { code: 'not_accepted' });
+  await assert.rejects(f.service.action({ ...ids, executionId: f.state.sourceId, action: 'preview' }), { code: 'not_accepted' });
+  await assert.rejects(f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }), { code: 'cannot_recheck' });
+  assert.equal(f.state.rechecks.length, 1);
+  const history = new DatabaseSync(path.join(f.rootDir, 'service.sqlite')), saved = history.prepare('SELECT record,snapshot FROM executions WHERE id=?').get(list.executions[0].id);
+  const malformed = JSON.parse(saved.record); malformed.versions[0].acceptance.review.status = 'error';
+  history.prepare('UPDATE executions SET record=? WHERE id=?').run(JSON.stringify(malformed), list.executions[0].id);
+  let restored = (await f.service.list(ids)).executions.find(value => value.id === f.state.sourceId);
+  assert.equal(restored.taskAccepted, true, 'an invalid Review response cannot create a new blocking finding'); assert.equal(restored.actions.canRecheck, true);
+  const different = JSON.parse(saved.record.replaceAll('a'.repeat(40), 'b'.repeat(40))), differentSnapshot = JSON.parse(saved.snapshot);
+  differentSnapshot.sourceProof.sourceCommit = 'b'.repeat(40);
+  history.prepare('UPDATE executions SET record=?,snapshot=? WHERE id=?').run(JSON.stringify(different), JSON.stringify(differentSnapshot), list.executions[0].id); history.close();
+  restored = (await f.service.list(ids)).executions.find(value => value.id === f.state.sourceId);
+  assert.equal(restored.taskAccepted, true, 'a finding for another commit does not revoke this commit'); assert.equal(restored.actions.canRecheck, true);
+});
+
+test('recheck download rejects snapshot tampering and changed original report provenance', async t => {
+  for (const kind of ['snapshot', 'report']) {
+    const f = await recheckFixture(t); const { execution } = await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }), entry = await waitRecheck(f); await entry.pass();
+    await waitFor(f.service, value => value.executions[0].taskAccepted);
+    if (kind === 'snapshot') await writeFile(path.join(entry.record.workspace, 'src', 'app.mjs'), 'export const changed=true;'); else f.state.reportHash = '0'.repeat(64);
+    await assert.rejects(f.service.download({ ...ids, executionId: execution.id }), { code: 'source_changed' }); assert.equal(f.state.deliveries.length, 0);
+    assert.equal((await f.service.list(ids)).executions[0].taskAccepted, false);
   }
 });
 
