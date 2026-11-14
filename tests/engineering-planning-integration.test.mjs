@@ -187,6 +187,7 @@ test('人工计划编辑同步工程任务及哈希，越写域原子拒绝，�
 
 test('重启保留完成草案和等待门禁；中断历史标识未知且不退还调用预算', async t => {
   const x = await setup(t); await x.approve(); await waitFor(() => x.run.status === 'awaiting_review');
+  await x.orchestrator.shutdown();
   const restoredStore = await new ProjectStore(x.directory).init(); const restored = x.register(new Orchestrator(restoredStore, planner, { stepDelayMs: 0 }));
   await restored.init(); const saved = restoredStore.getRun(x.project.id, x.run.id).run;
   assert.equal(saved.status, 'awaiting_review'); assert.deepEqual(saved.engineeringPlan, x.run.engineeringPlan);

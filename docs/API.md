@@ -20,6 +20,8 @@ sourceSnapshot为本次运行不可变原文，导出requirements.md也使用该
 
 执行服务默认通过ProjectStore.getPersistedRun读取最后成功发布至文件的深复制快照，不能使用尚在保存中的内存审批；写入失败不更新该快照。实时规划GET仍展示当前运行过程。此单控制器文件发布边界不是事务数据库或跨存储事务。
 
+规划决定在同一项目内互斥，先等已进入驱动的停点保存完成再修改审批；其他运行的操作及新建不能保存该待决审批。retry/resume也不能越过同项目其他活动规划。失败回滚后保持原持久化批准状态，仍以当前版本门禁决定是否执行。
+
 ## 接口
 
 - GET `/api/health` → `{ok:true, model:{configured:boolean,model:string}, modelPlanning:{engineeringMaxCalls,engineeringTimeoutMs}, supportedFormats:['.md','.txt','.docx']}`。工程规划预算来自当前编排器，不包含凭据。

@@ -35,3 +35,9 @@ root新回归实际复现：approve_plan仍在保存中时，默认执行服务�
 固定a18f2f9的86脚本通过，全量显式MXC为513/514、0skip，唯一失败是legacy兼容测试直接改workflowVersion/status后等待超时。原日志保留在原集成树output/verification/owned-recheck-integrated/full-test.log，未将该版当通过。独立强制延迟规格停点保存的探针证实：fixture看到awaiting_spec时调度器仍driving；直接改状态并schedule会被旧驱动屏蔽，留下running/pending。等待原驱动退出、active为0再构造legacy输入则正常到awaiting_review。证据main output/verification/legacy-fixture-race-results.json。
 
 修复在另树仅给该人工构造legacy的测试增加静止前置条件，不延长等待、不改生产调度或任何业务断言；原a18被检目录保持冻结。修版重新专项/全量及独立验证后才可集成。
+
+## 独立发现跨运行审批污染
+
+a18的独立轻量审查另发现一项实际P2，因此b575的fixture修订也不能放行：当前approve_plan尚未保存时，同项目旧failed run仍可retry，其save捕获共享live project中的待决approval并写盘。原审批最终保存失败后只回滚live run，而disk/persisted仍批准，执行canStart仍true。独立两真实本地运行探针保存在main output/verification/independent-owned-recheck-integration-a18f2f9-20261114，0模型调用；不能把准确镜像当作操作事务。
+
+修复增加项目操作互斥；审阅决定先等待已进入的驱动完成停点保存、全项目无在途阶段，再快照并修改审批，直到落盘或回滚后释放。新建运行尊重该锁，旧运行retry/resume不能与另一个活动规划并行；legacy确认也沿用安全回滚。没有改写全部存储/调度，文件发布仍非跨库事务。新增真实本地规划回归覆盖旧失败run重试/新建竞争、审批保存失败后live/盘/镜像/执行均不批准、另一个活动运行结束后旧retry可恢复，以及同run停点保存未完不能提前修改审批。相关52/52通过。重启测试另明确先关闭原控制器再从已保存文件恢复，避免将尚未落盘的等待状态当作重启基线；原业务与版本断言保留。
