@@ -176,7 +176,7 @@ test('模型适配器使用注入的服务并保留可校验的原文引用', as
     config: { baseUrl: 'https://model.invalid/v1', model: 'test-model', apiKey: secret },
     fetchImpl: async (url, options) => {
       request = { url: String(url), options };
-      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(fakeSpec) } }] }), { status: 200 });
+      return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(fakeSpec) } }] }), { status: 200 });
     },
   });
   assert.equal(spec.sourceMode, 'model');
@@ -201,7 +201,7 @@ test('模型凭空生成的原文引用会被拒绝', async () => {
   };
   await assert.rejects(analyzeWithModel('用户可以按书名查询图书。', '图书查询', {
     config: { baseUrl: 'https://model.invalid/v1', model: 'test-model' },
-    fetchImpl: async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(fakeSpec) } }] }), { status: 200 }),
+    fetchImpl: async () => new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(fakeSpec) } }] }), { status: 200 }),
   }), /原文引用|需求文档/);
 });
 
