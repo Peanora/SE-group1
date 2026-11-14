@@ -14,17 +14,17 @@ test('actual model-planning UI discloses its budget, preserves engineering task 
   const content = '申请者可以查看可预约资源。';
   const spec = { title: '资源规划界面检查', summary: content, goals: [], roles: ['申请者：查看资源'], acceptanceScenarios: [], constraints: [], assumptions: [], questions: [],
     stack: { frontend: 'HTML/CSS/JS', backend: 'Node.js', storage: 'SQLite' },
-    requirements: [{ id: 'R1', title: '查看资源', description: content, sourceQuote: content, acceptance: ['展示可用资源'] }], sourceMode: 'model' };
+    requirements: [{ id: 'R-001', title: '查看资源', description: content, sourceQuote: content, acceptance: ['展示可用资源'] }], sourceMode: 'model' };
   const proposal = { version: 1, title: '资源工程草案', summary: '实现确认的资源接口与页面',
     entities: [{ id: 'RESOURCE', name: '资源', fields: [{ name: 'id', type: 'string', required: true, unique: true }], constraints: ['标识唯一'] }],
-    routes: [{ id: 'LIST', method: 'GET', path: '/api/resources', roles: ['ROLE-001'], request: '无正文', response: '资源列表', errors: [{ status: 401, reason: '尚未登录' }], requirementIds: ['R1'] }],
-    views: [{ id: 'HOME', path: '/', title: '资源列表', requirementIds: ['R1'], selectors: [{ testId: 'resources', role: 'list' }] }],
-    tasks: [{ id: 'DEV-R1', title: '实现资源契约', description: '实现确认接口和页面', requirementIds: ['R1'], dependsOn: [], writePaths: ['src/app.mjs', 'public/app.js'], inputs: ['已确认资源规格'], outputs: ['资源接口与页面'], acceptance: ['展示可用资源'] }] };
+    routes: [{ id: 'LIST', method: 'GET', path: '/api/resources', roles: ['ROLE-001'], request: '无正文', response: '资源列表', errors: [{ status: 401, reason: '尚未登录' }], requirementIds: ['R-001'] }],
+    views: [{ id: 'HOME', path: '/', title: '资源列表', requirementIds: ['R-001'], selectors: [{ testId: 'resources', role: 'list' }] }],
+    tasks: [{ id: 'DEV-R1', title: '实现资源契约', description: '实现确认接口和页面', requirementIds: ['R-001'], dependsOn: [], writePaths: ['src/app.mjs', 'public/app.js'], inputs: ['已确认资源规格'], outputs: ['资源接口与页面'], acceptance: ['展示可用资源'] }] };
   let specs = 0, designs = 0;
   const config = { baseUrl: 'https://model.invalid/v1', model: 'engineering-browser-mock', apiKey: 'synthetic-browser-private-key' };
   const app = await createApp({ dataDir: directory, stepDelayMs: 0, planner: { ...planner,
     getModelConfig: () => ({ configured: true, model: config.model }),
-    analyzeWithModel: async () => { specs++; return structuredClone(spec); },
+    analyzeWithModel: (text, name, options) => { specs++; return planner.analyzeWithModel(text, name, { ...options, config, fetchImpl: async () => new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(spec) } }] })) }); },
     createEngineeringModel: () => createEngineeringModel({ config, fetchImpl: async () => {
       designs++;
       return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(proposal) } }], usage: { prompt_tokens: 23, completion_tokens: 34 } }));

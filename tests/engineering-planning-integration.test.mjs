@@ -15,19 +15,19 @@ const config = { baseUrl: 'https://model.invalid/v1', model: 'design-mock', apiK
 const source = '用户能够读取资源并提交预约。';
 const spec = () => ({ title: '资源预约', summary: source, goals: [], roles: ['申请者：查看和预约资源'], acceptanceScenarios: [], constraints: [], assumptions: [], questions: [],
   stack: { frontend: 'HTML/CSS/JS', backend: 'Node.js', storage: 'SQLite' },
-  requirements: [{ id: 'R1', title: '资源预约', description: source, sourceQuote: source, acceptance: ['读取可用资源', '并发不能超量预约'] }], sourceMode: 'model' });
+  requirements: [{ id: 'R-001', title: '资源预约', description: source, sourceQuote: source, acceptance: ['读取可用资源', '并发不能超量预约'] }], sourceMode: 'model' });
 const proposal = () => ({ version: 1, title: '资源预约工程', summary: '按确认规格提供接口和外置页面',
   entities: [{ id: 'RESOURCE', name: '资源', fields: [{ name: 'id', type: 'string', required: true, unique: true }], constraints: ['资源标识唯一'] }],
-  routes: [{ id: 'LIST', method: 'GET', path: '/api/resources', roles: ['ROLE-001'], request: '无正文', response: '资源列表', errors: [{ status: 401, reason: '尚未登录' }], requirementIds: ['R1'] }],
-  views: [{ id: 'HOME', path: '/', title: '资源列表', requirementIds: ['R1'], selectors: [{ testId: 'resources', role: 'list' }] }],
-  tasks: [{ id: 'DEV-R1', title: '实现资源契约', description: '根据资源预约规格实现服务和界面', requirementIds: ['R1'], dependsOn: [], writePaths: ['src/app.mjs', 'public/app.js'], inputs: ['确认规格'], outputs: ['资源接口与页面'], acceptance: ['覆盖确认的验收条件'] }] });
+  routes: [{ id: 'LIST', method: 'GET', path: '/api/resources', roles: ['ROLE-001'], request: '无正文', response: '资源列表', errors: [{ status: 401, reason: '尚未登录' }], requirementIds: ['R-001'] }],
+  views: [{ id: 'HOME', path: '/', title: '资源列表', requirementIds: ['R-001'], selectors: [{ testId: 'resources', role: 'list' }] }],
+  tasks: [{ id: 'DEV-R1', title: '实现资源契约', description: '根据资源预约规格实现服务和界面', requirementIds: ['R-001'], dependsOn: [], writePaths: ['src/app.mjs', 'public/app.js'], inputs: ['确认规格'], outputs: ['资源接口与页面'], acceptance: ['覆盖确认的验收条件'] }] });
 const reply = (value = proposal(), finishReason = 'stop') => new Response(JSON.stringify({ choices: [{ finish_reason: finishReason, message: { content: typeof value === 'string' ? value : JSON.stringify(value) } }], usage: { prompt_tokens: 23, completion_tokens: 34 } }));
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 async function waitFor(check) { const until = Date.now() + 5000; while (!check()) { if (Date.now() >= until) throw new Error('等待规划状态超时'); await delay(5); } }
 async function setup(t, { fetchImpl = async () => reply(), options = {}, override = {} } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'engineering-integration-'));
   const store = await new ProjectStore(directory).init(); let calls = 0;
-  const trustedPlanner = { ...planner, getModelConfig: () => ({ configured: true }), analyzeWithModel: async () => spec(), analyzeRequirements: () => spec(),
+  const trustedPlanner = { ...planner, getModelConfig: () => ({ configured: true }), analyzeWithModel: (text, name, options) => planner.analyzeWithModel(text, name, { ...options, config, fetchImpl: async () => new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(spec()) } }] })) }), analyzeRequirements: () => spec(),
     createEngineeringModel: () => createEngineeringModel({ config, fetchImpl: async (...args) => { calls++; return fetchImpl(...args); } }), ...override };
   const orchestrator = new Orchestrator(store, trustedPlanner, { stepDelayMs: 0, ...options });
   const instances = [orchestrator], register = instance => { instances.push(instance); return instance; };
@@ -211,7 +211,7 @@ test('local与v1仍使用原规则，不调用工程适配器且旧哈希公式�
 
 test('私有回执父链链接及保存失败阻断两个分支而不暴露宿主路径', async t => {
   const x = await setup(t); const outside = await mkdtemp(path.join(os.tmpdir(), 'engineering-private-outside-')); t.after(() => rm(outside, { recursive: true, force: true }));
-  await symlink(outside, path.join(x.directory, '.private'), process.platform === 'win32' ? 'junction' : 'dir');
+  await symlink(outside, path.join(x.directory, '.private', 'engineering-receipts'), process.platform === 'win32' ? 'junction' : 'dir');
   await x.approve(); await waitFor(() => x.run.status === 'failed');
   assert.equal(x.run.engineeringHistory[0].code, 'receipt_failed'); assert.equal(x.run.engineeringPlan, undefined); assert.deepEqual(await readdir(outside), []);
   assert.equal(x.run.engineeringHistory[0].finishReason, 'stop'); assert.deepEqual(x.run.engineeringHistory[0].usage, { inputTokens: 23, outputTokens: 34 });

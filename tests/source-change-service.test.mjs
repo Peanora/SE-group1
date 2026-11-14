@@ -49,7 +49,7 @@ async function waiting(env, target = 'awaiting_spec') {
 }
 
 test('pending survives active stage writes; applying waits for an explicit quiescent checkpoint and new run uses new snapshot', async t => {
-  const gate = deferred(); const env = await setup(t, { override: { analyzeWithModel: async text => { await gate.promise; return specification(text); } } });
+  const gate = deferred(); const env = await setup(t, { override: { analyzeWithModel: async (text, name, options) => { await gate.promise; return basePlanner.analyzeWithModel(text, name, { ...options, config: { baseUrl: 'http://localhost', model: 'source-fixture', apiKey: '' }, fetchImpl: async () => new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(specification(text)) } }] })) }); } } });
   const run = await env.orchestrator.createRun(env.project.id, { mode: 'model' }); await waitFor(() => run.stages.find(stage => stage.id === 'spec').status === 'running');
   const change = request(env); assert.equal(change.status, 'pending'); assert.equal(env.project.sourceGeneration, undefined);
   await assert.rejects(apply(env, change), { status: 409, code: 'project_busy' }); assert.equal(env.service.list({ projectId: env.project.id })[0].status, 'pending');
