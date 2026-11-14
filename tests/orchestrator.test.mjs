@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ProjectStore } from '../lib/store.mjs';
 import { Orchestrator, WORKFLOW } from '../lib/orchestrator.mjs';
+import { contentRevision } from '../lib/planning-review.mjs';
 
 const planner = {
   getModelConfig: () => ({ configured: false, model: '' }),
@@ -363,4 +364,29 @@ test('保存修订期间并发批准不会读取尚未落盘的新版本', async
   store.save = originalSave;
   await approveSpec(orchestrator, project, run);
   await waitFor(() => run.status === 'awaiting_review');
+});
+
+test('项目检查点吞掉旧queued派发且保留旧run身份，新输入只允许新run继续', async t => {
+  const { store, orchestrator, project } = await setup(t);
+  const run = await orchestrator.createRun(project.id);
+  await waitFor(() => run.status === 'awaiting_spec' && !orchestrator.state(run).driving && !orchestrator.state(run).active.size);
+  const original = structuredClone(run), oldSource = structuredClone(project.source);
+  // A ready-but-not-dispatched old run models the boundary between approval publication and the queued drive.
+  run.approvals.spec = { revision: run.specRevision, at: new Date().toISOString(), feedback: '' }; run.status = 'running'; await store.save(project);
+  orchestrator.schedule(project, run);
+  await orchestrator.withProjectCheckpoint(project.id, async () => {
+    await store.publishSourceChange(project.id, { baseRevision: contentRevision(oldSource), generation: 0, changeId: randomUUID(), source: { ...oldSource, content: oldSource.content + '新增输入。' }, impact: { unknown: true, coverage: 'conservative_all', reusableValidation: false }, changeHash: 'a'.repeat(64), policyHash: 'b'.repeat(64) });
+  });
+  await delay(15); assert.equal(project.runs[0], run); assert.equal(run.stages.find(stage => stage.id === 'architecture').attempt, 0);
+  assert.equal(run.sourceSuperseded, true); assert.deepEqual(run.sourceSnapshot, oldSource); assert.equal(run.specRevision, original.specRevision);
+  await assert.rejects(orchestrator.action(project.id, run.id, { action: 'retry' }), { status: 409, code: 'source_superseded' });
+  assert.equal((await orchestrator.createRun(project.id)).sourceGeneration, 1);
+});
+
+test('停止等待已经进入的项目检查点，不把在途发布误报为已停止', async t => {
+  const { orchestrator, project } = await setup(t); let release, entered;
+  const ready = new Promise(resolve => { entered = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  const callback = orchestrator.withProjectCheckpoint(project.id, async () => { entered(); await gate; return 'finished'; }); await ready;
+  let stopped = false; const shutdown = orchestrator.shutdown().then(() => { stopped = true; }); await delay(10); assert.equal(stopped, false);
+  release(); assert.equal(await callback, 'finished'); await shutdown; assert.equal(stopped, true);
 });
