@@ -88,3 +88,32 @@ test('external source publication is observed by polling without replacing a foc
   await page.getByRole('button', { name: '基于当前版本重新编辑', exact: true }).click(); assert.equal(await body.inputValue(), changed);
   assert.equal(await page.getByRole('button', { name: '保存为待应用变更', exact: true }).isEnabled(), true);
 });
+
+test('late parent refresh after applying a source cannot announce success in a different selected project', { timeout: 60000 }, async t => {
+  const { app, project, page } = await fixture(t);
+  const other = await app.store.create({ name: '另一个项目', source: { filename: 'other.md', content: '读取另一组独立资源。' } });
+  await page.locator('#refresh-button').click();
+  await page.locator(`[data-project="${other.id}"]`).waitFor();
+  const change = app.sourceChangeService.request({ projectId: project.id, baseRevision: app.store.getSourceVersion(project.id).revision,
+    source: { filename: 'new.md', content: changed }, reason: '检查迟到通知归属', kind: 'field', requestKey: 'late-parent-refresh' });
+  await page.getByRole('button', { name: '刷新变更状态', exact: true }).click();
+  await page.waitForFunction(() => ![...document.querySelectorAll('.source-changes button')].find(el => el.textContent === '应用为新需求版本')?.disabled);
+  let projectReads = 0, release;
+  const held = new Promise(resolve => { release = resolve; });
+  let entered; const waiting = new Promise(resolve => { entered = resolve; });
+  await page.route(`**/api/projects/${project.id}`, async route => {
+    if (route.request().method() === 'GET' && ++projectReads === 2) { entered(); await held; }
+    await route.continue();
+  });
+  try {
+    await page.getByRole('button', { name: '应用为新需求版本', exact: true }).click();
+    await waiting;
+    await page.locator(`[data-project="${other.id}"]`).click();
+    await page.waitForFunction(() => document.querySelector('#project-title').textContent === '另一个项目');
+  } finally { release(); }
+  await page.waitForResponse(response => response.url().endsWith(`/api/projects/${project.id}`));
+  await page.waitForTimeout(100);
+  assert.equal(project.sourceGeneration, 1); assert.equal(app.sourceChangeService.list({ projectId: project.id }).find(item => item.id === change.id).status, 'applied');
+  assert.doesNotMatch(await page.locator('#toast').textContent(), /新需求已应用/);
+  assert.equal(await page.locator('#project-title').textContent(), other.name);
+});
