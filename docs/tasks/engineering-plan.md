@@ -1,5 +1,17 @@
 # F02 需求驱动工程设计草案组件
 
+## 实际规格的技术栈别名修复（基线d669a70）
+
+唯一修改本记录、`lib/engineering-plan.mjs`和`tests/engineering-plan.test.mjs`。真实规格已成功产生（根记录为1次规格API），但工程attempt1仅在本地技术栈准入失败，尚无工程API、usage为null；engineeringCalls是工程尝试计数，不能当收费API次数。原invalid_input历史与原规格/hash保留，不重新生成规格。
+
+已只读复现原规格stack：frontend为`原生HTML/CSS/JavaScript，同源外置JS/CSS`，backend为`Node.js 22.21以上原生HTTP，ES Modules`，storage为`Node.js内置SQLite`。小范围正向语法识别将保留旧基础别名和版本校验，仅增加同源外置资源、原生HTTP/ES Modules/内置模块等明确限定与SQLite内置前缀。每个字段最多200字符，限定列表数量有界并消费整串；未知尾部、否定描述、旧Node版本、React/Vue/Express或混合数据库不自动改写或放行。校验只保留原spec文字与哈希，源码改变自动使纯策略和依赖它的模型策略hash变化。先补实际栈与冲突对照回归，再固定提交交非作者独立复验；本轮不调用真实API、不改用户数据、不接其他功能。
+
+已实现的限定：frontend在旧HTML/CSS/JS语法后允许最多一项`同源外置JS/CSS`（CSS/JS顺序及JavaScript写法亦可）或`same-origin external JS/CSS`。backend保留Node/Node.js、版本及安全整数校验，允许>=/≥、以上/及以上及最多三项原生HTTP（可带服务器）、ES Modules/ESM、仅使用内置模块或built-in modules only；限定用中英文逗号/分号分隔，不识别任意描述。storage仅增加Node/Node.js内置、内置或built-in前缀，其SQLite显式版本仍须为3系列。正向语法不表示语义证明，未知或否定文字仍需控制器澄清而非转换。
+
+实际验证：原30项纯校验/模型mock全部保留，新增四项回归后`node --test --test-concurrency=4 tests/engineering-plan.test.mjs tests/engineering-model.test.mjs`为34/34通过，0失败/取消/跳过，337.4733ms；两份修改脚本`node --check`与`git diff --check`通过。新增正向矩阵240组别名组合、实际stack保持原spec/hash，以及框架冲突/混合数据库/否定/未知尾部/明确旧版本/不安全版本分量/文本上限反例；矩阵是测试内部断言，不另算240个Node test。
+
+只读真实原记录在修复前复现误拒，修复后准入成功；specRevision始终`f1385d160333dfdbe49774e9e09106c6ff6734c24ef2e5757be4e57459a90206`，整个原项目文件SHA256前后同为`b2bca00d6ed6094b93bbd3666bfc93124a2057fbd80755719bca5d76a6c5c5fb`。历史工程attempt计数仍1、状态failed、usage两项仍null，没有本轮工程API。证据在本地主工作区忽略的`output/verification/engineering-stack-compatibility/{before.json,after.json,tests.log}`。未运行真实模型重试、目标代码或全仓回归；固定后先独立审查，根控制器才可用同一原spec发起新的工程请求。
+
 基准 `3cb8e70`，独立工作区 `teamwork-engineering-plan`、分支 `codex/engineering-plan`。仅新增 `lib/engineering-plan.mjs`、`lib/engineering-model.mjs`、两份专测及本文。不改 orchestrator/server/public/package，不依赖未放行的 verification-model，不调用真实模型或操作用户数据。
 
 ## 最小契约

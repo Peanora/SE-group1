@@ -51,6 +51,52 @@ test('fixed revision must match current spec and unsupported stack cannot be sil
   for (const backend of ['Node.js', 'Node.js 22', 'Node.js 22.21', 'Node.js 24.0']) { const compatible = spec(); compatible.stack = { frontend: '原生HTML', backend, storage: 'SQLite 3' }; assert.doesNotThrow(() => draft(proposal(), compatible)); }
 });
 
+test('actual native-stack wording enters engineering without rewriting the original spec or its revision', () => {
+  const original = spec(); original.stack = { frontend: '原生HTML/CSS/JavaScript，同源外置JS/CSS', backend: 'Node.js 22.21以上原生HTTP，ES Modules', storage: 'Node.js内置SQLite' };
+  const before = structuredClone(original), binding = bindingFor(original), context = inspectEngineeringContext({ spec: original, binding });
+  assert.deepEqual(context.spec, before); assert.deepEqual(context.spec.stack, before.stack); assert.equal(context.specHash, binding.specRevision);
+  const result = draft(proposal(), original); assert.equal(result.specHash, binding.specRevision); assert.deepEqual(result.binding, binding);
+  assert.deepEqual(original, before); assert.equal(contentRevision(original), binding.specRevision); assert.equal(result.coverage, 'structural_only');
+});
+
+test('bounded positive native aliases support same-origin assets, native HTTP/ES Modules and built-in SQLite', () => {
+  const fronts = ['原生HTML/CSS/JavaScript，同源外置JS/CSS', 'native HTML+CSS+JS, same-origin external CSS/JS', 'HTML/CSS/JS；同源外置CSS/JavaScript', '原生 HTML/CSS/JS，同源 外置 JS/CSS', ENGINEERING_PLATFORM.frontend];
+  const backends = ['Node.js 22.21以上原生HTTP，ES Modules', 'Node.js >=22.21, built-in modules only', 'Node 24.0，native HTTP server；ESM',
+    'Node.js 22.21.0及以上，原生HTTP服务器，ES Modules，仅使用内置模块', 'Node.js ≥22.21.0; ES Modules', 'Node.js v22.21，原生 HTTP', 'Node.js 22', 'Node'];
+  const stores = ['Node.js内置SQLite', 'Node 内置 SQLite 3.45.1', 'Node.js built-in SQLite 3', '内置 SQLite', 'built-in SQLite 3.44', 'SQLite'];
+  for (const frontend of fronts) for (const backend of backends) for (const storage of stores) {
+    const original = spec(); original.stack = { frontend, backend, storage };
+    const context = inspectEngineeringContext({ spec: original, binding: bindingFor(original) }); assert.deepEqual(context.spec.stack, original.stack);
+  }
+  const platform = spec(); platform.stack = { frontend: ENGINEERING_PLATFORM.frontend, backend: ENGINEERING_PLATFORM.backend, storage: ENGINEERING_PLATFORM.storage };
+  assert.doesNotThrow(() => draft(proposal(), platform));
+});
+
+test('positive aliases never admit conflicting frameworks, mixed databases, negations or unparsed tails', () => {
+  const cases = { frontend: ['React', 'Vue+HTML', 'HTML/CSS/JS + React', 'native HTML/CSS/JS，Vue', '原生HTML/CSS/JS，同源外置JS/CSS，React',
+    '非原生HTML/CSS/JS', '不使用HTML/CSS/JS', '原生HTML/CSS/JS，不使用React', '原生HTML/CSS/JS，非同源外置JS/CSS',
+    'HTML/CSS/JS，CDN外置JS/CSS', 'HTML/CSS/JS，同源内联JS/CSS', 'HTML/CSS/JS，同源外置JS/CSS或Vue', 'HTMLxyz'],
+    backend: ['Node.js 22.21原生HTTP，Express', 'Node.js 22.21，ES Modules，Koa', 'Node.js 22.21非原生HTTP', '不使用Node.js',
+      'Node.js 22.21，非ES Modules', 'Node.js 22.21，原生HTTP，，ES Modules', 'Node.js 22.21，原生HTTP，ESM，内置模块，ES Modules',
+      'Node.js>=22.21 <24', 'Node.js 22.21 或 Java', 'Node.js 22.21，安装Express', 'Node.js 22.21以上原生HTTP，ES Modules; shell'],
+    storage: ['Node.js内置SQLite + MySQL', 'SQLite或PostgreSQL', 'SQLite 2', 'SQLite 4', 'Node.js内置SQLite，Redis', '非SQLite', '不使用SQLite',
+      'Node.js内置SQLite（或MongoDB）', 'Node.js内置SQLite; install sqlite3', 'SQLite 3 trailing'] };
+  for (const [key, values] of Object.entries(cases)) for (const value of values) {
+    const original = spec(); original.stack[key] = value;
+    assert.throws(() => inspectEngineeringContext({ spec: original, binding: bindingFor(original) }), { code: 'invalid_engineering_plan' }, `${key}: ${value}`);
+  }
+});
+
+test('version floor, safe components and bounded text still apply when native qualifiers are present', () => {
+  for (const backend of ['Node.js 18以上原生HTTP，ES Modules', 'Node.js >=18，内置模块', 'Node.js 22.20及以上原生HTTP', 'Node.js 22.0.99，ES Modules',
+    'Node.js 21.99，原生HTTP', `Node.js ${'9'.repeat(100)}以上原生HTTP`, `Node.js 22.21.${'9'.repeat(80)}，ES Modules`, 'Node.js 22.21，' + '原生HTTP'.repeat(40)]) {
+    const original = spec(); original.stack.backend = backend; assert.throws(() => inspectEngineeringContext({ spec: original, binding: bindingFor(original) }));
+  }
+  for (const storage of [`Node.js内置SQLite 3.${'9'.repeat(90)}`, 'Node.js内置SQLite 2.99']) {
+    const original = spec(); original.stack.storage = storage; assert.throws(() => inspectEngineeringContext({ spec: original, binding: bindingFor(original) }));
+  }
+});
+
 test('pure snapshot rejects getters, toJSON, cycles, sparse/custom arrays, symbols and non-finite numbers without invoking code', () => {
   let invoked = false;
   const getter = spec(); Object.defineProperty(getter, 'hidden', { enumerable: true, get() { invoked = true; return 1; } });
