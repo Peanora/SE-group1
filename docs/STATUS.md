@@ -10,6 +10,10 @@
 
 独立HTTP测试提案规划的服务及面板另在工作树实现；服务8b6因重复回执未锁存与无效代次准入两P2返工，面板d51待独立Review，均未挂入本主线。通用需求驱动执行、多Agent任务集成、可靠Worker恢复、团队权限和完整业务迁移仍未实现。未推送或部署，用户4317服务未动。
 
+最新真实修复：服务2616fc93从原bcec代码与e312阻塞意见修复为新提交`73020f7c1c5dcae8818f09f17aafcaae0b4ba8df`，sourceHash为`3d956af6f8aa14bd939caf2fa776995fbf26415eb4b84290e3fff47ae05b0e8a`。实际编码1/Review1、26988输入/5241输出；自检18、独立HTTP/SQLite18、实际Edge21均通过，原blocking逐项resolved、当前Review blocking0，3项advisory保留。原执行报告为accepted，但随后网页预览的默认Git来源检查误比较Windows的`E:/...`与`E:\...`，将SQL服务行撤为failed，预览未启动、源码未下载；当前不能交付。只读Git HEAD正确且status/diff为空，路径兼容修复另树处理中。不会手工恢复SQL成功，将在修复后对同7302进行正式0编码完整复验。详情`output/reference-web-ui-FYeJdW/repair-trial-summary.json`。本轮QA使用PTY，已取得QA_STOP_CONFIRMED、退出0及端口62188关闭证据；原两个报告hash不变，4317用户服务仍在。
+
+独立测试提案后端ef125已修复原两P2并独立FIX，面板d51也独立FIX；完整产品API/三服务检查点/网页挂接另树进行，尚未计为主线能力，也未编译或执行动态DSL。
+
 ### 前一检查点f176（历史记录）
 
 已将同项目需求输入变更集成至主分支`codex/platform-completion`，固定代码`f17671f48caffcdf08a702671e2938989986b2be`。网页可编辑或导入新版正文、保存待应用请求、核对原文差异与保守影响，并在规划与执行都空闲的项目检查点应用新需求。旧运行的快照/审批/检查保留历史，只读且不能作为新版本执行许可；新运行重新编排并确认规格与计划。当前只是需求输入版本及失效控制，尚不自动修改已有业务源码或迁移数据库，F05整体目标仍未完成。
