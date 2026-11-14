@@ -151,3 +151,13 @@ passed只表示固定`library-borrow-v1`在当前清单和Review规则下通过�
 真实网页首轮采用隔离数据`output/reference-web-ui-FYeJdW/data`，完成规格答复/修订/确认及计划确认，并在核对固定参考范围与预算后启动执行。服务执行`7fdca9cc-edad-4539-b706-efae65f5210c`，编码1次、Review1次，共17510输入/8566输出。模型生成4文件，固定候选`bcec69b2d700457398a997a9370cf98543b3e1b8`、源码hash`3c3cfa5f34432544b1771033dfe4d957762fc58109caeea9a6ebc1bcbdb01804`。自检18/18、独立HTTP/SQLite18/18及真实Edge21/21通过，但Review的JSON意见缺少必需evidence字段，严格校验拒绝；failed/taskAccepted:false，网页未开放预览/下载。该缺失不是格式通过或已解决的阻塞问题。原报告、Review回执及源码保留；随后只读核对原Git HEAD一致、status为空，没有修改原候选。
 
 试用平台服务在localhost临时端口运行，结束收到QA_STOP_CONFIRMED、进程退出0；未重启用户已有4317服务，未写用户data。下一步在产品内提供保持原提交的新检查尝试，不将现有失败改为通过，也不重复计入旧编码用量。历史`5dc88cd`的通过只属于当时版本；凭据保护规则升级后的当前门禁不能直接沿用旧结论。
+
+## 2026年11月14日：模型工程规划、网页固定复验与审批持久化
+
+固定主代码4df6c8d0800390a638f10c7a3d858a2567b5e0b8：root与不同Agent分别87脚本、显式真实MXC/Edge516/516，fail/cancel/skip均0，耗时98639.8798ms和99050.8879ms；独立额外存储/项目动作6项通过。证据output/verification/independent-owned-recheck-integration-4df6c8d-20261114。a18的513/514、legacy测试准备竞态和跨run待决审批被另一save写盘的P2均保留；修复未放宽业务断言，也未把文件队列说成事务数据库。
+
+4df网页实际对bcec原候选复验：新服务记录e312a9e4-86bc-4428-bd3e-95e1db6927f2，底层report为output/reference-web-ui-FYeJdW/data/executions/executions/e312a9e4-86bc-4428-bd3e-95e1db6927f2/web-recheck-dLlqy9/execution.json。编码0、Review2，共29897输入/924输出；第一Review格式无效，第二正常完成且有效。自检18/18、独立HTTP/SQLite18/18、Edge21/21，均停止确认；Review 1blocking、1advisory，统一failed，网页不提供继续复验、预览或下载。blocking ID ISSUE-2687a2edbe14c1090c3f，定位src/app.mjs279借阅检查/插入缺事务；advisory定位311归还条件更新。报告原文是审查意见，不把其并发推断当已实测的失败。下一轮按该意见修复新代码再验证。
+
+原7fd源报告SHA256仍565f25d74b888d107a7656a4c7d5f9609f7fa27a0aa5e5fa7353cfc7f9be7aac，原源码hash仍3c3cfa5f34432544b1771033dfe4d957762fc58109caeea9a6ebc1bcbdb01804；没有覆盖旧失败或重复计量。临时平台79852的非PTY stdin已关闭，不能发送STOP；在只读核对活动0、无预览、PID/命令和端口归属后停止该已知QA进程，52086不再监听，applicationShutdownAcknowledged:false。停止证据second-trial-platform-stop.json保留，不宣称取得正常应答；此限制只涉及临时平台关闭，测试应用/浏览器在此前已正常收尾。用户4317服务未动。
+
+实际工程规划另在独立FIX代码20363ee验证：原source/spec revision及规格字节不变，工程尝试1的invalid_input在历史保留；只重试工程阶段，新增规格0、实际工程1、3447输入/2406输出，生成17需求映射下2实体/4接口/2页面/6任务，确认并导出规划包。engineeringCalls=2是本地尝试总数，不能说两次收费；首次规格调用用量未记录。包SHA256 6adc95ead5e485650625fc898d65b6200e36f02fca9302d6abde54143707e22f、78070bytes；包内plan字节/engineering hash一致，私有回执摘要hash匹配，未发现配置密钥或私有回执标记。证据output/real-engineering-planning-9HYn7w/archive-proof.json。该次code0/businessAccepted:false，临时服务正常关闭。203与主集成工程策略hash已实核相同，仍不推导任意业务生成或整体F02充分性。
