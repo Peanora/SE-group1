@@ -12,6 +12,8 @@ Agent 开发前阅读 [AGENTS.md](AGENTS.md)，其中包含完整开发流程、
 
 当前进展和下一项验收见 [STATUS](docs/STATUS.md)。源码仓库：[Peanora/SE-group1](https://github.com/Peanora/SE-group1)。规范、源码、测试和无秘密的配置示例共同版本管理；`.env`、用户数据和本地产物不上传。
 
+暂停交接及下次继续事项见[NEXT_STEPS](docs/NEXT_STEPS.md)。尚未整体验收的测试提案接线单独保存在`codex/verification-planning-integration`候选分支。
+
 ## 启动
 
 安装 Node.js 22.21 或以上版本，在项目目录执行：
