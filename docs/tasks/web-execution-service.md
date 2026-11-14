@@ -77,3 +77,15 @@ getPlanning必须返回与ID匹配的project/run；run需有workflowVersion=2、
 本轮最终实际验证：显式启用`TASKFLOW_TEST_REAL_SANDBOX=1`并指定已验证本地执行程序，`node --test tests/web-execution-service.test.mjs`为**42/42通过、0跳过**。其中只有原有薄失败候选使用真实执行器/Git/MXC，模型返回由可信薄fixture提供，产生真实文件与失败自检，仍未验收、用量未知、下载关闭、0付费；新增正向复验及预览/下载路径使用可信依赖注入，不能称为真实业务全流程通过。`node --test tests/execution-panel.test.mjs`真实系统Edge平台UI fixture为**19/19通过**（18场景及父项），覆盖桌面与390×844；`npm run check`为77脚本通过，`git diff --check`通过。最后仅补本文及UI任务记录，不再更改被测脚本。
 
 固定后待不同作者独立专项及根HTTP/UI串行集成回归；本树未写真实QA/data或主树，未发起真实API，未推送或部署。服务仍为单控制器SQLite生命周期，重启未知进程保留reconciliation_required；未新增多Worker恢复能力或task-store接入。
+
+## 73532cc 独立审查两项 P2 的修订
+
+旧版42项服务与19项Edge专项虽通过，独立探针仍实证两处遗漏，73532cc因此未放行：25ms预算在核对100ms后仍未abort、core重获25ms并可通过；canonical Review认可的README.md问题被局部路径过滤遗漏，旧accepted仍能下载及再次复验。本轮保持旧提交、原QA及审查证据不改，仅在原授权范围修复。
+
+总deadline在新row事务建立时固定，私有snapshot保留开始时间、截止时间与用户确认的总预算。timer覆盖规划查询、来源inspector及core，所有准入异步边界和实际dispatch前另验elapsed，避免事件循环同步阻塞绕过timer；core只取得剩余整数毫秒，当前DTO仍展示原确认总预算。预算或取消触发后立即abort且禁止新Review，先保留活动槽等待已有核对停止，最多额外5500ms只用于清理（与managed-process的5秒停止确认上限对齐），不增加付费或执行预算。核对按期合作结束才可timed_out/stopped；未结束或有unknown-stop结果则reconciliation_required，不假定外部工具已死。
+
+私有snapshot/source_history保存来源服务ID、原root/report/workspace、新输出目录、开始/deadline及已有PID/control/probe/result。超过清理等待后迟到的核对结果，在当前控制器仍拥有数据库时只追加证据且继续协调，不发起Review、不重新释放槽或发布成功；关闭或归属失效后的回调不能修改新控制器，已存未知记录保持需人工核对。单控制器服务不声称自动恢复或自动完成协调。运行中的core仍复用其停止与回收协议，service取消及总deadline也优先覆盖迟到accepted。
+
+阻塞识别及问题DTO的文件位置改用现有validateProjectFiles的canonical路径校验，不再另写更窄的前缀/字符规则。README.md、docs/a..b.md及Unicode合法文件问题都保留定位并撤销同代码早期accepted的当前验收/预览/下载/再检；越界和保留路径仍由canonical规则拒绝。Review意见/证据的真实性仍由core validator核对源码行，服务不降低核心验收要求。
+
+本修订实际验证：先运行新增定向回归，再显式启用`TASKFLOW_TEST_REAL_SANDBOX=1`及已验证本地执行程序运行完整服务专项，**48/48通过、0失败/跳过**，含原有真实Git/MXC薄失败候选；新增6项覆盖异步100ms/25ms预算与同步超时、部分预算传递、迟到core通过、超时及取消不合作核对/清理等待/迟到私有停止结果/重启、abort后unknown停止、三类canonical合法文件阻塞。真实系统Edge平台fixture **20/20通过**（19场景及父项），77脚本语法及`git diff --check`通过。最后只更新任务记录，不再修改被测脚本。新增正向及停止探针仍为可信依赖测试，0付费；原QA、core和其他工作树未改。本提交只修5个原授权文件，public组件代码不需改变；待不同作者重新复验，不把前版独立测试数量当作放行证据。

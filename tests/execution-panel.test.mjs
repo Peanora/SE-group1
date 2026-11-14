@@ -218,6 +218,19 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
     assert.match(await page.locator('.ep-facts').textContent(), /输入用量：0 token；输出用量：12 token/);
   });
 
+  await t.test('canonical root README and legal dot-dot filenames retain visible issue locations on narrow screens', async () => {
+    const page = await pageFor(); await page.setViewportSize({ width: 390, height: 844 });
+    const issues = ['README.md', 'docs/a..b.md', 'docs/中文说明.md'].map((file, index) => ({ id: `ISSUE-path-${index}`, severity: 'blocking', status: 'open', file, line: 1, message: marker }));
+    state.executions[0].versions[0].acceptance.issues = issues; state.executions[0].versions[0].acceptance.openIssues = issues;
+    state.executions[0].error = '同一固定提交已有新的有效阻塞问题，请先修复形成新代码版本。'; state.executions[0].actions = { canRetry: true }; await refresh(page);
+    await page.locator('summary').filter({ hasText: '问题与处理历史' }).click();
+    for (const [index, file] of ['README.md', 'docs/a..b.md', 'docs/中文说明.md'].entries()) {
+      const item = page.locator('p.ep-muted').filter({ hasText: `ISSUE-path-${index}` }); assert.equal(await item.isVisible(), true); assert.match(await item.textContent(), new RegExp(file.replaceAll('.', '\\.') + ':1', 'u'));
+    }
+    assert.equal(await page.locator('.execution-panel img, .execution-panel script').count(), 0); assert.equal(await download(page).count(), 0);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  });
+
   await t.test('cancel request, reconciliation and confirmed stop stay distinct', async () => {
     const page = await pageFor(); postExecution = execution({ status: 'cancel_requested', actions: {} });
     await page.getByRole('button', { name: '请求停止', exact: true }).click();

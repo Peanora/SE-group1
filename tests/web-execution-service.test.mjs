@@ -10,7 +10,7 @@ import { contentRevision, planningRevision } from '../lib/planning-review.mjs';
 import { isWebTaskAccepted, startWebExecution } from '../lib/web-executor.mjs';
 import { webManifest, databaseObserverHash } from '../lib/web-tests.mjs';
 import { browserManifest } from '../lib/web-browser-tests.mjs';
-import { projectReviewPolicy } from '../lib/project-review-model.mjs';
+import { projectReviewPolicy, validateProjectReviewResponse } from '../lib/project-review-model.mjs';
 import { installWebShell } from '../lib/web-delivery.mjs';
 import { applyProjectFiles } from '../lib/project-files.mjs';
 
@@ -132,6 +132,9 @@ async function recheckFixture(t) {
 async function waitRecheck(f) {
   for (let i = 0; i < 200; i++) { if (f.state.rechecks.length) { await f.state.rechecks.at(-1).ready; return f.state.rechecks.at(-1); } await new Promise(resolve => setTimeout(resolve, 5)); }
   assert.fail('mock recheck was not dispatched');
+}
+async function setRecheckTimeout(f, timeoutMs) {
+  await f.service.shutdown(); f.service = await f.open({ budget: { maxCalls: 1, maxReviewCalls: 1, timeoutMs } });
 }
 
 test('capabilities are explicit reference-only, and start checks current content plus both approvals', async t => {
@@ -535,6 +538,84 @@ test('recheck admission cancellation prevents a late inspector from constructing
   await waitFor(f.service, value => value.executions[0].status === 'stopped'); assert.equal(f.state.rechecks.length, 0);
 });
 
+test('the row admission deadline aborts a slow inspector and rejects synchronous elapsed-budget overruns before Review dispatch', async t => {
+  for (const synchronous of [false, true]) {
+    const f = await recheckFixture(t); await setRecheckTimeout(f, 25); let signal;
+    f.state.inspectHook = async (options, value) => {
+      signal = options.signal;
+      if (synchronous) { const until = Date.now() + 80; while (Date.now() < until) { /* Block the timer to exercise the explicit elapsed check. */ } }
+      else await new Promise(resolve => setTimeout(resolve, 100));
+      return value();
+    };
+    const { execution } = await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' });
+    const result = await waitFor(f.service, value => value.executions[0].status === 'timed_out');
+    assert.equal(signal.aborted, true); assert.equal(f.state.rechecks.length, 0); assert.equal(result.executions[0].reviewCalls, 0);
+    assert.equal(result.executions[0].taskAccepted, false); assert.equal(result.executions[0].budget.timeoutMs, 25);
+    assert.equal(result.capabilities.canStart, true, 'a settled inspector may release the slot after the timeout');
+    const db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite')), privateRow = db.prepare('SELECT snapshot FROM executions WHERE id=?').get(execution.id); db.close();
+    assert.equal(JSON.parse(privateRow.snapshot).admission.sourceReportPath, f.state.original.reportPath);
+  }
+});
+
+test('cooperative admission consumes the shared budget and only the remaining time reaches the new core execution', async t => {
+  const f = await recheckFixture(t); await setRecheckTimeout(f, 1500);
+  f.state.inspectHook = async (_options, value) => { await new Promise(resolve => setTimeout(resolve, 150)); return value(); };
+  await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }); const entry = await waitRecheck(f);
+  assert.ok(entry.options.timeoutMs >= 1 && entry.options.timeoutMs <= 1350, `remaining core budget was ${entry.options.timeoutMs}`);
+  await entry.pass(); const result = await waitFor(f.service, value => value.executions[0].taskAccepted);
+  assert.equal(result.executions[0].budget.timeoutMs, 1500, 'the DTO retains the confirmed total budget, not a fresh allowance');
+});
+
+test('a core result returned after the shared deadline cannot publish a late accepted task', async t => {
+  const f = await recheckFixture(t); await setRecheckTimeout(f, 500); f.state.manualRecheckCancel = true;
+  await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }); const entry = await waitRecheck(f);
+  await new Promise(resolve => entry.options.signal.aborted ? resolve() : entry.options.signal.addEventListener('abort', resolve, { once: true }));
+  assert.equal((await f.service.list(ids)).capabilities.canStart, false); await entry.pass();
+  const result = await waitFor(f.service, value => value.executions[0].status === 'timed_out');
+  assert.equal(entry.cancelled, 1); assert.equal(result.executions[0].taskAccepted, false); assert.equal(result.executions[0].actions.canDownload, false);
+});
+
+test('non-cooperative admission drains without releasing the slot, then preserves unknown source evidence and never dispatches Review', async t => {
+  for (const cancel of [false, true]) {
+    const f = await recheckFixture(t); await setRecheckTimeout(f, cancel ? 15000 : 50); const entered = deferred(), release = deferred(); let signal;
+    f.state.inspectHook = async options => { signal = options.signal; entered.resolve(); return release.promise; };
+    const { execution } = await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }); await entered.promise;
+    if (cancel) await f.service.action({ ...ids, executionId: execution.id, action: 'cancel' });
+    await new Promise(resolve => signal.aborted ? resolve() : signal.addEventListener('abort', resolve, { once: true }));
+    const draining = await f.service.list(ids); assert.ok(['cancel_requested', 'stopping'].includes(draining.executions[0].status));
+    assert.equal(draining.capabilities.canStart, false); assert.equal(f.state.rechecks.length, 0);
+    const result = await waitFor(f.service, value => value.executions[0].status === 'reconciliation_required', 7500);
+    assert.equal(result.executions[0].taskAccepted, false); assert.equal(result.executions[0].reviewCalls, 0); assert.equal(f.state.rechecks.length, 0);
+    assert.equal(result.capabilities.canStart, false); await assert.rejects(f.service.start(startInput), { code: 'execution_active' });
+    const db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite')), evidence = JSON.parse(db.prepare('SELECT record FROM source_history WHERE execution_id=?').get(execution.id).record);
+    assert.equal(evidence.admission.sourceServiceExecutionId, f.state.sourceId); assert.equal(evidence.admission.sourceReportPath, f.state.original.reportPath);
+    assert.equal(evidence.admission.sourceWorkspace, f.state.original.workspace); assert.equal(evidence.admission.inspectionSettled, false);
+    assert.equal(evidence.admission.outputDirectory, path.join(f.rootDir, 'executions', execution.id));
+    assert.ok(!JSON.stringify(result).includes(f.rootDir));
+    if (!cancel) {
+      release.reject(Object.assign(new Error('late unknown Git stop'), { result: { pid: 919191, terminationConfirmed: false, controlDirectory: 'C:/private/late-admission' }, probeDirectory: 'C:/private/late-probe' }));
+      for (let i = 0; i < 100 && db.prepare('SELECT COUNT(*) count FROM source_history WHERE execution_id=?').get(execution.id).count < 2; i++) await new Promise(resolve => setTimeout(resolve, 5));
+      const late = db.prepare('SELECT record FROM source_history WHERE execution_id=?').all(execution.id).map(item => JSON.parse(item.record)).find(item => item.result?.pid === 919191);
+      assert.equal(late.result.controlDirectory, 'C:/private/late-admission'); assert.equal(late.probeDirectory, 'C:/private/late-probe');
+    }
+    db.close(); await f.service.shutdown();
+    if (cancel) release.resolve({}); // A response after shutdown must not publish or mutate the next controller.
+    const next = await f.open(); assert.equal((await next.list(ids)).executions[0].status, 'reconciliation_required'); assert.equal((await next.list(ids)).capabilities.canStart, false);
+  }
+});
+
+test('abort-confirmed inspector completion and an unknown stop result stay distinct', async t => {
+  const f = await recheckFixture(t); await setRecheckTimeout(f, 50);
+  f.state.inspectHook = options => new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(Object.assign(new Error('Git termination unknown'), {
+    result: { pid: 929292, startedAt: new Date().toISOString(), terminationConfirmed: false, controlDirectory: 'C:/private/admission-control' }, probeDirectory: 'C:/private/admission-probe',
+  })), { once: true }));
+  const { execution } = await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' });
+  const result = await waitFor(f.service, value => value.executions[0].status === 'reconciliation_required'); assert.equal(f.state.rechecks.length, 0);
+  const db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite')), evidence = JSON.parse(db.prepare('SELECT record FROM source_history WHERE execution_id=?').get(execution.id).record); db.close();
+  assert.equal(evidence.result.pid, 929292); assert.equal(evidence.admission.sourceReportPath, f.state.original.reportPath); assert.equal(result.capabilities.canStart, false);
+  assert.ok(!JSON.stringify(result).includes('929292') && !JSON.stringify(result).includes('admission-control'));
+});
+
 test('late recheck pass cannot override cancellation or a new planning version', async t => {
   for (const kind of ['cancel', 'stale']) {
     const f = await recheckFixture(t); f.state.manualRecheckCancel = true; const { execution } = await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }), entry = await waitRecheck(f);
@@ -590,6 +671,29 @@ test('a new valid blocking Review revokes publication of the same old accepted c
   history.prepare('UPDATE executions SET record=?,snapshot=? WHERE id=?').run(JSON.stringify(different), JSON.stringify(differentSnapshot), list.executions[0].id); history.close();
   restored = (await f.service.list(ids)).executions.find(value => value.id === f.state.sourceId);
   assert.equal(restored.taskAccepted, true, 'a finding for another commit does not revoke this commit'); assert.equal(restored.actions.canRecheck, true);
+});
+
+test('canonical Review findings in README and legal dot-dot or Unicode names revoke old publication and remain visible in DTO', async t => {
+  for (const file of ['README.md', 'docs/a..b.md', 'docs/中文说明.md']) {
+    files.unshift({ path: file, content: 'Protected routes require authenticated sessions.\n' });
+    try {
+      const f = await recheckFixture(t), db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite'));
+      Object.assign(f.state.original, { status: 'accepted', acceptanceStatus: 'passed', error: null }); f.state.original.versions[0].acceptance.status = 'passed'; f.state.original.versions[0].acceptance.review.status = 'completed';
+      db.prepare('UPDATE executions SET record=?,status=? WHERE id=?').run(JSON.stringify(f.state.original), 'accepted', f.state.sourceId); db.close();
+      await writeFile(f.state.original.reportPath, JSON.stringify(f.state.original)); assert.equal((await f.service.list(ids)).executions[0].taskAccepted, true);
+      await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }); const entry = await waitRecheck(f), result = acceptedRecord(entry);
+      const issue = { id: 'ISSUE-canonical-path', severity: 'blocking', status: 'open', file, line: 1, message: 'The published contract contradicts authentication behavior', evidence: files[0].content.trim(), originCommit: result.candidateCommit };
+      const checked = validateProjectReviewResponse({ summary: 'A code revision is required', issues: [issue], resolutions: [] }, { files, previousIssues: [] });
+      const gate = result.versions[0].acceptance; gate.status = 'changes_requested'; gate.review = { ...gate.review, ...checked, kind: 'model', openBlockingIssues: 1 }; gate.issues = [issue]; gate.openIssues = [issue];
+      await entry.pass({ status: 'failed', acceptanceStatus: 'changes_requested', versions: result.versions });
+      const list = await waitFor(f.service, value => value.executions[0].status === 'failed'), old = list.executions.find(value => value.id === f.state.sourceId);
+      assert.equal(list.executions[0].versions[0].acceptance.openIssues[0].file, file); assert.equal(old.status, 'accepted');
+      assert.equal(old.taskAccepted, false); assert.equal(old.actions.canDownload, false); assert.equal(old.actions.canPreview, false); assert.equal(old.actions.canRecheck, false);
+      await assert.rejects(f.service.download({ ...ids, executionId: old.id }), { code: 'not_accepted' });
+      await assert.rejects(f.service.action({ ...ids, executionId: old.id, action: 'preview' }), { code: 'not_accepted' });
+      await assert.rejects(f.service.action({ ...startInput, executionId: old.id, action: 'recheck' }), { code: 'cannot_recheck' }); assert.equal(f.state.rechecks.length, 1);
+    } finally { files.shift(); }
+  }
 });
 
 test('recheck download rejects snapshot tampering and changed original report provenance', async t => {

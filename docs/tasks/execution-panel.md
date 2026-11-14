@@ -60,3 +60,7 @@ execution：`{ id, status, taskAccepted, stage?, versions: [{ commit, sourceHash
 本组件不实现HTTP路由；根维护server精确字段及API文档。只有服务完整当前gate、原来源provenance与快照核对通过，才沿用既有预览和源码下载权限；UI不自行由旧QA成功推出新任务成功。
 
 最终实际检查：`node --test tests/execution-panel.test.mjs`真实系统Edge为19/19通过（18场景及父项），0失败/跳过；新增复验按钮的桌面/窄屏、旧contract当前scope、费用ack、失败保留与跨运行token场景通过。并行服务专项显式启用真实执行程序为42/42通过、0跳过，其中新增复验正向仍为可信依赖fixture；`npm run check`为77脚本通过，`git diff --check`通过。截图只作为布局证据，交互由断言验证。最后只更新任务记录，未更改被测脚本；固定后待不同作者和根集成复验，0付费、未推送/部署。
+
+73532cc独立审查发现服务DTO漏掉合法README.md问题位置，本次服务改为canonical项目路径校验；组件本来按文本显示file:line，无需扩大渲染权限。新增真实Edge窄屏回归验证README.md:1、docs/a..b.md:1及Unicode文件定位可见、文本仍不执行、阻塞状态无下载、无横向溢出。等待停止和状态待核对继续使用既有真实后端状态显示，未知工具不由UI推断已停止。
+
+本修订实际执行Edge专项20/20通过（19场景及父项），服务48/48且原有真实MXC项0跳过，77脚本语法及diff检查通过。原界面脚本未改，新增定位由服务DTO修复及真实浏览器断言共同覆盖；正向业务复验仍须根集成与独立验收，无真实API或付费调用。
