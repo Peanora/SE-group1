@@ -182,3 +182,14 @@ source-panel原4e2专项虽13/13，独立发现交错GET漏onApplied后BLOCK；6
 随后实际网页preview被默认verifySource拦截，sourceFailure将服务SQL行置failed，不能继续下载或称当前交付通过。根只读Git确认7302 HEAD相等、status/diff均空；实际Git根返回正斜线，而服务samePath只比较大小写未规范化分隔符，误判Windows工作区。隔离候选正在修正该平台缺陷并加默认真实Git入口正负例；不修改原Git/报告/服务状态以绕门禁，也不重编码同代码。修复后必须正式新复验，不能直接继承原accepted报告。
 
 本轮原件校验565f25d7与67ffc342保持；私有汇总repair-trial-summary.json明确currentServiceStatus=failed、immutableModelReportStatus=accepted、previewStarted/sourceDownloaded=false。正常PTY STOP后QA_STOP_CONFIRMED、退出0、端口62188关闭，证明文件repair-platform-stop-1794652092076.json。用户4317仍为原进程84732。实际模型用量与失败均保留，未推送部署；未获成功UI截图或源码包，不把历史5dc交付证据替代本轮7302。
+## 2026-11-14 7302正式复验与真实网页交付
+
+af093Windows默认来源核对修复经root/非作者同版98语法及显式668/668完整测试，耗时110485.2453ms/109575.5378ms，均0失败/取消/跳过；非作者3真实Git额外探针确认同前缀兄弟root及assume-unchanged隐藏状态仍被blob检查拒绝，原QA/SQL没被改写。主线合并5ec6e13生产文件与af一致。
+
+实际新复验服务e820994a-1c6d-45a4-8dcc-2a83d04aed87、执行36c096d6-9bd4-4da3-9fea-5e3c3ef7e60b；仍为73020f7/sourceHash3d956a，自检18、独立HTTP/SQLite18、实际Edge21全部通过/停止确认，新Review completed/blocking0，3advisory保留。新增编码0、Review1，用量16190输入/426输出；原2616修复轮1code/1Review26988/5241保持失败服务状态与不可变accepted报告，不补造通过。
+
+网页实际预览在独立localhost57843完成alice登录、借阅库存1→0及active记录、归还库存0→1及returned，已保存repair-preview-returned.png。UI停止取得实际pid3808正常停止/exit0/sourceUnchanged/ack，当前活动0。点击下载的20文件包117959bytes，SHA35c1395cbb938a2b2c58ded72a8587fd1b3dc8d7825908bddb28e234b7ae1be8；本地副本library-web-73020f7-verified.zip，工作台交付截图repair-workbench-delivery.png。
+
+root实际web:verify对该包全新副本HTTP18/18+Edge21/21，report output/delivery-verification/delivery-revalidation-Bfnx6D/revalidation.json，status checks_passed、taskAccepted/historicalAcceptanceVerified均false（不把包内历史声明当证明）。干净解压离线npm ci退出0、npm start实际启动localhost51033，7项版本/隐私/匿名拒绝/登录/借阅库存/归还重复409/登出及原源码不变检查全过，STOP_CONFIRMED退出0；停止后全部20交付文件hash仍一致。配置凭据、私有回执、本地路径、数据库均未出现在交付内容，已知凭据扫描通过。汇总final-recheck-delivery-summary.json、clean-start-smoke-73020f7.json为本轮事实，截图存在不代替业务检查。
+
+QA平台PTY正常STOP退出0；63820/57843/51033已无监听，4317仍原PID84732。旧两个报告565f25d7/67ffc342及修复报告9e72fdf5保持；e820 accepted/active0/preview none。此为固定参考软件交付，动态DSL、任意业务生成、团队/Worker能力不因此完成，未推送或部署。包的额外非作者复核另行保存，不把未跑的独立检查写成完成。
