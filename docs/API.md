@@ -77,6 +77,23 @@ approvals为`{spec:null|{revision,at,feedback},plan:null|{revision,specRevision,
 
 ## 状态和持久化
 
+### 同项目需求输入版本
+
+基础路径`/api/projects/:pid/changes`要求本机回环、匹配监听端口的Host及同源变更请求。源文件、规划绑定和应用权限均由服务读取；客户端不能传工作区、执行报告、回调或审批状态。
+
+- GET基础路径：`{current:{revision,generation,source},versions,changes,capabilities:{canApply,reason?}}`。旧项目视为第0代；读取异步变更列表后再读取当前已发布输入。canApply表示已配置双服务检查点，具体是否空闲仍由应用时检查，不保证立即可用。
+- POST基础路径精确接受`{baseRevision,source:{filename,content},reason,kind,requestKey}`，返回201`{change}`。请求只保存待应用记录，不修改当前需求、不启动模型或新run。同一requestKey与正文幂等，改变正文复用键返回409。每项目最多20请求、最多20输入版本（含第0代）。
+- POST`/parse`精确接受`{filename,content}`或`{filename,fileBase64}`，返回200`{source}`。使用与新建项目相同的MD/TXT/标准DOCX正文解析；只返回候选文本，不保存请求或应用新版本。
+- POST`/:changeId/apply`精确接受`{baseRevision,generation}`，返回200`{change}`。规划项目检查点包裹执行服务项目检查点，核对所有run的活动、未知停止、预览及在途动作后，才发布新输入。检查点忙返回409并保留pending；协调能力缺失也只允许保存，不发布。
+
+Change含`id/projectId/status/baseRevision/generation/sourceRevision/source/reason/kind/draft/appliedDraft/appliedGeneration`及时间与错误字段。状态为pending、applying、applied或apply_interrupted；503不意味着应用未发生，不能自动重放。差异与影响是结构化原文比较及conservative_all保守失效：新审批必须重新取得，旧测试不可复用，代码复用尚未判定；requiresMigrationReview仅表示需要迁移审查，未执行数据库迁移。
+
+项目JSON保存currentSourceRevision/sourceGeneration/sourceVersions/appliedChangeId，作为输入发布的权威事实；变化请求另存`data/source-changes/changes.sqlite`。应用依次写入SQLite意图、发布完整JSON、确认SQLite。重启只依据完全匹配的JSON代次/hash/changeId核对结果，不自动重演发布。这是可核对的单控制器协议，不能称为跨存储事务。
+
+应用后历史run保留原sourceSnapshot与审批，标记sourceSuperseded并拒绝继续、修改和确认；新run绑定新sourceGeneration与sourceRevision，重新生成和确认规格/计划。旧源执行的完成权限、复试/复验、预览和下载同时失效；实际停止操作仍允许。旧版本归档文档可作为历史下载，不能当作新需求已交付。
+
+网页保存草稿与幂等键；应用必须由后端GET确认同change、当前revision和代次后才显示完成。页面观察到其他请求应用新输入时，重新读取项目及历史run权限。需求正文、差异与模型文本只作为文本展示。
+
 ### 独立编码试验的内部接口
 
 本轮不新增 HTTP 路由，规划 Run、DevTask 和现有成功状态含义保持不变。命令入口为 `npm run execution:check -- --fixture|--model`。

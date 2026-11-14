@@ -102,6 +102,12 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
   }
   function render() {
     const { run } = getState();
+    if (run?.sourceSuperseded) {
+      container.hidden = false; currentDraft = null;
+      const key = `historical:${run.id}:${run.specRevision}:${run.planRevision}`;
+      if (viewKey !== key) { viewKey = key; container.innerHTML = `<div class="review-intro"><div><h3 id="review-heading">历史需求输入：确认记录只读</h3><p>已应用新的项目需求。这里的规格、计划与确认保留为历史，请重新编排并确认新版本。</p></div></div>${run.workflowVersion === 2 ? history(run) : ''}`; }
+      return;
+    }
     const legacy = run && run.workflowVersion !== 2;
     const visible = run && (legacy ? run.status === 'awaiting_review' : !!run.specRevision);
     container.hidden = !visible;
@@ -184,7 +190,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
   async function act(action) {
     const { run, busy } = getState();
     const draft = currentDraft;
-    if (!run || !draft || busy || pending) return;
+    if (!run || run.sourceSuperseded || !draft || busy || pending) return;
     const legacy = run.workflowVersion !== 2;
     const revisingSpec = isSpecRevisionFromPlan(run, draft.kind);
     if (revisingSpec && action !== 'save') return;

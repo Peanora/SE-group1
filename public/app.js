@@ -1,15 +1,21 @@
 import { createPlanningReview } from './planning-review.js';
 import { createExecutionPanel } from './execution-panel.js';
+import { createSourceChanges } from './source-changes.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const escape = (value = '') => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const state = { health: null, projects: [], project: null, run: null, stageId: 'spec', taskId: null, artifactName: 'task.md', tab: 'events', raw: false, busy: false, epoch: 0, selectionPending: false, pollTimer: null, feedback: '', importFile: null, filename: 'requirements.md' };
 let executionContextKey = '';
+let sourceContextKey = '';
+function historicalRun(run = state.run) {
+  return !!run && (run.sourceSuperseded === true || (state.project?.currentSourceRevision !== undefined
+    && (run.sourceRevision !== state.project.currentSourceRevision || (run.sourceGeneration ?? 0) !== state.project.sourceGeneration)));
+}
 function executionContext() {
   if (state.selectionPending) return { projectId: '', runId: '', specRevision: '', planRevision: '', planningStatus: 'unconfirmed' };
   const run = state.run;
-  const confirmed = run?.workflowVersion === 2 && run.approvals?.spec?.revision === run.specRevision
+  const confirmed = !historicalRun(run) && run?.workflowVersion === 2 && run.approvals?.spec?.revision === run.specRevision
     && run.approvals?.plan?.revision === run.planRevision && run.approvals?.plan?.specRevision === run.specRevision
     && !!run.specRevision && !!run.planRevision && run.review?.passed === true;
   return { projectId: state.project?.id ?? '', runId: run?.id ?? '', specRevision: run?.specRevision ?? '',
@@ -20,6 +26,36 @@ void executionPanel.mount(document.querySelector('#execution-panel-host'));
 function syncExecutionPanel() {
   const next = JSON.stringify(executionContext());
   if (next !== executionContextKey) { executionContextKey = next; void executionPanel.refresh(); }
+}
+const sourceChanges = createSourceChanges({ api: sourceApi, getContext: () => ({ projectId: state.selectionPending ? '' : state.project?.id ?? '' }),
+  onApplied: async change => { if (change.projectId !== state.project?.id || state.selectionPending) return; await refreshSourceProject(change.projectId, state.epoch); toast('新需求已应用，请重新编排并确认规格和计划'); },
+  onError: error => showError(error) });
+void sourceChanges.mount(document.querySelector('#source-changes-host'));
+function syncSourceChanges() {
+  $('#source-changes-section').hidden = !state.project || state.selectionPending;
+  const next = state.selectionPending ? '' : state.project?.id ?? '';
+  if (next !== sourceContextKey) { sourceContextKey = next; void sourceChanges.refresh(); }
+}
+async function refreshSourceProject(projectId, epoch, expected) {
+  const { project } = await api(`/api/projects/${encodeURIComponent(projectId)}`);
+  if (epoch !== state.epoch || state.selectionPending || state.project?.id !== projectId) return;
+  if (expected && ((project.sourceGeneration ?? 0) < expected.generation || (project.sourceGeneration === expected.generation && project.currentSourceRevision !== expected.revision))) throw new Error('项目输入版本尚未核对一致，请刷新后继续。');
+  const runId = state.run?.id;
+  ++state.epoch; clearTimeout(state.pollTimer);
+  state.project = { ...project, runs: project.runs || [] };
+  state.run = state.project.runs.find(run => run.id === runId) || sortedRuns()[0] || null;
+  rememberSelection(); renderAll(); schedulePoll();
+  await refreshProjects();
+}
+async function sourceApi(url, options) {
+  const projectId = state.project?.id, epoch = state.epoch;
+  const result = await api(url, options);
+  // A different request may apply a source version while this page is open.
+  // Re-read persisted project facts before displaying actions for its old runs.
+  if ((!options?.method || options.method === 'GET') && projectId && !state.selectionPending && epoch === state.epoch && state.project?.id === projectId
+    && url === `/api/projects/${encodeURIComponent(projectId)}/changes` && Number.isSafeInteger(result?.current?.generation)
+    && result.current.generation !== (state.project.sourceGeneration ?? 0)) await refreshSourceProject(projectId, epoch, result.current);
+  return result;
 }
 const ACTIVE = new Set(['running', 'paused', 'awaiting_spec', 'awaiting_review']);
 const STATUS = { pending: '待执行', running: '执行中', paused: '已暂停', succeeded: '已完成', failed: '执行失败', blocked: '被阻塞', awaiting_spec: '等待规格确认', awaiting_review: '等待计划确认', idle: '尚未开始' };
@@ -127,7 +163,7 @@ function sortedRuns(project = state.project) { return [...(project?.runs || [])]
 function stageOf(id) { return state.run?.stages?.find((stage) => stage.id === id); }
 function stageTitle(id) { return stageOf(id)?.title || STAGES.find((stage) => stage.id === id)?.title || '运行'; }
 const planningReview = createPlanningReview({
-  container: $('#review-banner'), getState: () => ({ ...state, busy: state.busy || state.selectionPending }), submit: reviewAction,
+  container: $('#review-banner'), getState: () => ({ ...state, run: historicalRun() ? { ...state.run, sourceSuperseded: true } : state.run, busy: state.busy || state.selectionPending }), submit: reviewAction,
   refresh: async () => {
     const id = state.run?.id; const epoch = state.epoch;
     const { run } = await api(basePath());
@@ -161,13 +197,13 @@ function renderControls() {
   modelNotice.textContent = `${run?.mode === 'model' && run.workflowVersion !== 2 ? '当前显示旧版运行，按原流程仅整理规格。' : ''}新版模型运行会发送需求以整理规格；确认规格后，还会请求工程设计并产生用量。${knownBudget ? `每次运行工程设计最多尝试 ${modelBudget.engineeringMaxCalls} 次，单次最多 ${modelBudget.engineeringTimeoutMs / 1000} 秒。` : '工程设计预算尚未获取，请刷新核对。'}架构与任务共用一次设计请求，结果仍需你审阅。`;
   const design = run?.engineeringHistory?.at(-1);
   if (design) modelNotice.textContent += ` 最近设计：${({ running: '处理中', succeeded: '草案已生成', failed: '失败', interrupted: '已中断' })[design.status] || '状态未知'}；输入 ${Number.isSafeInteger(design.usage?.inputTokens) ? design.usage.inputTokens : '未知'}、输出 ${Number.isSafeInteger(design.usage?.outputTokens) ? design.usage.outputTokens : '未知'} token。`;
-  const active = ACTIVE.has(run?.status);
+  const historical = historicalRun(run), active = !historical && ACTIVE.has(run?.status);
   const changing = state.busy || state.selectionPending;
   $('#start-run').disabled = !state.project || changing || active;
   $('#start-run span').textContent = run ? '再次编排' : '开始编排';
   $('#mode-select').disabled = changing || active;
   $('#failure-select').disabled = changing || active;
-  $('#pause-button').hidden = !['running', 'paused'].includes(run?.status);
+  $('#pause-button').hidden = historical || !['running', 'paused'].includes(run?.status);
   $('#pause-button').textContent = run?.status === 'paused' ? '恢复执行' : '暂停';
   $('#pause-button').disabled = changing;
   $('#refresh-button').disabled = state.busy;
@@ -175,13 +211,14 @@ function renderControls() {
   $('#download-bundle').hidden = run?.status !== 'succeeded';
   if (run?.status === 'succeeded') $('#download-bundle').href = `${basePath()}/download`;
   const status = run?.status || 'idle';
-  $('#run-status').textContent = `${STATUS[status] || status}${run && run.workflowVersion !== 2 ? ' / 旧版记录' : ''}`;
+  $('#run-status').textContent = `${STATUS[status] || status}${historical ? ' / 历史输入，只读' : run && run.workflowVersion !== 2 ? ' / 旧版记录' : ''}`;
   $('#run-status').className = `status-tag status-${status}`;
   const count = run?.stages?.filter((stage) => stage.status === 'succeeded').length || 0;
   $('#run-progress').textContent = run ? `${count} / ${run.stages.length} 个阶段已完成${run.status === 'paused' ? '，当前任务完成后暂停' : ''}` : '导入需求后开始';
   $('#workflow-subtitle').textContent = run ? `${run.mode === 'model' ? '模型规划' : '本地规则规划'}　运行 ${run.id.slice(-8)}${run.workflowVersion === 2 ? '　两次人工确认' : '　旧版流程'}` : '六个阶段，两次确认，保留每版依据';
   $('#workflow-confirmation-legend').textContent = run && run.workflowVersion !== 2 ? '旧版流程：导出前确认' : '先确认规格，再确认计划';
-  planningReview.render();
+  $('#source-history-notice').hidden = !historical;
+  planningReview.render(); syncSourceChanges();
   $('#event-count').textContent = run?.events?.length || 0;
   $('#task-count').textContent = run?.tasks?.length || 0;
   $('#artifact-count').textContent = run?.artifacts?.length || 0;
@@ -203,6 +240,7 @@ function renderInspector() {
   const note = state.run?.status === 'awaiting_spec' && ['spec', 'architecture', 'tasks'].includes(stage.id) ? '请在下方答复待确认问题并保存修订；确认规格后才会生成架构和任务。' : stage.id === 'export' && state.run?.status === 'awaiting_review' ? `检查下方计划后，点击“${state.run?.workflowVersion === 2 ? '确认计划并导出' : '确认并导出'}”继续。` : stage.status === 'blocked' ? '前置阶段尚未成功。解决失败并重试后，编排器会重新检查依赖。' : stage.status === 'succeeded' ? '本阶段结果已保存。后续重试会保留成功分支。' : '每个阶段成功后发布产物；下游只读取已成功的结果。';
   const html = `<div class="inspector-eyebrow"><span>阶段详情</span><span class="status-tag status-${escape(stage.status)}">${escape(STATUS[stage.status] || stage.status)}</span></div><h3 class="inspector-title">${escape(stage.title)}</h3><p class="inspector-description">${escape(fallback.description)}</p><dl class="inspector-info"><dt>前置依赖</dt><dd>${stage.dependsOn.length ? stage.dependsOn.map((id) => escape(stageTitle(id))).join('、') : '无，可直接启动'}</dd><dt>尝试次数</dt><dd>${stage.attempt || '尚未执行'}</dd><dt>执行用时</dt><dd>${duration(stage)}</dd><dt>输出产物</dt><dd>${artifacts.length ? artifacts.map((artifact) => `<button class="inspector-artifact-link" data-artifact="${escape(artifact.name)}" data-focus-key="inspector-${escape(artifact.name)}">${escape(artifact.name)}</button>`).join('') : escape(fallback.output)}</dd></dl>${stage.error ? `<div class="stage-error">${escape(stage.error)}${state.run?.status === 'failed' && stage.status === 'failed' ? `<button class="button button-outline" data-retry="${escape(stage.id)}" data-focus-key="retry-${escape(stage.id)}" ${state.busy ? 'disabled' : ''}>重试此阶段</button>` : ''}</div>` : ''}<p class="inspector-note">${escape(note)}</p>`;
   replacePreservingFocus($('#stage-inspector'), html);
+  if (historicalRun()) $$('[data-retry]', $('#stage-inspector')).forEach(button => { button.disabled = true; });
 }
 function emptyContent(icon, title, description) { return `<div class="empty-records">${ICONS[icon] || ICONS.log}<strong>${escape(title)}</strong><p>${escape(description)}</p></div>`; }
 function renderEvents() {
@@ -354,7 +392,7 @@ async function selectRun(id) {
   finally { if (epoch === state.epoch) { state.selectionPending = false; renderHeader(); renderControls(); syncExecutionPanel(); } }
 }
 async function startRun() {
-  if (!state.project || state.busy || state.selectionPending || ACTIVE.has(state.run?.status)) return;
+  if (!state.project || state.busy || state.selectionPending || (!historicalRun() && ACTIVE.has(state.run?.status))) return;
   clearError(); setBusy(true); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   state.selectionPending = true; syncExecutionPanel();
   try {
@@ -368,7 +406,7 @@ async function startRun() {
   finally { if (epoch === state.epoch) { state.selectionPending = false; syncExecutionPanel(); } setBusy(false); }
 }
 async function runAction(action, stageId) {
-  if (!state.run || state.busy || state.selectionPending) return;
+  if (!state.run || historicalRun() || state.busy || state.selectionPending) return;
   setBusy(true); clearError(); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   try {
     const { run } = await api(`${basePath()}/action`, { method: 'POST', body: JSON.stringify({ action, ...(stageId ? { stageId } : {}), ...(action === 'approve' ? { feedback: state.feedback } : {}) }) });
@@ -380,6 +418,7 @@ async function runAction(action, stageId) {
 }
 
 async function reviewAction(action, payload) {
+  if (historicalRun()) throw new Error('这次运行属于历史需求输入，不能再修订或确认。请基于当前输入重新编排。');
   if (!state.run || state.busy || state.selectionPending) throw new Error('上一项操作或运行切换尚未结束，请稍后重试。');
   setBusy(true); clearError(); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   try {
@@ -446,7 +485,7 @@ $('#run-select').addEventListener('change', (event) => selectRun(event.target.va
 $('#dismiss-error').addEventListener('click', clearError);
 $('#help-button').addEventListener('click', () => $('#help-dialog').showModal());
 $('#source-button').addEventListener('click', () => { if (!state.project) return; $('#source-title').textContent = selectedSource().filename; $('#source-content').textContent = selectedSource().content; $('#source-dialog').showModal(); });
-$('#revise-source').addEventListener('click', () => { $('#source-dialog').close(); openProjectDialog({ revise: true }); });
+$('#revise-source').addEventListener('click', () => { $('#source-dialog').close(); const section = $('#source-changes-section'); section.open = true; section.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); });
 $('#project-dialog').addEventListener('cancel', (event) => { if (state.busy) event.preventDefault(); });
 document.addEventListener('click', (event) => {
   const close = event.target.closest('[data-close-dialog]'); if (close) close.closest('dialog')?.close();
