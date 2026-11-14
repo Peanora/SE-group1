@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { contentRevision } from '../lib/planning-review.mjs';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { contentRevision, preparePlanningSpec, validatePlanningTasks } from '../lib/planning-review.mjs';
 import { MAX_DOCUMENT_CHARS } from '../lib/documents.mjs';
 import { inspectRequirementChange, requirementChangePolicy } from '../lib/requirement-changes.mjs';
 
@@ -121,4 +123,62 @@ test('document, structure and byte budgets reject excess without quadratic compa
   const text = 'a\n'.repeat(49999), baseSource = { filename: 'big.txt', content: text }, source = { ...baseSource, content: text.replaceAll('a', 'b') };
   const draft = inspectRequirementChange(options({ baseSource, source, baseRevision: contentRevision(baseSource) }));
   assert.equal(draft.changes.blocks[0].oldLineCount, 49999); assert.equal(apply(text, draft), source.content); assert.ok(Buffer.byteLength(JSON.stringify(draft)) < 4 * 1024 * 1024);
+});
+
+test('four existing planning requirement IDs and task mappings keep their identity without REQ prefixes', () => {
+  for (const id of ['R1', 'READ', 'feature_1', '需求 阅读：版本 2']) {
+    const raw = { title: '兼容旧规格', summary: '', goals: [], roles: [], acceptanceScenarios: [], constraints: [], assumptions: [], questions: [],
+      requirements: [{ id, title: '字段', description: '原业务', acceptance: ['核对'], sourceQuote: '字段：姓名' }], stack: { frontend: 'HTML', backend: 'Node', storage: 'SQLite' } };
+    const { spec } = preparePlanningSpec(raw, base.content);
+    const tasks = validatePlanningTasks(spec, [{ id: '任务/一', title: '实现', description: '旧任务', dependsOn: [], requirementIds: [id], acceptance: ['验收'], suggestedFiles: [] },
+      { id: '任务 二', title: '复核', description: '下游', dependsOn: ['任务/一'], requirementIds: [id], acceptance: ['验收'], suggestedFiles: [] }]);
+    const previousPlan = { requirements: spec.requirements.map(item => ({ id: item.id, text: item.description })),
+      tasks: tasks.map(item => ({ id: item.id, dependsOn: item.dependsOn, requirementIds: item.requirementIds, writePaths: [] })), writePaths: [] };
+    const draft = inspectRequirementChange(options({ previousPlan }));
+    assert.deepEqual(draft.impact.requirementIds, [id]); assert.deepEqual(draft.impact.taskIds, tasks.map(item => item.id));
+    assert.deepEqual(draft.previousPlan.tasks.map(item => item.requirementIds), [[id], [id]]);
+    assert.deepEqual(draft.previousPlan.tasks[1].dependsOn, ['任务/一']); assert.equal(draft.impact.reusableValidation, false);
+  }
+});
+
+test('planning IDs use existing trim/nonempty semantics, including long IDs, and still reject invalid identities', () => {
+  const longId = 'feature '.repeat(40).trim(), previousPlan = { requirements: [{ id: `  ${longId}\n`, text: '原需求' }],
+    tasks: [{ id: '  旧任务\t', dependsOn: [], requirementIds: [`\t${longId}`, longId], writePaths: [] }], writePaths: [] };
+  const draft = inspectRequirementChange(options({ previousPlan }));
+  assert.deepEqual(draft.impact.requirementIds, [longId]); assert.deepEqual(draft.impact.taskIds, ['旧任务']);
+  assert.deepEqual(draft.previousPlan.tasks[0].requirementIds, [longId]);
+  for (const invalid of ['', ' \t\n', null, false, 7, {}]) {
+    for (const target of ['requirement', 'task', 'reference', 'dependency']) {
+      const prior = plan();
+      if (target === 'requirement') prior.requirements[0].id = invalid;
+      if (target === 'task') prior.tasks[0].id = invalid;
+      if (target === 'reference') prior.tasks[0].requirementIds = [invalid];
+      if (target === 'dependency') prior.tasks[1].dependsOn = [invalid];
+      assert.throws(() => inspectRequirementChange(options({ previousPlan: prior })), target);
+    }
+  }
+  const duplicates = plan(); duplicates.requirements.push({ id: ' REQ-001 ', text: '重复' }); assert.throws(() => inspectRequirementChange(options({ previousPlan: duplicates })));
+});
+
+test('optional enums default only when absent and reject explicit null or non-enum data', () => {
+  const missing = plan(); delete missing.persistence; delete missing.tasks[0].validationStatus;
+  const draft = inspectRequirementChange(options({ previousPlan: missing }));
+  assert.equal(draft.previousPlan.persistence, 'unknown'); assert.equal(draft.previousPlan.tasks[0].validationStatus, 'unknown');
+  for (const value of ['present', 'absent', 'unknown']) { const prior = plan(); prior.persistence = value; assert.equal(inspectRequirementChange(options({ previousPlan: prior })).previousPlan.persistence, value); }
+  for (const value of ['unknown', 'not_run', 'passed', 'failed']) { const prior = plan(); prior.tasks[0].validationStatus = value; assert.equal(inspectRequirementChange(options({ previousPlan: prior })).previousPlan.tasks[0].validationStatus, value); }
+  for (const value of [null, '', 'present ', 'complete', false, 0, {}, [], undefined]) {
+    const persistence = plan(); persistence.persistence = value; assert.throws(() => inspectRequirementChange(options({ previousPlan: persistence })));
+    const status = plan(); status.tasks[0].validationStatus = value; assert.throws(() => inspectRequirementChange(options({ previousPlan: status })));
+  }
+});
+
+test('policy v2 binds exact trusted module bytes as well as metadata and changes when implementation bytes change', () => {
+  const bytes = readFileSync(new URL('../lib/requirement-changes.mjs', import.meta.url)), digest = value => createHash('sha256').update(value).digest('hex');
+  const { hash, ...metadata } = requirementChangePolicy;
+  assert.equal(metadata.version, 'requirement-change-v2'); assert.equal(metadata.implementationHash, digest(bytes));
+  assert.equal(hash, contentRevision(metadata));
+  const changed = digest(Buffer.concat([bytes, Buffer.from('\n// changed trusted implementation\n')]));
+  assert.notEqual(changed, metadata.implementationHash); assert.notEqual(contentRevision({ ...metadata, implementationHash: changed }), hash);
+  const { implementationHash, ...legacy } = metadata; legacy.version = 'requirement-change-v1'; assert.notEqual(contentRevision(legacy), hash);
+  assert.equal(inspectRequirementChange(options()).policyHash, hash);
 });
