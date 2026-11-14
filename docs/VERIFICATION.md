@@ -168,4 +168,3 @@ passed只表示固定`library-borrow-v1`在当前清单和Review规则下通过�
 新增真实产品HTTP5项和Edge2项验证标准DOCX到草稿、保存/应用分离、双服务检查点、旧输入与审批只读、新run新sourceGeneration和重新双确认导出、外部发布轮询撤权、窄屏焦点/草稿保留；独立组合探针1项额外使用真实HTTP/JSON/双SQLite确认异步批量DTO全撤权和重开一致。独立FIX保留通知P3：父级刷新迟到可在另一项目显示旧成功toast，数据与权限未变。下一组合380f83a/620246d已有修复及实际Edge回归，组合尚未放行。证据`output/verification/independent-source-change-integration-f17671f-20261114/RESULT.md`，root日志在独立集成树的忽略输出中。
 
 source-panel原4e2专项虽13/13，独立发现交错GET漏onApplied后BLOCK；63b修复经另一非作者16/16 Edge及原post503/overlap探针新副本FIX。repair service原1c754专项73/73真实MXC与23/23 Edge虽过，独立同源历史问题探针证实旧记录遗漏新blocking，仍BLOCK返工，未作真实模型修复。两次旧真实候选的报告/源码hash保持原样，修复前私有校验记录`output/reference-web-ui-FYeJdW/pre-repair-root-proof.json`不授予通过。此阶段零付费调用、未动4317用户服务，未推送或部署；需求输入发布不等于目标业务代码或迁移已执行。
-
