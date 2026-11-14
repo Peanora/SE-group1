@@ -168,3 +168,10 @@ passed只表示固定`library-borrow-v1`在当前清单和Review规则下通过�
 新增真实产品HTTP5项和Edge2项验证标准DOCX到草稿、保存/应用分离、双服务检查点、旧输入与审批只读、新run新sourceGeneration和重新双确认导出、外部发布轮询撤权、窄屏焦点/草稿保留；独立组合探针1项额外使用真实HTTP/JSON/双SQLite确认异步批量DTO全撤权和重开一致。独立FIX保留通知P3：父级刷新迟到可在另一项目显示旧成功toast，数据与权限未变。下一组合380f83a/620246d已有修复及实际Edge回归，组合尚未放行。证据`output/verification/independent-source-change-integration-f17671f-20261114/RESULT.md`，root日志在独立集成树的忽略输出中。
 
 source-panel原4e2专项虽13/13，独立发现交错GET漏onApplied后BLOCK；63b修复经另一非作者16/16 Edge及原post503/overlap探针新副本FIX。repair service原1c754专项73/73真实MXC与23/23 Edge虽过，独立同源历史问题探针证实旧记录遗漏新blocking，仍BLOCK返工，未作真实模型修复。两次旧真实候选的报告/源码hash保持原样，修复前私有校验记录`output/reference-web-ui-FYeJdW/pre-repair-root-proof.json`不授予通过。此阶段零付费调用、未动4317用户服务，未推送或部署；需求输入发布不等于目标业务代码或迁移已执行。
+## 2026-11-14 来源修复、需求版本与规格预算组合408064b
+
+固定408064b2abad29e3f9356fad9bbbeac5d1aed939：root98脚本及显式真实MXC/Edge665/665，107208.1512ms；非作者同版98脚本及665/665，108116.0165ms，均0失败/取消/跳过。另5轻量探针：A+B完整义务才能accepted、只A失败、最后规划读取新增C时模型拒绝/下载不返回/预览0spawn。独立报告及源码前后校验在output/verification/independent-source-repair-408064b-20261114/；未修改原1c/f24 BLOCK证据，hash保持。此处正向依赖fixture不是实际模型修复通过。
+
+原866整体659/660，唯一失败为shutdown测试等预留history而未等provider进入，合法not_started被误当unconfirmed。f24仅显式同步provider入口并补派发前停止0调用负例，完整661/661（106652.8354ms），但非作者又确认最后await缺少同步pin：模型可能多调旧上下文，下载可能返回27字节可信fixtureZIP后才fresh DTO撤权，仍BLOCK未放行。408在模型最终guard及acceptedRow补同步pin，保留sourceFailure证据；新增三个最终读取回归及原独立探针均通过。未为通过放宽停止或业务断言。
+
+规格模型核心91d49由不同作者独立140/140（4829.3586ms）及4额外探针FIX，97语法；覆盖回执字节/hash、重启限额不可扩大、晚metadata隔离、连续保存失败无规格/批准。根预算health/UI另真实390px检查无规格预算不开始model、本地仍可用、可信2次/1秒披露且0模型请求，并随665组合复验。此阶段零真实API、未改用户data/4317、未推送部署；实际bcec/e312仍失败，下一步才启动已授权的真实seeded修复。测试文件并发仍4，旧24并发归档未知停止根因未确认。
