@@ -168,3 +168,28 @@ passed只表示固定`library-borrow-v1`在当前清单和Review规则下通过�
 新增真实产品HTTP5项和Edge2项验证标准DOCX到草稿、保存/应用分离、双服务检查点、旧输入与审批只读、新run新sourceGeneration和重新双确认导出、外部发布轮询撤权、窄屏焦点/草稿保留；独立组合探针1项额外使用真实HTTP/JSON/双SQLite确认异步批量DTO全撤权和重开一致。独立FIX保留通知P3：父级刷新迟到可在另一项目显示旧成功toast，数据与权限未变。下一组合380f83a/620246d已有修复及实际Edge回归，组合尚未放行。证据`output/verification/independent-source-change-integration-f17671f-20261114/RESULT.md`，root日志在独立集成树的忽略输出中。
 
 source-panel原4e2专项虽13/13，独立发现交错GET漏onApplied后BLOCK；63b修复经另一非作者16/16 Edge及原post503/overlap探针新副本FIX。repair service原1c754专项73/73真实MXC与23/23 Edge虽过，独立同源历史问题探针证实旧记录遗漏新blocking，仍BLOCK返工，未作真实模型修复。两次旧真实候选的报告/源码hash保持原样，修复前私有校验记录`output/reference-web-ui-FYeJdW/pre-repair-root-proof.json`不授予通过。此阶段零付费调用、未动4317用户服务，未推送或部署；需求输入发布不等于目标业务代码或迁移已执行。
+## 2026-11-14 来源修复、需求版本与规格预算组合408064b
+
+固定408064b2abad29e3f9356fad9bbbeac5d1aed939：root98脚本及显式真实MXC/Edge665/665，107208.1512ms；非作者同版98脚本及665/665，108116.0165ms，均0失败/取消/跳过。另5轻量探针：A+B完整义务才能accepted、只A失败、最后规划读取新增C时模型拒绝/下载不返回/预览0spawn。独立报告及源码前后校验在output/verification/independent-source-repair-408064b-20261114/；未修改原1c/f24 BLOCK证据，hash保持。此处正向依赖fixture不是实际模型修复通过。
+
+原866整体659/660，唯一失败为shutdown测试等预留history而未等provider进入，合法not_started被误当unconfirmed。f24仅显式同步provider入口并补派发前停止0调用负例，完整661/661（106652.8354ms），但非作者又确认最后await缺少同步pin：模型可能多调旧上下文，下载可能返回27字节可信fixtureZIP后才fresh DTO撤权，仍BLOCK未放行。408在模型最终guard及acceptedRow补同步pin，保留sourceFailure证据；新增三个最终读取回归及原独立探针均通过。未为通过放宽停止或业务断言。
+
+规格模型核心91d49由不同作者独立140/140（4829.3586ms）及4额外探针FIX，97语法；覆盖回执字节/hash、重启限额不可扩大、晚metadata隔离、连续保存失败无规格/批准。根预算health/UI另真实390px检查无规格预算不开始model、本地仍可用、可信2次/1秒披露且0模型请求，并随665组合复验。此阶段零真实API、未改用户data/4317、未推送部署；实际bcec/e312仍失败，下一步才启动已授权的真实seeded修复。测试文件并发仍4，旧24并发归档未知停止根因未确认。
+## 2026-11-14 真实seeded修复与交付来源误判
+
+408主线的实际网页修复生成服务行2616fc93-07c6-45d1-8002-ba464385b7c3、执行ef66015a-2853-49c8-996b-33286571e488，新提交73020f7c1c5dcae8818f09f17aafcaae0b4ba8df/sourceHash3d956af6f8aa14bd939caf2fa776995fbf26415eb4b84290e3fff47ae05b0e8a。实际1编码+1Review，26988输入/5241输出；同版本自检18/18、独立HTTP/SQLite18/18、Edge21/21全部停止确认；原ISSUE-2687a2edbe14c1090c3f为resolved并绑定7302，blocking0、3项advisory保留。不可变execution.json为accepted，SHA9e72fdf579678cf4fb6317504039ec599fa630f8a6ff90101bd6b40bf2499ebb。
+
+随后实际网页preview被默认verifySource拦截，sourceFailure将服务SQL行置failed，不能继续下载或称当前交付通过。根只读Git确认7302 HEAD相等、status/diff均空；实际Git根返回正斜线，而服务samePath只比较大小写未规范化分隔符，误判Windows工作区。隔离候选正在修正该平台缺陷并加默认真实Git入口正负例；不修改原Git/报告/服务状态以绕门禁，也不重编码同代码。修复后必须正式新复验，不能直接继承原accepted报告。
+
+本轮原件校验565f25d7与67ffc342保持；私有汇总repair-trial-summary.json明确currentServiceStatus=failed、immutableModelReportStatus=accepted、previewStarted/sourceDownloaded=false。正常PTY STOP后QA_STOP_CONFIRMED、退出0、端口62188关闭，证明文件repair-platform-stop-1794652092076.json。用户4317仍为原进程84732。实际模型用量与失败均保留，未推送部署；未获成功UI截图或源码包，不把历史5dc交付证据替代本轮7302。
+## 2026-11-14 7302正式复验与真实网页交付
+
+af093Windows默认来源核对修复经root/非作者同版98语法及显式668/668完整测试，耗时110485.2453ms/109575.5378ms，均0失败/取消/跳过；非作者3真实Git额外探针确认同前缀兄弟root及assume-unchanged隐藏状态仍被blob检查拒绝，原QA/SQL没被改写。主线合并5ec6e13生产文件与af一致。
+
+实际新复验服务e820994a-1c6d-45a4-8dcc-2a83d04aed87、执行36c096d6-9bd4-4da3-9fea-5e3c3ef7e60b；仍为73020f7/sourceHash3d956a，自检18、独立HTTP/SQLite18、实际Edge21全部通过/停止确认，新Review completed/blocking0，3advisory保留。新增编码0、Review1，用量16190输入/426输出；原2616修复轮1code/1Review26988/5241保持失败服务状态与不可变accepted报告，不补造通过。
+
+网页实际预览在独立localhost57843完成alice登录、借阅库存1→0及active记录、归还库存0→1及returned，已保存repair-preview-returned.png。UI停止取得实际pid3808正常停止/exit0/sourceUnchanged/ack，当前活动0。点击下载的20文件包117959bytes，SHA35c1395cbb938a2b2c58ded72a8587fd1b3dc8d7825908bddb28e234b7ae1be8；本地副本library-web-73020f7-verified.zip，工作台交付截图repair-workbench-delivery.png。
+
+root实际web:verify对该包全新副本HTTP18/18+Edge21/21，report output/delivery-verification/delivery-revalidation-Bfnx6D/revalidation.json，status checks_passed、taskAccepted/historicalAcceptanceVerified均false（不把包内历史声明当证明）。干净解压离线npm ci退出0、npm start实际启动localhost51033，7项版本/隐私/匿名拒绝/登录/借阅库存/归还重复409/登出及原源码不变检查全过，STOP_CONFIRMED退出0；停止后全部20交付文件hash仍一致。配置凭据、私有回执、本地路径、数据库均未出现在交付内容，已知凭据扫描通过。汇总final-recheck-delivery-summary.json、clean-start-smoke-73020f7.json为本轮事实，截图存在不代替业务检查。
+
+QA平台PTY正常STOP退出0；63820/57843/51033已无监听，4317仍原PID84732。旧两个报告565f25d7/67ffc342及修复报告9e72fdf5保持；e820 accepted/active0/preview none。此为固定参考软件交付，动态DSL、任意业务生成、团队/Worker能力不因此完成，未推送或部署。包的额外非作者复核另行保存，不把未跑的独立检查写成完成。
