@@ -1,5 +1,17 @@
 # 单控制器Web执行生命周期服务
 
+## F05执行侧项目检查点（已实现及自测，待独立复验）
+
+基准27072ea，独立tree/branch execution-project-checkpoint，唯一修改本记录、lib/web-execution-service.mjs和tests/web-execution-service.test.mjs。新增可信内部`withProjectCheckpoint(projectId, async work)`，返回callback结果并透传原异常；HTTP不暴露函数或此动作。获取时同步设置同项目barrier，查询该项目所有run的SQLite活动/待协调/非none预览以及同步登记的start/action/download在途请求，忙则409、不等待、不强停；finally释放。barrier内同项目新start/retry/recheck/preview/download拒绝，不同项目独立；cancel/stop仍走原真实停止流程，其在途请求也阻止获取检查点。关闭拒绝新检查点，等待已进入callback结束。
+
+异步规划读取、事务认领、源码核对和实际spawn前检查项目barrier及admission generation，旧准备不能跨过已完成的检查点而启动收费或预览。planningSnapshot新增当前来源判据：sourceSuperseded===true或项目存在currentSourceRevision且不等run.sourceRevision即拒绝；缺该项目字段的旧档案保持既有行为。新来源后旧accepted仅历史，不允许当前预览/交付。source-change服务由根未来以规划检查点外层、执行检查点内层组合；本组件不写规划JSON、不迁移旧hash、不提供通用Worker恢复。验证采用临时SQLite及明确可信依赖，并保留原48项显式MXC薄失败候选，0真实API/用户data写入。
+
+已实现接口与错误：`await service.withProjectCheckpoint(projectId, work)`同步在任何await前放barrier并完成空闲检查；活动或在途为409/project_busy、重入为409/project_checkpoint、关闭为503/shutting_down，无等待队列或强停。仅该可信内部方法透传callback的原异常对象，其余HTTP可用方法仍净化错误；集成层不得直接向HTTP序列化内部callback异常。开始执行/各action/下载在异步规划、源码或归档核对前登记项目在途，结束finally移除；list只读不占用检查点，但generation变化或barrier使旧读取失去当前启动/验收许可。检查点已成功进入后关闭等待callback完成，不应在callback内await本服务shutdown（内部调用会自等待）。
+
+本轮新增11项并发/metadata回归：同步barrier及同项目拒绝/跨项目独立、callback返回值和异常身份/finally、所有run SQL活动与unknown/四类预览状态不被擅自清除、start/retry/recheck挂起准备、预览源码/下载源码及归档阶段在途、cancel回执在停止后仍在途及预览真实停止等待、关闭、currentSourceRevision/sourceSuperseded/legacy兼容、迟到list不恢复旧许可、来源变更后编码断言与深recheck构造前0新调用。目标软件正向验收和需求服务JSON发布不由这些fixture证明。
+
+实际验证：`node --test tests/web-execution-service.test.mjs`为58通过、原实际MXC项1明确跳过（22863.3393ms），按根的原生资源安排先仅运行普通专项；随后获准且资源空闲，显式`TASKFLOW_TEST_REAL_SANDBOX=1`及已验证执行程序，运行`node --test --test-name-pattern='real MXC' tests/web-execution-service.test.mjs`，**1/1通过、0跳过**（2411.7411ms），真实薄候选仍自检失败、源码下载关闭、用量未知、无付费模型。两次合计59个不同测试均已实际通过，未将第一轮skip写作执行成功。`npm run check`为85脚本通过，`git diff --check`通过。最终仅补本记录，不再改被测脚本；3个授权文件固定后待不同作者独立复验及根F05串行集成，未改原树、store/server/公共UI/真实QA或用户数据，未推送/部署。
+
 基准`9a07615`。独立分支`codex/web-execution-service`，仅新增服务模块、专测及本文。已授权的task-store提交在工作树作参考；本服务不依赖其接口。当前执行器自行生成attemptId并内部多轮候选，与task-store的租约/候选唯一发布模型不同，首版不拼接或伪造Worker语义。
 
 目标：可信HTTP集成层可调用`await createWebExecutionService({rootDir,getPlanning,config?,executable?,budget?,previewTimeoutMs?,dependencies?})`，返回`list/start/action/download/shutdown`。getPlanning(projectId,runId)返回可信`{project,run}`；所有对外方法只接受ID、profileId/contractRevision或动作，不接受路径、报告、passed和预算。错误带status和code；DTO沿执行面板约定。HTTP路由及主网页由主Agent后续串行接入。
