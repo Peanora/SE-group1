@@ -54,7 +54,7 @@ async function fixture(t, overrides = {}) {
     ...overrides.dependencies,
   };
   async function open(options = {}) {
-    const service = await createWebExecutionService({ rootDir, getPlanning: async () => state.planning, config, executable: process.execPath,
+    const service = await createWebExecutionService({ rootDir, getPlanning: async (...args) => state.getPlanning ? state.getPlanning(...args) : state.planning, config, executable: process.execPath,
       previewTimeoutMs: 100, ...overrides, ...options, dependencies: { ...dependencies, ...options.dependencies } }); state.services.push(service); return service;
   }
   return { rootDir, state, open, service: await open() };
@@ -704,6 +704,151 @@ test('recheck download rejects snapshot tampering and changed original report pr
     await assert.rejects(f.service.download({ ...ids, executionId: execution.id }), { code: 'source_changed' }); assert.equal(f.state.deliveries.length, 0);
     assert.equal((await f.service.list(ids)).executions[0].taskAccepted, false);
   }
+});
+
+test('a trusted project checkpoint acquires synchronously, blocks same-project admission and preserves cross-project independence', async t => {
+  const f = await fixture(t), executionId = await accept(f.service, f.state), entered = deferred(), release = deferred(), answer = { trusted: 'callback result' };
+  f.state.getPlanning = async (projectId, runId) => { if (projectId === ids.projectId) return f.state.planning; const value = planning(); value.project.id = projectId; value.run.id = runId; return value; };
+  const checkpoint = f.service.withProjectCheckpoint(ids.projectId, async () => { entered.resolve(); await release.promise; return answer; });
+  await entered.promise; try { await assert.rejects(f.service.withProjectCheckpoint(ids.projectId, () => assert.fail('nested checkpoint entered')), { code: 'project_checkpoint' });
+  await assert.rejects(f.service.start(startInput), { code: 'project_checkpoint' });
+  for (const action of ['retry', 'recheck', 'preview']) await assert.rejects(f.service.action({ ...(action === 'preview' ? ids : startInput), executionId, action }), { code: 'project_checkpoint' });
+  await assert.rejects(f.service.download({ ...ids, executionId }), { code: 'project_checkpoint' });
+  const during = await f.service.list(ids); assert.equal(during.capabilities.canStart, false); assert.equal(during.executions[0].taskAccepted, false); assert.equal(during.executions[0].actions.canDownload, false);
+  const other = await f.service.start({ ...startInput, projectId: 'other-project', runId: 'other-run' }); assert.equal(other.execution.status, 'preparing');
+  assert.equal(await f.service.withProjectCheckpoint('third-project', () => 7), 7); } finally { release.resolve(); } assert.equal(await checkpoint, answer);
+  assert.equal((await f.service.list(ids)).executions[0].taskAccepted, true); assert.equal(f.state.calls.length, 2);
+});
+
+test('checkpoint callback failures retain identity, always release the barrier, and cannot be sent as an HTTP-style action', async t => {
+  const f = await fixture(t);
+  for (const asynchronous of [false, true]) {
+    const failure = Object.assign(new Error('trusted work failed'), { code: 'trusted_work_failure' });
+    await assert.rejects(f.service.withProjectCheckpoint(ids.projectId, asynchronous ? async () => { await Promise.resolve(); throw failure; } : () => { throw failure; }), value => value === failure);
+    assert.equal(await f.service.withProjectCheckpoint(ids.projectId, () => 'released'), 'released');
+  }
+  await assert.rejects(f.service.withProjectCheckpoint('../invalid', () => {}), { code: 'invalid_id' });
+  await assert.rejects(f.service.withProjectCheckpoint(ids.projectId, {}), { code: 'invalid_input' });
+  const { execution } = await f.service.start(startInput); f.state.calls[0].finish(); await waitFor(f.service, value => value.executions[0].status === 'failed');
+  await assert.rejects(f.service.action({ ...ids, executionId: execution.id, action: 'withProjectCheckpoint', work: () => {} }), { code: 'invalid_input' });
+  assert.equal(await f.service.withProjectCheckpoint(ids.projectId, () => true), true);
+});
+
+test('checkpoint SQLite admission checks every run and all active, unknown and preview states without stopping them', async t => {
+  const f = await fixture(t), executionId = await accept(f.service, f.state), db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite')); let called = 0;
+  for (const [active, status, preview] of [[1, 'accepted', 'none'], [0, 'reconciliation_required', 'none'], ...['starting', 'running', 'stopping', 'unknown'].map(state => [0, 'accepted', state])]) {
+    db.prepare('UPDATE executions SET run_id=?,active=?,status=?,preview_state=? WHERE id=?').run('another-run', active, status, preview, executionId);
+    await assert.rejects(f.service.withProjectCheckpoint(ids.projectId, () => called++), { code: 'project_busy' });
+    const row = db.prepare('SELECT active,status,preview_state FROM executions WHERE id=?').get(executionId);
+    assert.deepEqual({ ...row }, { active, status, preview_state: preview });
+  }
+  assert.equal(called, 0); assert.equal(f.state.previews.length, 0); db.prepare("UPDATE executions SET run_id=?,active=0,status='accepted',preview_state='none' WHERE id=?").run(ids.runId, executionId); db.close();
+  assert.equal(await f.service.withProjectCheckpoint(ids.projectId, () => 'idle'), 'idle');
+});
+
+test('start, retry and recheck preparations registered before a pending planning read reject a racing checkpoint', async t => {
+  for (const action of ['start', 'retry', 'recheck']) {
+    const f = action === 'recheck' ? await recheckFixture(t) : await fixture(t); let executionId = f.state.sourceId;
+    if (action === 'retry') { const result = await f.service.start(startInput); executionId = result.execution.id; f.state.calls[0].finish(); await waitFor(f.service, value => value.executions[0].status === 'failed'); }
+    const entered = deferred(), release = deferred(); let once = true;
+    f.state.getPlanning = async () => { const value = structuredClone(f.state.planning); if (once) { once = false; entered.resolve(); await release.promise; } return value; };
+    const pending = action === 'start' ? f.service.start(startInput) : f.service.action({ ...startInput, executionId, action }); await entered.promise;
+    await assert.rejects(f.service.withProjectCheckpoint(ids.projectId, () => assert.fail('pending preparation was ignored')), { code: 'project_busy' });
+    release.resolve(); const result = await pending;
+    if (action === 'recheck') { const entry = await waitRecheck(f); entry.finish({ status: 'stopped' }); } else f.state.calls.at(-1).finish();
+    await waitFor(f.service, value => ['failed', 'stopped'].includes(value.executions[0].status));
+    assert.equal(await f.service.withProjectCheckpoint(ids.projectId, () => 'after preparation'), 'after preparation'); assert.ok(result.execution.id);
+  }
+});
+
+test('preview source verification and every download phase are registered before SQLite activity exists', async t => {
+  for (const phase of ['preview_source', 'download_source', 'download_archive']) {
+    const entered = deferred(), release = deferred(); let blocking = true;
+    const f = await fixture(t, { previewTimeoutMs: 5000, dependencies: {
+      verifySource: async () => { if (phase !== 'download_archive' && blocking) { blocking = false; entered.resolve(); await release.promise; } return { files: structuredClone(files), shellHash: 'c'.repeat(64) }; },
+      createDelivery: async () => { entered.resolve(); await release.promise; return { zip: Buffer.from('fixture') }; },
+    } });
+    const executionId = await accept(f.service, f.state), pending = phase === 'preview_source' ? f.service.action({ ...ids, executionId, action: 'preview' }) : f.service.download({ ...ids, executionId });
+    await entered.promise; const db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite')); assert.equal(db.prepare('SELECT active FROM executions WHERE id=?').get(executionId).active, 0); db.close();
+    await assert.rejects(f.service.withProjectCheckpoint(ids.projectId, () => assert.fail('in-flight source/archive work was ignored')), { code: 'project_busy' });
+    release.resolve(); await pending; if (phase === 'preview_source') await f.service.action({ ...ids, executionId, action: 'stop_preview' });
+    assert.equal(await f.service.withProjectCheckpoint(ids.projectId, () => true), true);
+  }
+});
+
+test('cancel acknowledgement remains in flight after actual stop, while preview stopping remains a real active slot', async t => {
+  const f = await fixture(t); f.state.manualCancel = true; const { execution } = await f.service.start(startInput), entered = deferred(), release = deferred(); let once = true;
+  f.state.getPlanning = async () => { if (once) { once = false; entered.resolve(); await release.promise; } return f.state.planning; };
+  const cancel = f.service.action({ ...ids, executionId: execution.id, action: 'cancel' }); await entered.promise;
+  await assert.rejects(f.service.withProjectCheckpoint(ids.projectId, () => {}), { code: 'project_busy' }); f.state.calls[0].finish({ status: 'stopped' });
+  await waitFor(f.service, value => value.executions[0].status === 'stopped');
+  await assert.rejects(f.service.withProjectCheckpoint(ids.projectId, () => {}), { code: 'project_busy' }); release.resolve(); await cancel;
+  assert.equal(await f.service.withProjectCheckpoint(ids.projectId, () => true), true);
+  const stopping = deferred(), stopRelease = deferred(), done = deferred();
+  const g = await fixture(t, { previewTimeoutMs: 5000, dependencies: { startRuntime: async () => ({ url: 'http://localhost:43210', pid: 515151, done: done.promise,
+    stop: async () => { stopping.resolve(); const value = await stopRelease.promise; done.resolve(value); return value; } }) } });
+  const previewId = await accept(g.service, g.state); await g.service.action({ ...ids, executionId: previewId, action: 'preview' });
+  const stop = g.service.action({ ...ids, executionId: previewId, action: 'stop_preview' }); await stopping.promise;
+  await assert.rejects(g.service.withProjectCheckpoint(ids.projectId, () => assert.fail('preview was assumed dead')), { code: 'project_busy' });
+  stopRelease.resolve({ status: 'stopped', pid: 515151, exitCode: 0, stopAcknowledged: true, sourceUnchanged: true, terminationConfirmed: true }); await stop;
+  assert.equal(await g.service.withProjectCheckpoint(ids.projectId, () => 'confirmed'), 'confirmed');
+});
+
+test('shutdown rejects new checkpoints and waits for the entered trusted work to release its barrier', async t => {
+  const f = await fixture(t), entered = deferred(), release = deferred(); let closed = false;
+  const checkpoint = f.service.withProjectCheckpoint(ids.projectId, async () => { entered.resolve(); await release.promise; return 42; }); await entered.promise;
+  const shutdown = f.service.shutdown().then(() => { closed = true; });
+  await assert.rejects(f.service.withProjectCheckpoint('another-project', () => assert.fail('entered during close')), { code: 'shutting_down' });
+  await assert.rejects(f.service.start(startInput), { code: 'shutting_down' }); assert.equal(closed, false); release.resolve(); assert.equal(await checkpoint, 42); await shutdown;
+  assert.equal(closed, true); await assert.rejects(f.service.withProjectCheckpoint(ids.projectId, () => {}), { code: 'stale_owner' });
+});
+
+test('current source revision and superseded flags revoke old execution publication while legacy records remain compatible', async t => {
+  const f = await fixture(t), executionId = await accept(f.service, f.state), original = structuredClone(f.state.planning.run);
+  assert.equal((await f.service.list(ids)).executions[0].taskAccepted, true);
+  f.state.planning.project.currentSourceRevision = original.sourceRevision; assert.equal((await f.service.list(ids)).executions[0].taskAccepted, true);
+  for (const variant of ['revision', 'flag', 'invalid_revision']) {
+    f.state.planning.run.sourceSuperseded = variant === 'flag'; f.state.planning.project.currentSourceRevision = variant === 'revision' ? '0'.repeat(64) : variant === 'invalid_revision' ? null : original.sourceRevision;
+    const result = await f.service.list(ids); assert.equal(result.capabilities.canStart, false); assert.equal(result.executions[0].status, 'accepted'); assert.equal(result.executions[0].taskAccepted, false);
+    for (const permission of ['canRetry', 'canRecheck', 'canPreview', 'canDownload']) assert.equal(result.executions[0].actions[permission], false);
+    await assert.rejects(f.service.start(startInput), { code: 'source_superseded' }); await assert.rejects(f.service.download({ ...ids, executionId }), { code: 'not_accepted' });
+    await assert.rejects(f.service.action({ ...ids, executionId, action: 'preview' }), { code: 'not_accepted' });
+    assert.equal(f.state.calls.length, 1); assert.equal(f.state.previews.length, 0);
+  }
+  delete f.state.planning.project.currentSourceRevision; delete f.state.planning.run.sourceSuperseded;
+  assert.deepEqual(f.state.planning.run, original); assert.equal((await f.service.list(ids)).executions[0].taskAccepted, true);
+});
+
+test('an old list read cannot revive capability or task acceptance after a source publication checkpoint', async t => {
+  const f = await fixture(t), executionId = await accept(f.service, f.state), entered = deferred(), release = deferred(); let once = true;
+  f.state.getPlanning = async () => { const old = structuredClone(f.state.planning); if (once) { once = false; entered.resolve(); await release.promise; } return old; };
+  const pending = f.service.list(ids); await entered.promise;
+  await f.service.withProjectCheckpoint(ids.projectId, () => { f.state.planning.project.currentSourceRevision = '0'.repeat(64); f.state.planning.run.sourceSuperseded = true; });
+  release.resolve(); const result = await pending; assert.equal(result.capabilities.canStart, false); assert.equal(result.executions[0].taskAccepted, false);
+  await assert.rejects(f.service.download({ ...ids, executionId }), { code: 'not_accepted' }); assert.equal(f.state.deliveries.length, 0);
+});
+
+test('a changed current source blocks a pending preview and coding assertion before any new runtime or model use', async t => {
+  const entered = deferred(), release = deferred(), f = await fixture(t, { dependencies: { verifySource: async () => { entered.resolve(); await release.promise; return { files: structuredClone(files), shellHash: 'c'.repeat(64) }; } } });
+  const executionId = await accept(f.service, f.state), pending = f.service.action({ ...ids, executionId, action: 'preview' }); await entered.promise;
+  f.state.planning.project.currentSourceRevision = '0'.repeat(64); release.resolve(); await assert.rejects(pending, { code: 'stale_version' }); assert.equal(f.state.previews.length, 0);
+  let charged = 0, g;
+  g = await fixture(t, { dependencies: { codeModel: () => { g.state.planning.run.sourceSuperseded = true; return async () => { charged++; }; },
+    startExecution: options => {
+      const record = { ...options.binding, status: 'preparing', calls: 0, reviewCalls: 0, budget: { maxCalls: options.maxCalls }, events: [], versions: [] };
+      return { snapshot: () => record, cancel() {}, done: (async () => { try { await options.assertCurrent(options.binding); await options.provider(); } catch { record.status = 'failed'; } return record; })() };
+    } } });
+  await g.service.start(startInput); const result = await waitFor(g.service, value => value.executions[0].status === 'superseded'); assert.equal(charged, 0); assert.equal(result.executions[0].taskAccepted, false);
+});
+
+test('a source publication during deep recheck admission prevents constructing the new Review executor', async t => {
+  const f = await recheckFixture(t), entered = deferred(), release = deferred();
+  f.state.inspectHook = async (_options, value) => { const inspected = value(); entered.resolve(); await release.promise; return inspected; };
+  await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }); await entered.promise;
+  await assert.rejects(f.service.withProjectCheckpoint(ids.projectId, () => assert.fail('active deep admission was ignored')), { code: 'project_busy' });
+  f.state.planning.project.currentSourceRevision = '0'.repeat(64); release.resolve();
+  const result = await waitFor(f.service, value => value.executions[0].status === 'superseded');
+  assert.equal(f.state.rechecks.length, 0); assert.equal(result.executions[0].calls, 0); assert.equal(result.executions[0].reviewCalls, 0); assert.equal(result.executions[0].actions.canDownload, false);
 });
 
 test('real MXC executes exactly one thin failed candidate through the default executor without model calls', {
