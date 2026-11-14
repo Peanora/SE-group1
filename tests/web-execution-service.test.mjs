@@ -1214,6 +1214,26 @@ test('new same-source valid findings invalidate the pinned set during admission,
   }
 });
 
+test('final planning awaits cannot authorize a stale repair model call, download or preview spawn', async t => {
+  for (const phase of ['model', 'download', 'preview']) await t.test(phase, async t => {
+    const f = await historyRepairFixture(t), started = await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'repair' }), entry = await waitRepair(f);
+    if (phase !== 'model') { await entry.pass(); await waitFor(f.service, result => result.executions.find(row => row.id === started.execution.id)?.taskAccepted); }
+    let reads = 0, added = false;
+    f.state.getPlanning = async () => {
+      if (++reads === (phase === 'model' ? 2 : 4)) {
+        await appendFindingFixture(f, [{ ...f.state.issueB, id: 'ISSUE-C-final-read', message: 'New same-source blocking evidence during the final planning read' }]); added = true;
+      }
+      return f.state.planning;
+    };
+    if (phase === 'model') { await assert.rejects(entry.options.assertCurrent(entry.options.binding), { code: 'source_changed' }); await entry.pass(); }
+    else if (phase === 'download') await assert.rejects(f.service.download({ ...ids, executionId: started.execution.id }), { code: 'source_changed' });
+    else await assert.rejects(f.service.action({ ...ids, executionId: started.execution.id, action: 'preview' }), { code: 'preview_failed' });
+    assert.equal(added, true); assert.equal(f.state.previews.length, 0);
+    assert.equal((await f.service.list(ids)).executions.find(row => row.id === started.execution.id).taskAccepted, false);
+    await waitFor(f.service, result => result.executions.find(row => row.id === started.execution.id)?.status === 'failed');
+  });
+});
+
 test('earlier failed repair candidates on the same bytes remain obligations and every pinned witness report stays immutable', async t => {
   const f = await historyRepairFixture(t), issue = { ...f.state.issueB, id: 'ISSUE-C-failed-repair', message: 'Problem found in an earlier repair candidate' };
   const added = await appendFindingFixture(f, [issue], (record, snapshot) => {

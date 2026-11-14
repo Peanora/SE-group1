@@ -1,0 +1,5 @@
+# 修复来源在最后异步核对后的同步门禁
+
+基准f24f413，原树与原Review证据冻结保留。非作者可信fixture新复现两条同根因P2：verifyRepairProof之后的最后getPlanning await若新增同源有效阻塞C，模型assertCurrent可误放行旧A+B输入（之后发布会失败）；已accepted修复的第二轮下载来源核对在同样最后await新增C时，竟可返回可信fixture ZIP，随后fresh DTO才撤权。没有真实付费或真实业务交付，不能将probe当作实际用户损失，但该版本不放行。
+
+此修订仅在模型assertCurrent最后await后同步repairPinned，以及acceptedRow每个异步返回后/预览spawn前已有同步门禁中追加repairPinned。发现改变时保留sourceFailure证据、拒绝交付，预览不得启动；普通非repair流程不改。新增三场景在精确最后读取内追加合法原来源阻塞，验证模型拒绝、下载不返回、预览0spawn与当前taskAccepted=false。固定后定向、全量与非作者原探针复验，不能复用旧版本通过。
