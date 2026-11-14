@@ -28,7 +28,7 @@ function syncExecutionPanel() {
   if (next !== executionContextKey) { executionContextKey = next; void executionPanel.refresh(); }
 }
 const sourceChanges = createSourceChanges({ api: sourceApi, getContext: () => ({ projectId: state.selectionPending ? '' : state.project?.id ?? '' }),
-  onApplied: async change => { if (change.projectId !== state.project?.id || state.selectionPending) return; await refreshSourceProject(change.projectId, state.epoch); toast('新需求已应用，请重新编排并确认规格和计划'); },
+  onApplied: async change => { if (change.projectId !== state.project?.id || state.selectionPending) return; if (await refreshSourceProject(change.projectId, state.epoch)) toast('新需求已应用，请重新编排并确认规格和计划'); },
   onError: error => showError(error) });
 void sourceChanges.mount(document.querySelector('#source-changes-host'));
 function syncSourceChanges() {
@@ -38,14 +38,15 @@ function syncSourceChanges() {
 }
 async function refreshSourceProject(projectId, epoch, expected) {
   const { project } = await api(`/api/projects/${encodeURIComponent(projectId)}`);
-  if (epoch !== state.epoch || state.selectionPending || state.project?.id !== projectId) return;
+  if (epoch !== state.epoch || state.selectionPending || state.project?.id !== projectId) return false;
   if (expected && ((project.sourceGeneration ?? 0) < expected.generation || (project.sourceGeneration === expected.generation && project.currentSourceRevision !== expected.revision))) throw new Error('项目输入版本尚未核对一致，请刷新后继续。');
   const runId = state.run?.id;
-  ++state.epoch; clearTimeout(state.pollTimer);
+  const updatedEpoch = ++state.epoch; clearTimeout(state.pollTimer);
   state.project = { ...project, runs: project.runs || [] };
   state.run = state.project.runs.find(run => run.id === runId) || sortedRuns()[0] || null;
   rememberSelection(); renderAll(); schedulePoll();
   await refreshProjects();
+  return updatedEpoch === state.epoch && !state.selectionPending && state.project?.id === projectId;
 }
 async function sourceApi(url, options) {
   const projectId = state.project?.id, epoch = state.epoch;

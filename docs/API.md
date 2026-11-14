@@ -150,7 +150,7 @@ ExecutionDTO包含执行编号、尝试、范围、状态、是否通过、调�
 
 复验DTO另有kind:web_recheck、来源服务执行编号/提交、recheckBudget和当前复验范围版本；actions.canRecheck仅为轻量按钮条件，实际动作在模型调用前深查原私有报告/真实Git/回执和当前归属。来源根、输出根和绑定只由服务私有记录派生，客户端不能传。预览/下载对复验快照另外重验来源provenance和全部文件字节，不以缺少.git放宽原始编码候选的Git校验。
 
-repair用于当前失败候选具有有效、完整、同代码版本的阻塞Review时“保留代码并修复”。服务从自有记录派生原始编码来源和发现问题来源，深查原始Git/私有模型回执/源码hash/报告文件与SQLite记录及当前审批，拷贝源码与完整逐字行证据后，在独立工作区建立真实新Git基线。不得从客户端接收initialSource/previousIssues/来源路径/报告/预算。新记录kind仍为web_execution，私有operation为repair，DTO增加actions.canRepair、repairContractRevision、repairBudget、sourceExecutionId/sourceCommit及findingExecutionId；这些公开编号不授予来源路径权限。
+repair用于当前失败候选具有有效、完整、同代码版本的阻塞Review时“保留代码并修复”。服务从自有记录派生原始编码来源和发现问题来源，深查原始Git/私有模型回执/源码hash/报告文件与SQLite记录及当前审批，拷贝源码与完整逐字行证据后，在独立工作区建立真实新Git基线。不得从客户端接收initialSource/previousIssues/来源路径/报告/预算。新记录kind仍为web_execution，私有operation为repair，DTO增加actions.canRepair、repairContractRevision、repairBudget、repairSourceExecutionId/repairSourceCommit及repairFindingExecutionId；这些公开编号不授予来源路径权限。
 
 准入从建立行时计入总时长，核心只取得剩余预算；未知停止继续占用活动槽。新候选至少一次编码、源码hash及提交变化，原阻塞问题跨轮保留并明确逐项resolved，自检、独立HTTP/SQLite、真实Edge及Review共同通过后才能accepted。恢复到完整原seed、遗漏原问题、来源中途变化、版本失效均不能发布通过。当前用量只记新调用，原失败及成本不覆盖；下载/预览再查来源与当前候选完整性。
 
