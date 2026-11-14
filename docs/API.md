@@ -18,6 +18,8 @@
 
 sourceSnapshot为本次运行不可变原文，导出requirements.md也使用该快照。内容revision采用按键排序的SHA256；问题答复位于spec.clarifications并参与规格标识。所有待确认问题先保守视为blocking，逐项非空回答并保存修订后才可确认。每类修订最多20版，历史仅追加已替换版本的完整快照，当前版本仍在Run本体。
 
+执行服务默认通过ProjectStore.getPersistedRun读取最后成功发布至文件的深复制快照，不能使用尚在保存中的内存审批；写入失败不更新该快照。实时规划GET仍展示当前运行过程。此单控制器文件发布边界不是事务数据库或跨存储事务。
+
 ## 接口
 
 - GET `/api/health` → `{ok:true, model:{configured:boolean,model:string}, modelPlanning:{engineeringMaxCalls,engineeringTimeoutMs}, supportedFormats:['.md','.txt','.docx']}`。工程规划预算来自当前编排器，不包含凭据。

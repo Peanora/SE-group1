@@ -72,7 +72,7 @@ export async function createApp(options = {}) {
   const orchestrator = new Orchestrator(store, planner, { stepDelayMs: options.stepDelayMs ?? process.env.WORKFLOW_STEP_DELAY_MS ?? 350 });
   const executionService = options.executionService === null ? null : options.executionService ?? await (await import('./lib/web-execution-service.mjs')).createWebExecutionService({
     rootDir: path.resolve(options.executionRootDir ?? path.join(store.directory, 'executions')),
-    getPlanning: async (projectId, runId) => structuredClone(store.getRun(projectId, runId)),
+    getPlanning: async (projectId, runId) => store.getPersistedRun(projectId, runId),
   });
   try { await orchestrator.init(); }
   catch (cause) { try { await executionService?.shutdown(); } catch { cause.executionCleanupFailed = true; } throw cause; }
