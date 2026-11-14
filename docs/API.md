@@ -71,6 +71,8 @@ approvals为`{spec:null|{revision,at,feedback},plan:null|{revision,specRevision,
 - `validateTaskGraph(tasks)` → void（非法依赖或环时抛 Error）
 - `getModelConfig()` → `{configured,model,baseUrl}`（不返回密钥）
 
+`analyzeWithModel`的可信options可含config/fetchImpl/signal/timeoutMs/onReceipt，不从HTTP注入函数或配置。保留裸JSON及JSON代码围栏的正常stop响应和原文引用校验；仅stop可接收，未知结束状态拒绝。请求最多768KiB、实际响应流1MiB、正文512KiB，总截止覆盖连接、读取和可选回执。已知配置凭据进入输入会拒发，正文回显先遮蔽再拒绝；错误不透传底层正文或路径。可选四字段私有回执不改变Spec返回结构；当前编排器尚未使用该hook记录规格用量，不据此宣称统一预算或完整停止已接通。
+
 ## 状态和持久化
 
 ### 独立编码试验的内部接口
