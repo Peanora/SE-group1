@@ -197,7 +197,9 @@ test('重启保留完成草案和等待门禁；中断历史标识未知且不�
 });
 
 test('local与v1仍使用原规则，不调用工程适配器且旧哈希公式不变', async t => {
-  const x = await setup(t); delete x.run.workflowVersion; x.run.status = 'running'; x.orchestrator.schedule(x.project, x.run);
+  const x = await setup(t);
+  await waitFor(() => !x.orchestrator.state(x.run).driving && x.orchestrator.state(x.run).active.size === 0);
+  delete x.run.workflowVersion; x.run.status = 'running'; x.orchestrator.schedule(x.project, x.run);
   await waitFor(() => x.run.status === 'awaiting_review'); assert.equal(x.calls(), 0); assert.equal(x.run.engineeringPlan, undefined);
   await x.orchestrator.action(x.project.id, x.run.id, { action: 'approve' }); await waitFor(() => x.run.status === 'succeeded');
   const local = await x.orchestrator.createRun(x.project.id, { mode: 'local' }); await waitFor(() => local.status === 'awaiting_spec');

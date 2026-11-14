@@ -29,3 +29,9 @@ root新回归实际复现：approve_plan仍在保存中时，默认执行服务�
 工程规划首个真实试用在d669a70从资源目录原文生成并确认规格，17项需求、2角色；工程入口将兼容的完整技术描述误拒为invalid_input，未发工程API，原失败及未知用量保留。20363ee对有限原生描述别名完整匹配，未修改原规格；独立34/34与18正向/391拒绝探针FIX。root已确认此组件与本集成engineeringPlanPolicy字节哈希一致。
 
 随后在同一运行d1d0a2e6-d66f-41da-a5c3-54e76acac42e重试失败阶段：新增规格调用0、工程请求1，DeepSeek正常stop、输入3447/输出2406。生成2实体、4接口、2页面及6任务，经过结构检查、当前计划确认和规划文档包下载。原source/spec revision及规格字节相同，原invalid_input历史保留；engineeringCalls=2是本地两次尝试，只有后一次实际发出工程请求。报告与原快照位于忽略的output/real-engineering-planning-9HYn7w，临时服务已关闭。该结果只证明这份规划链路，不代表代码已编写或业务软件验收，businessAccepted:false。
+
+## 全量检查中的legacy测试准备竞态
+
+固定a18f2f9的86脚本通过，全量显式MXC为513/514、0skip，唯一失败是legacy兼容测试直接改workflowVersion/status后等待超时。原日志保留在原集成树output/verification/owned-recheck-integrated/full-test.log，未将该版当通过。独立强制延迟规格停点保存的探针证实：fixture看到awaiting_spec时调度器仍driving；直接改状态并schedule会被旧驱动屏蔽，留下running/pending。等待原驱动退出、active为0再构造legacy输入则正常到awaiting_review。证据main output/verification/legacy-fixture-race-results.json。
+
+修复在另树仅给该人工构造legacy的测试增加静止前置条件，不延长等待、不改生产调度或任何业务断言；原a18被检目录保持冻结。修版重新专项/全量及独立验证后才可集成。
