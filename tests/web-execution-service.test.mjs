@@ -13,6 +13,7 @@ import { browserManifest } from '../lib/web-browser-tests.mjs';
 import { projectReviewPolicy, validateProjectReviewResponse } from '../lib/project-review-model.mjs';
 import { installWebShell } from '../lib/web-delivery.mjs';
 import { applyProjectFiles } from '../lib/project-files.mjs';
+import { minimalEnv, runProcess } from '../lib/managed-process.mjs';
 
 const ids = { projectId: 'project-1', runId: 'run-1' };
 const startInput = { ...ids, profileId: 'library-web-v1', contractRevision: webExecutionContractRevision };
@@ -84,6 +85,39 @@ async function accept(service, state) {
   const { execution } = await service.start(startInput); const entry = state.calls.at(-1), record = acceptedRecord(entry);
   assert.equal(isWebTaskAccepted(record), true); entry.finish(record);
   await waitFor(service, value => value.executions[0].taskAccepted); return execution.id;
+}
+
+// Genuine local Git/shell and default source verification; only the upstream acceptance gate and
+// downstream delivery/runtime are trusted fixtures. No paid model or business acceptance is claimed.
+async function gitSourceFixture(t, mutate = async () => {}) {
+  const f = await fixture(t), { execution } = await f.service.start(startInput), entry = f.state.calls[0];
+  const workspace = path.join(entry.options.outputDir, 'web-execution-path-中文 空间', 'workspace'); await mkdir(workspace, { recursive: true });
+  const shell = await installWebShell({ workspace }); await applyProjectFiles({ workspace, files });
+  const git = async args => {
+    const result = await runProcess('git', ['--no-optional-locks', '-c', 'core.hooksPath=.platform/no-hooks', '-c', 'core.autocrlf=false', '-c', 'commit.gpgsign=false', ...args], {
+      cwd: workspace, timeoutMs: 10000, maxOutputBytes: 1024 * 1024,
+      env: { ...minimalEnv({ PATH: process.env.PATH || '' }), GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(workspace, '.platform', 'gitconfig'), GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' },
+    });
+    assert.equal(result.terminationConfirmed, true); assert.equal(result.exitCode, 0, 'temporary Git fixture command must succeed'); assert.equal(result.truncated, false); return result.stdout.trim();
+  };
+  await git(['init', '--quiet']); await git(['add', '--', '.']);
+  await git(['-c', 'user.name=Taskflow fixture', '-c', 'user.email=fixture@localhost', 'commit', '--quiet', '--allow-empty', '-m', 'trusted source path fixture']);
+  const head = await git(['rev-parse', 'HEAD']), gitRoot = await git(['rev-parse', '--show-toplevel']); assert.equal(await git(['status', '--porcelain']), '');
+  const record = JSON.parse(JSON.stringify(acceptedRecord(entry)).replaceAll('a'.repeat(40), head));
+  Object.assign(record, { workspace, shellHash: shell.hash, reportPath: path.join(path.dirname(workspace), 'execution.json') });
+  assert.equal(isWebTaskAccepted(record), true); entry.finish(record); await waitFor(f.service, value => value.executions[0].taskAccepted);
+  await f.service.shutdown(); await mutate({ f, record, workspace, head, gitRoot, git });
+  const db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite'));
+  try { db.prepare('UPDATE executions SET record=? WHERE id=?').run(JSON.stringify(record), execution.id); } finally { db.close(); }
+  let previewStarts = 0, deliveries = 0;
+  const service = await createWebExecutionService({ rootDir: f.rootDir, getPlanning: async () => f.state.planning, config, executable: process.execPath, previewTimeoutMs: 10000,
+    dependencies: {
+      // Deliberately do not inject verifySource or runProcess: this is the real default Git guard.
+      startRuntime: async () => { previewStarts++; const done = deferred(); return { url: 'http://localhost:43123', done: done.promise,
+        stop: async () => { const result = { status: 'stopped', exitCode: 0, stopAcknowledged: true, sourceUnchanged: true, terminationConfirmed: true }; done.resolve(result); return result; } }; },
+      createDelivery: async () => { deliveries++; return { zip: Buffer.from('path guard fixture only') }; },
+    } });
+  f.state.services.push(service); return { ...f, service, executionId: execution.id, workspace, head, gitRoot, git, counts: () => ({ previewStarts, deliveries }) };
 }
 
 // Controller integration fixtures only: neither these fabricated receipts nor mock inspectors prove business acceptance.
@@ -392,6 +426,42 @@ test('the default source guard rejects an outside workspace without passing it t
   const { rootDir, service, state } = await fixture(t); const executionId = await accept(service, state); await service.shutdown();
   const next = await createWebExecutionService({ rootDir, getPlanning: async () => state.planning, config, executable: process.execPath }); state.services.push(next);
   await assert.rejects(next.download({ ...ids, executionId }), { code: 'source_changed' }); assert.equal(state.previews.length, 0);
+});
+
+test('the default source guard accepts genuine clean Git and shell paths despite native Windows Git separator spelling', async t => {
+  const f = await gitSourceFixture(t);
+  assert.equal(path.normalize(f.gitRoot).toLowerCase(), path.normalize(f.workspace).toLowerCase());
+  if (process.platform === 'win32') { assert.ok(f.gitRoot.includes('/')); assert.ok(f.workspace.includes('\\')); assert.notEqual(f.gitRoot, f.workspace); }
+  const delivery = await f.service.download({ ...ids, executionId: f.executionId }); assert.ok(Buffer.isBuffer(delivery.buffer)); assert.equal(f.counts().deliveries, 1);
+  const preview = await f.service.action({ ...ids, executionId: f.executionId, action: 'preview' }); assert.equal(preview.preview.url, 'http://localhost:43123'); assert.equal(f.counts().previewStarts, 1);
+  await f.service.action({ ...ids, executionId: f.executionId, action: 'stop_preview' }); assert.equal((await f.service.list(ids)).executions[0].taskAccepted, true);
+});
+
+test('genuine Git staged dirt and a different HEAD cannot reuse complete trusted gate receipts', async t => {
+  for (const kind of ['staged_dirty', 'wrong_head']) {
+    const f = await gitSourceFixture(t, async ({ workspace, git, head }) => {
+      if (kind === 'staged_dirty') { await writeFile(path.join(workspace, files[0].path), files[0].content + '// staged change\n'); await git(['add', '--', files[0].path]); await writeFile(path.join(workspace, files[0].path), files[0].content); assert.match(await git(['status', '--porcelain']), /M/u); }
+      else { await git(['-c', 'user.name=Taskflow fixture', '-c', 'user.email=fixture@localhost', 'commit', '--quiet', '--allow-empty', '-m', 'different actual HEAD']); assert.notEqual(await git(['rev-parse', 'HEAD']), head); assert.equal(await git(['status', '--porcelain']), ''); }
+    });
+    await assert.rejects(f.service.download({ ...ids, executionId: f.executionId }), { code: 'source_changed' }); assert.deepEqual(f.counts(), { previewStarts: 0, deliveries: 0 });
+    assert.equal((await f.service.list(ids)).executions[0].taskAccepted, false);
+  }
+});
+
+test('default verification rejects different roots, traversal, parent links and invalid path text without downstream work', async t => {
+  for (const kind of ['git_root', 'traversal', 'parent_link', 'type', 'relative', 'nul']) {
+    const f = await gitSourceFixture(t, async ({ f, record, workspace, git }) => {
+      if (kind === 'git_root') { const different = path.join(f.rootDir, 'different-git-root'); await mkdir(different); await git(['config', 'core.worktree', different]); assert.notEqual(path.normalize(await git(['rev-parse', '--show-toplevel'])), path.normalize(workspace)); }
+      else if (kind === 'traversal') record.workspace = `${workspace}${path.sep}${['..', '..', '..', '..', 'outside-owned-root'].join(path.sep)}`;
+      else if (kind === 'type') record.workspace = {};
+      else if (kind === 'relative') record.workspace = 'workspace';
+      else if (kind === 'nul') record.workspace = workspace + '\0invalid';
+      else { const linked = path.join(f.state.calls[0].options.outputDir, 'linked-parent');
+        await symlink(path.dirname(workspace), linked, process.platform === 'win32' ? 'junction' : 'dir'); record.workspace = path.join(linked, 'workspace'); }
+    });
+    await assert.rejects(f.service.action({ ...ids, executionId: f.executionId, action: 'preview' }), { code: kind === 'parent_link' ? 'invalid_root' : 'source_changed' });
+    assert.deepEqual(f.counts(), { previewStarts: 0, deliveries: 0 }); assert.equal((await f.service.list(ids)).executions[0].taskAccepted, false);
+  }
 });
 
 test('a planning change during preview startup stops the acquired runtime and rejects its URL', async t => {
