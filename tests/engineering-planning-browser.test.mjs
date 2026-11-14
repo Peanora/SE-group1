@@ -71,6 +71,12 @@ test('actual model-planning UI discloses its budget, preserves engineering task 
   const download = await fetch(url + new URL(await page.locator('#download-bundle').getAttribute('href'), url).pathname);
   assert.equal(download.status, 200); const zip = Buffer.from(await download.arrayBuffer());
   assert.ok(zip.includes(Buffer.from('engineeringPlan')));
+  const planResponse = await fetch(`${url}/api/projects/${project.id}/runs/${run.id}/artifacts/plan.json`);
+  assert.equal(planResponse.status, 200); const planText = await planResponse.text(), exported = JSON.parse(planText);
+  assert.ok(zip.includes(Buffer.from(planText)), '下载包包含同一已确认的结构化计划');
+  const values = value => typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.values(value).flatMap(values) : [];
+  for (const value of values(exported)) for (const privateText of [config.apiKey, directory, 'engineering-receipts']) assert.equal(value.includes(privateText), false, privateText);
+  assert.equal(exported.engineeringPlan.hash, run.engineeringPlan.hash);
   for (const privateText of [config.apiKey, directory, 'engineering-receipts']) assert.equal(zip.includes(Buffer.from(privateText)), false);
   await page.reload(); await page.waitForFunction(() => document.querySelector('#run-status')?.classList.contains('status-succeeded'));
   assert.equal(designs, 1); assert.equal(specs, 1); assert.equal(run.approvals.plan.revision, run.planRevision);
