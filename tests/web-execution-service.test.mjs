@@ -37,6 +37,7 @@ async function fixture(t, overrides = {}) {
     codeModel: settings => { assert.equal(settings.config.apiKey, config.apiKey); return async () => { throw new Error('No model call is authorized by these lifecycle tests'); }; },
     reviewModel: () => async () => { throw new Error('No review call is authorized'); },
     startExecution(options) {
+      if (options.initialSource && state.startRepair) return state.startRepair(options);
       const finished = deferred(), record = { id: randomUUID(), ...options.binding, attemptId: randomUUID(), profileId: 'library-web-v1', providerKind: 'model', reviewerKind: 'model',
         status: 'generating', acceptanceStatus: 'not_checked', budget: { maxCalls: options.maxCalls, maxReviewCalls: options.maxReviewCalls, timeoutMs: options.timeoutMs },
         calls: 1, reviewCalls: 0, usage: { inputTokens: null, outputTokens: null }, versions: [], events: [], gitCommands: [] };
@@ -44,7 +45,7 @@ async function fixture(t, overrides = {}) {
       state.calls.push(entry); return { id: record.id, snapshot: () => structuredClone(record), done: finished.promise,
         cancel() { entry.cancelled++; if (!state.manualCancel) entry.finish({ status: 'stopped' }); } };
     },
-    verifySource: async () => ({ files: structuredClone(files), shellHash: 'c'.repeat(64) }),
+    verifySource: async record => ({ files: structuredClone(state.repairFiles?.get(record.id) ?? files), shellHash: record.shellHash ?? 'c'.repeat(64) }),
     startRuntime: async options => {
       const done = deferred(), entry = { options, stopped: 0, result: { status: 'stopped', exitCode: 0, stopAcknowledged: true, sourceUnchanged: true, terminationConfirmed: true } };
       state.previews.push(entry); return { url: state.previewUrl || 'http://localhost:43123', done: done.promise, pid: 123,
@@ -135,6 +136,46 @@ async function waitRecheck(f) {
 }
 async function setRecheckTimeout(f, timeoutMs) {
   await f.service.shutdown(); f.service = await f.open({ budget: { maxCalls: 1, maxReviewCalls: 1, timeoutMs } });
+}
+
+// Seeded repair positive paths below are trusted lifecycle fixtures, not Git/model/business acceptance.
+async function repairFixture(t) {
+  const f = await recheckFixture(t); f.state.reportHash = createHash('sha256').update(await readFile(f.state.original.reportPath)).digest('hex');
+  const { execution } = await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }), finding = await waitRecheck(f), failed = acceptedRecord(finding);
+  const issue = { id: 'ISSUE-repair-origin', severity: 'blocking', status: 'open', file: 'src/app.mjs', line: 1, message: 'The source needs an atomic update', evidence: files[0].content.trim(), originCommit: failed.candidateCommit };
+  Object.assign(failed.versions[0].acceptance, { status: 'changes_requested', issues: [issue], openIssues: [issue] });
+  Object.assign(failed.versions[0].acceptance.review, { kind: 'model', resolutions: [], openBlockingIssues: 1, issues: [{ severity: issue.severity, file: issue.file, line: issue.line, message: issue.message, evidence: issue.evidence }] });
+  await finding.pass({ status: 'failed', acceptanceStatus: 'changes_requested', versions: failed.versions });
+  await writeFile(finding.record.reportPath, JSON.stringify(finding.record)); await waitFor(f.service, value => value.executions[0].status === 'failed');
+  Object.assign(f.state, { findingId: execution.id, finding: finding.record, issue, repairs: [], repairFiles: new Map() });
+  f.state.startRepair = options => {
+    const done = deferred(), changedFiles = files.map(file => ({ ...file, content: file.content + '\n// trusted repair fixture changed source\n' }));
+    const record = { id: randomUUID(), ...options.binding, kind: 'web_execution', attemptId: randomUUID(), profileId: 'library-web-v1', providerKind: 'model', reviewerKind: 'model',
+      status: 'generating', calls: 1, reviewCalls: 0, budget: { maxCalls: options.maxCalls, maxReviewCalls: options.maxReviewCalls, timeoutMs: options.timeoutMs },
+      repairSource: { ...Object.fromEntries(Object.entries(options.initialSource).filter(([key]) => key !== 'files')), previousIssues: structuredClone(options.previousIssues) },
+      usage: { inputTokens: null, outputTokens: null }, events: [], versions: [], gitCommands: [] };
+    const entry = { record, options, files: changedFiles, cancelled: 0, finish(change = {}) { Object.assign(record, { finishedAt: new Date().toISOString(), status: 'failed' }, change); done.resolve(structuredClone(record)); },
+      async pass(change = {}) {
+        await entry.ready; const accepted = JSON.parse(JSON.stringify(acceptedRecord(entry)).replaceAll('a'.repeat(40), 'b'.repeat(40)).replaceAll(hash(files), hash(changedFiles)));
+        Object.assign(accepted, { baseCommit: 'd'.repeat(40), workspace: record.workspace, reportPath: record.reportPath, shellHash: record.shellHash, repairSource: record.repairSource, usage: { inputTokens: 11, outputTokens: 13 } });
+        const gate = accepted.versions[0].acceptance;
+        gate.issues = options.previousIssues.map(issue => ({ ...issue, status: 'resolved', checkedCommit: accepted.candidateCommit, resolution: 'Fixed in the new source' })); gate.openIssues = [];
+        gate.review.resolutions = options.previousIssues.map(issue => ({ id: issue.id, status: 'resolved', reason: 'The changed source closes the issue' }));
+        entry.finish(typeof change === 'function' ? change(accepted) : { ...accepted, ...change });
+      } };
+    entry.ready = (async () => { await mkdir(options.outputDir, { recursive: true }); const directory = await mkdtemp(path.join(options.outputDir, 'web-execution-'));
+      record.workspace = path.join(directory, 'workspace'); record.reportPath = path.join(directory, 'execution.json'); await mkdir(record.workspace);
+      record.shellHash = (await installWebShell({ workspace: record.workspace })).hash; await applyProjectFiles({ workspace: record.workspace, files: changedFiles });
+      f.state.repairFiles.set(record.id, changedFiles);
+    })();
+    f.state.repairs.push(entry); return { id: record.id, snapshot: () => structuredClone(record), done: entry.ready.then(() => done.promise),
+      cancel() { entry.cancelled++; if (!f.state.manualRepairCancel) entry.finish({ status: 'stopped' }); } };
+  };
+  return f;
+}
+async function waitRepair(f) {
+  for (let i = 0; i < 300; i++) { if (f.state.repairs.length) { await f.state.repairs.at(-1).ready; return f.state.repairs.at(-1); } await new Promise(resolve => setTimeout(resolve, 5)); }
+  assert.fail('trusted repair executor was not constructed');
 }
 
 test('capabilities are explicit reference-only, and start checks current content plus both approvals', async t => {
@@ -485,7 +526,7 @@ test('recheck atomic slot rejects simultaneous starts and refuses all client pro
 
 test('both paid actions require an explicit current profile contract while free actions refuse those extra fields', async t => {
   const f = await recheckFixture(t);
-  for (const action of ['retry', 'recheck']) {
+  for (const action of ['retry', 'recheck', 'repair']) {
     const input = { ...ids, executionId: f.state.sourceId, action };
     await assert.rejects(f.service.action(input), { status: 400 });
     await assert.rejects(f.service.action({ ...input, profileId: 'library-web-v1' }), { status: 400 });
@@ -907,6 +948,142 @@ test('a source publication during deep recheck admission prevents constructing t
   f.state.planning.project.currentSourceRevision = '0'.repeat(64); release.resolve();
   const result = await waitFor(f.service, value => value.executions[0].status === 'superseded');
   assert.equal(f.state.rechecks.length, 0); assert.equal(result.executions[0].calls, 0); assert.equal(result.executions[0].reviewCalls, 0); assert.equal(result.executions[0].actions.canDownload, false);
+});
+
+test('owned repair uses the selected failed recheck lineage, fixed source and blocking feedback in a new attempt without old usage', async t => {
+  const f = await repairFixture(t), beforeSource = await readFile(f.state.original.reportPath), beforeFinding = await readFile(f.state.finding.reportPath), before = await f.service.list(ids);
+  assert.equal(before.executions[0].actions.canRepair, true); assert.equal(before.executions[0].actions.canRecheck, false); assert.equal(before.executions[1].actions.canRepair, false);
+  const { execution } = await f.service.action({ ...startInput, executionId: f.state.findingId, action: 'repair' }); const entry = await waitRepair(f);
+  assert.notEqual(execution.id, f.state.findingId); assert.equal(execution.operation, 'repair'); assert.equal(execution.repairSourceExecutionId, f.state.sourceId); assert.equal(execution.repairFindingExecutionId, f.state.findingId);
+  assert.deepEqual(entry.options.initialSource.files, files); assert.deepEqual(entry.options.previousIssues, [f.state.issue]); assert.equal(entry.options.initialSource.reviewSourceExecutionId, f.state.finding.id);
+  assert.equal(entry.options.maxCalls, 3); assert.equal(entry.options.maxReviewCalls, 3); assert.ok(entry.options.timeoutMs <= 600000);
+  await entry.pass(); const result = await waitFor(f.service, value => value.executions[0].taskAccepted), current = result.executions[0];
+  assert.equal(current.kind, 'web_execution'); assert.equal(current.calls, 1); assert.deepEqual(current.usage, { inputTokens: 11, outputTokens: 13 });
+  assert.notEqual(current.versions[0].commit, f.state.original.candidateCommit); assert.equal(current.versions[0].acceptance.issues[0].status, 'resolved');
+  assert.equal(result.executions.find(item => item.id === f.state.findingId).taskAccepted, false); assert.deepEqual(result.executions.find(item => item.id === f.state.sourceId).usage, { inputTokens: 900, outputTokens: 100 });
+  assert.deepEqual(await readFile(f.state.original.reportPath), beforeSource); assert.deepEqual(await readFile(f.state.finding.reportPath), beforeFinding);
+  await f.service.download({ ...ids, executionId: current.id }); assert.equal(f.state.deliveries.length, 1);
+  const preview = await f.service.action({ ...ids, executionId: current.id, action: 'preview' }); assert.equal(preview.execution.taskAccepted, true); await f.service.action({ ...ids, executionId: current.id, action: 'stop_preview' });
+  assert.ok(!JSON.stringify(result).includes(f.rootDir) && !JSON.stringify(result).includes('sourceReportHash') && !JSON.stringify(result).includes('receiptPath'));
+});
+
+test('repair refuses client provenance, stale contracts, invalid Review and duplicate or foreign issue bindings', async t => {
+  const f = await repairFixture(t), input = { ...startInput, executionId: f.state.findingId, action: 'repair' };
+  for (const extra of [{ initialSource: {} }, { previousIssues: [] }, { sourceReportPath: '/private/file' }, { binding: {} }, { budget: { maxCalls: 3 } }]) await assert.rejects(f.service.action({ ...input, ...extra }), { code: 'invalid_input' });
+  await assert.rejects(f.service.action({ ...input, contractRevision: '0'.repeat(64) }), { code: 'contract_changed' });
+  const db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite')), saved = db.prepare('SELECT record,snapshot FROM executions WHERE id=?').get(f.state.findingId);
+  for (const mutate of [record => record.versions[0].acceptance.review.status = 'error', record => record.reviewPolicyHash = '0'.repeat(64),
+    record => record.versions[0].acceptance.review.binding.runId = 'another-run', record => { const gate = record.versions[0].acceptance; gate.openIssues.push(gate.openIssues[0]); gate.review.openBlockingIssues = 2; }]) {
+    const value = JSON.parse(saved.record); mutate(value); db.prepare('UPDATE executions SET record=? WHERE id=?').run(JSON.stringify(value), f.state.findingId);
+    assert.equal((await f.service.list(ids)).executions[0].actions.canRepair, false); await assert.rejects(f.service.action(input), { code: 'cannot_repair' });
+  }
+  db.prepare('UPDATE executions SET record=? WHERE id=?').run(saved.record, f.state.findingId); db.close(); assert.equal(f.state.repairs.length, 0);
+});
+
+test('repair deep admission rejects mismatched private reports, paths, provenance and source inspection before constructing code execution', async t => {
+  for (const kind of ['report', 'path', 'provenance', 'source']) {
+    const f = await repairFixture(t), db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite'));
+    if (kind === 'report') await writeFile(f.state.finding.reportPath, JSON.stringify({ ...f.state.finding, error: 'changed private report' }));
+    if (kind === 'path' || kind === 'provenance') {
+      const record = structuredClone(f.state.finding); if (kind === 'path') record.reportPath = path.join(f.rootDir, 'foreign', 'execution.json'); else record.provenance.sourceReportHash = '0'.repeat(64);
+      db.prepare('UPDATE executions SET record=? WHERE id=?').run(JSON.stringify(record), f.state.findingId);
+    }
+    db.close(); if (kind === 'source') f.state.inspectHook = async (_options, value) => { const result = value(); result.source.candidateCommit = '0'.repeat(40); return result; };
+    await f.service.action({ ...startInput, executionId: f.state.findingId, action: 'repair' });
+    const result = await waitFor(f.service, value => value.executions[0].status === 'failed'); assert.equal(f.state.repairs.length, 0); assert.equal(result.executions[0].calls, 0); assert.equal(result.executions[0].taskAccepted, false);
+    assert.equal(result.executions.find(value => value.id === f.state.findingId).taskAccepted, false);
+  }
+});
+
+test('unchanged repair source, missing lineage and unclosed original issues cannot inherit a complete passing gate', async t => {
+  for (const kind of ['unchanged_hash', 'unchanged_commit', 'lineage', 'resolution', 'failed_check']) {
+    const f = await repairFixture(t); await f.service.action({ ...startInput, executionId: f.state.findingId, action: 'repair' }); const entry = await waitRepair(f);
+    await entry.pass(value => {
+      if (kind === 'unchanged_hash') return JSON.parse(JSON.stringify(value).replaceAll(hash(entry.files), hash(files)));
+      if (kind === 'unchanged_commit') return JSON.parse(JSON.stringify(value).replaceAll('b'.repeat(40), 'a'.repeat(40)));
+      if (kind === 'lineage') value.repairSource.reviewSourceReportHash = '0'.repeat(64);
+      if (kind === 'resolution') value.versions[0].acceptance.issues[0].status = 'open';
+      if (kind === 'failed_check') value.versions[0].acceptance.test.checks[0].passed = false;
+      return value;
+    });
+    const result = await waitFor(f.service, value => value.executions[0].status === 'failed'); assert.equal(result.executions[0].taskAccepted, false); assert.equal(result.executions[0].actions.canDownload, false);
+    assert.deepEqual(result.executions[0].usage, { inputTokens: 11, outputTokens: 13 }); assert.equal(result.executions.find(value => value.id === f.state.findingId).taskAccepted, false);
+  }
+});
+
+test('repair cancellation, current-source invalidation and the shared admission deadline win before late code or success', async t => {
+  for (const kind of ['cancel_admission', 'deadline', 'late_cancel', 'current']) {
+    const f = await repairFixture(t), entered = deferred(), release = deferred();
+    if (kind === 'deadline') { await f.service.shutdown(); f.service = await f.open({ budget: { maxCalls: 1, maxReviewCalls: 1, timeoutMs: 25 } }); }
+    if (['cancel_admission', 'deadline'].includes(kind)) f.state.inspectHook = async (_options, value) => { entered.resolve(); if (kind === 'deadline') await new Promise(resolve => setTimeout(resolve, 100)); else await release.promise; return value(); };
+    const { execution } = await f.service.action({ ...startInput, executionId: f.state.findingId, action: 'repair' });
+    if (['cancel_admission', 'deadline'].includes(kind)) {
+      await entered.promise; if (kind === 'cancel_admission') { await f.service.action({ ...ids, executionId: execution.id, action: 'cancel' }); release.resolve(); }
+      const result = await waitFor(f.service, value => value.executions[0].status === (kind === 'deadline' ? 'timed_out' : 'stopped'));
+      assert.equal(f.state.repairs.length, 0); assert.equal(result.executions[0].calls, 0);
+    } else {
+      const entry = await waitRepair(f); f.state.manualRepairCancel = true;
+      if (kind === 'late_cancel') await f.service.action({ ...ids, executionId: execution.id, action: 'cancel' }); else f.state.planning.project.currentSourceRevision = '0'.repeat(64);
+      await entry.pass(); const result = await waitFor(f.service, value => ['stopped', 'superseded'].includes(value.executions[0].status)); assert.equal(result.executions[0].taskAccepted, false);
+    }
+  }
+});
+
+test('repair unknown source termination preserves private PID and probe history without a new model executor or DTO disclosure', async t => {
+  const f = await repairFixture(t); f.state.inspectHook = async () => { throw Object.assign(new Error('synthetic private source error'), { reconciliationRequired: true, result: { pid: 737373, terminationConfirmed: false, controlDirectory: 'C:/private/repair-control' }, probeDirectory: 'C:/private/repair-probe' }); };
+  const { execution } = await f.service.action({ ...startInput, executionId: f.state.findingId, action: 'repair' });
+  const result = await waitFor(f.service, value => value.executions[0].status === 'reconciliation_required'); assert.equal(f.state.repairs.length, 0); assert.equal(result.capabilities.canStart, false);
+  const db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite')), privateRecord = JSON.parse(db.prepare('SELECT record FROM source_history WHERE execution_id=?').get(execution.id).record); db.close();
+  assert.equal(privateRecord.result.pid, 737373); assert.equal(privateRecord.probeDirectory, 'C:/private/repair-probe'); assert.ok(!JSON.stringify(result).includes('737373') && !JSON.stringify(result).includes('repair-control'));
+  await f.service.shutdown(); const next = await f.open(); assert.equal((await next.list(ids)).executions[0].status, 'reconciliation_required');
+});
+
+test('changing source or finding report during repair blocks assertions, publication and accepted delivery', async t => {
+  for (const phase of ['assertion', 'publication', 'download']) {
+    const f = await repairFixture(t); await f.service.action({ ...startInput, executionId: f.state.findingId, action: 'repair' }); const entry = await waitRepair(f);
+    if (phase === 'download') { await entry.pass(); await waitFor(f.service, value => value.executions[0].taskAccepted); }
+    await writeFile(f.state.finding.reportPath, (await readFile(f.state.finding.reportPath, 'utf8')) + '\n');
+    if (phase === 'assertion') { await assert.rejects(entry.options.assertCurrent(entry.options.binding), { code: 'source_changed' }); entry.finish(); }
+    else if (phase === 'publication') await entry.pass();
+    else await assert.rejects(f.service.download({ ...ids, executionId: (await f.service.list(ids)).executions[0].id }), { code: 'source_changed' });
+    const result = await waitFor(f.service, value => value.executions[0].status === 'failed'); assert.equal(result.executions[0].taskAccepted, false); assert.equal(f.state.deliveries.length, 0);
+  }
+});
+
+test('repair non-cooperative cancellation retains reconciliation evidence after the bounded drain and source changes withdraw all batch repair permissions', async t => {
+  const f = await repairFixture(t), entered = deferred(), release = deferred();
+  f.state.inspectHook = async () => { entered.resolve(); return release.promise; };
+  const { execution } = await f.service.action({ ...startInput, executionId: f.state.findingId, action: 'repair' }); await entered.promise;
+  await f.service.action({ ...ids, executionId: execution.id, action: 'cancel' });
+  const result = await waitFor(f.service, value => value.executions[0].status === 'reconciliation_required', 7500); assert.equal(f.state.repairs.length, 0); assert.equal(result.capabilities.canStart, false);
+  const db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite')), stored = db.prepare('SELECT record FROM executions WHERE id=?').get(execution.id), history = JSON.parse(db.prepare('SELECT record FROM source_history WHERE execution_id=?').get(execution.id).record); db.close();
+  assert.equal(JSON.parse(stored.record).status, 'reconciliation_required'); assert.equal(history.admission.findingServiceExecutionId, f.state.findingId); assert.equal(history.admission.findingReportPath, f.state.finding.reportPath);
+  release.resolve({}); await f.service.shutdown();
+  const g = await repairFixture(t), paused = deferred(), resume = deferred(); let reads = 0;
+  g.state.getPlanning = async () => { const value = structuredClone(g.state.planning); if (++reads === 3) { paused.resolve(); await resume.promise; } return value; };
+  const pending = g.service.list(ids); await paused.promise; await new Promise(resolve => setImmediate(resolve));
+  await g.service.withProjectCheckpoint(ids.projectId, () => { g.state.planning.project.currentSourceRevision = '0'.repeat(64); g.state.planning.run.sourceSuperseded = true; });
+  resume.resolve(); assert.equal((await pending).executions.every(value => value.actions.canRepair === false), true);
+});
+
+test('finding tampering during publication inspection cannot pass the final source proof', async t => {
+  const f = await repairFixture(t); await f.service.action({ ...startInput, executionId: f.state.findingId, action: 'repair' }); const entry = await waitRepair(f), entered = deferred(), release = deferred();
+  f.state.inspectHook = async (_options, value) => { const source = value(); entered.resolve(); await release.promise; return source; };
+  await entry.pass(); await entered.promise; await writeFile(f.state.finding.reportPath, (await readFile(f.state.finding.reportPath, 'utf8')) + '\n'); release.resolve();
+  const result = await waitFor(f.service, value => value.executions[0].status === 'failed'); assert.equal(result.executions[0].taskAccepted, false); assert.equal(result.executions[0].actions.canDownload, false);
+});
+
+test('an original coded failed row can repair its own valid feedback and simultaneous repair requests reserve only one attempt', async t => {
+  const f = await repairFixture(t), original = structuredClone(f.state.original), gate = original.versions[0].acceptance;
+  original.reviewPolicyHash = projectReviewPolicy.hash; Object.assign(gate, { status: 'changes_requested', issues: [f.state.issue], openIssues: [f.state.issue] });
+  Object.assign(gate.review, { kind: 'model', status: 'completed', resolutions: [], openBlockingIssues: 1, issues: [f.state.issue] });
+  const db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite')); db.prepare('UPDATE executions SET record=? WHERE id=?').run(JSON.stringify(original), f.state.sourceId); db.close();
+  f.state.original = original; await writeFile(original.reportPath, JSON.stringify(original)); f.state.reportHash = createHash('sha256').update(await readFile(original.reportPath)).digest('hex');
+  assert.equal((await f.service.list(ids)).executions.find(value => value.id === f.state.sourceId).actions.canRepair, true);
+  const input = { ...startInput, executionId: f.state.sourceId, action: 'repair' }, requests = await Promise.allSettled([f.service.action(input), f.service.action(input)]);
+  assert.equal(requests.filter(value => value.status === 'fulfilled').length, 1); const entry = await waitRepair(f); assert.equal(f.state.repairs.length, 1);
+  assert.equal(entry.options.initialSource.sourceExecutionId, original.id); assert.equal(entry.options.initialSource.reviewSourceExecutionId, original.id); await entry.pass();
+  await waitFor(f.service, value => value.executions[0].taskAccepted);
 });
 
 test('real MXC executes exactly one thin failed candidate through the default executor without model calls', {

@@ -85,7 +85,10 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
   const recheckBudget = { maxCalls: 0, maxReviewCalls: 2, timeoutMs: 180000 };
   const recheckRecord = overrides => execution({ status: 'failed', profileId: 'library-web-v1', contractRevision: 'contract-1', recheckBudget,
     actions: { canRecheck: true, canRetry: true }, ...overrides });
-  async function pendingPostPage({ recheck = false } = {}) {
+  const repairBudget = { maxCalls: 3, maxReviewCalls: 3, timeoutMs: 600000 };
+  const repairRecord = overrides => execution({ status: 'failed', kind: 'web_recheck', repairContractRevision: 'contract-1', repairBudget,
+    error: '同一固定提交已有有效阻塞问题，需修复新版本。', actions: { canRepair: true, canRetry: true }, ...overrides });
+  async function pendingPostPage({ recheck = false, repair = false } = {}) {
     const page = await pageFor();
     await page.evaluate(async ({ initialContext, runA, runB }) => {
       window.panel.destroy();
@@ -104,12 +107,12 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
       };
       window.panel = createExecutionPanel({ api, getContext: () => window.context, onError: error => window.errors.push(error.message) });
       await window.panel.mount(document.querySelector('#panel'));
-    }, { initialContext: context, runA: fixture({ executions: [(recheck ? recheckRecord : execution)({ id: 'run-a-record' })] }), runB: fixture({ executions: [(recheck ? recheckRecord : execution)({ id: 'run-b-record' })] }) });
+    }, { initialContext: context, runA: fixture({ executions: [(repair ? repairRecord : recheck ? recheckRecord : execution)({ id: 'run-a-record' })] }), runB: fixture({ executions: [(repair ? repairRecord : recheck ? recheckRecord : execution)({ id: 'run-b-record' })] }) });
     return page;
   }
   async function assertPendingPostIsolation({ oldResult = 'success', revisit = false, action = 'start' }) {
-    const page = await pendingPostPage({ recheck: action === 'recheck' });
-    const trigger = action === 'recheck' ? page.getByRole('button', { name: '重新检查固定代码', exact: true }) : start(page);
+    const page = await pendingPostPage({ recheck: action === 'recheck', repair: action === 'repair' });
+    const trigger = action === 'repair' ? page.getByRole('button', { name: '保留代码并修复', exact: true }) : action === 'recheck' ? page.getByRole('button', { name: '重新检查固定代码', exact: true }) : start(page);
     await consent(page).check(); await trigger.click();
     await page.waitForFunction(() => window.crossPosts.length === 1);
     await page.evaluate(async () => { window.context.runId = 'run-b'; await window.panel.refresh(); });
@@ -143,7 +146,7 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
     assert.equal(await page.evaluate(() => window.crossRequests.filter(item => item.method === 'GET').length), reads);
     await page.evaluate(response => window.crossPosts[1].complete(response), { execution: execution({ id: 'current-action-result', status: 'preparing' }) });
     await page.waitForFunction(() => document.querySelector('select[aria-label="执行记录"]').value === 'current-action-result');
-    assert.equal(await start(page).isEnabled(), true); assert.equal(await selected.isEnabled(), true);
+    assert.equal(await start(page).isEnabled(), action !== 'repair'); assert.equal(await selected.isEnabled(), true);
     assert.equal(await selected.locator('option', { hasText: 'stale-action-result' }).count(), 0);
   }
 
@@ -332,6 +335,40 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
         await mkdir(new URL('output/playwright/', root), { recursive: true }); await page.screenshot({ path: fileURLToPath(new URL(`output/playwright/recheck-panel-${viewport.width}.png`, root)), fullPage: true });
       }
     }
+  });
+
+  await t.test('owned repair requires current scope, known new-code budget and acknowledgement, retains failures and posts no source paths', async () => {
+    const page = await pageFor(); state.capabilities.repairBudget = repairBudget; state.executions = [repairRecord({ usage: { inputTokens: 29897, outputTokens: 924 } })]; await refresh(page);
+    const button = page.getByRole('button', { name: '保留代码并修复', exact: true }), profiles = page.getByRole('combobox', { name: '执行范围', exact: true });
+    assert.equal(await button.isDisabled(), true); await consent(page).check(); assert.equal(await button.isEnabled(), true); await button.focus(); await refresh(page); assert.equal(await button.evaluate(element => document.activeElement === element), true);
+    assert.match(await page.locator('.ep-scope').textContent(), /根据原代码及有效阻塞意见生成新版本/u); assert.match(await page.locator('.ep-body').textContent(), /原问题必须逐项复核关闭/u);
+    state.executions[0].repairBudget = { ...repairBudget, maxCalls: null }; await refresh(page); assert.equal(await consent(page).isChecked(), false); await consent(page).check(); assert.equal(await button.isDisabled(), true);
+    state.executions[0].repairBudget = repairBudget; state.executions[0].repairContractRevision = 'old-contract'; await refresh(page); await consent(page).check(); assert.equal(await button.isDisabled(), true);
+    state.executions[0].repairContractRevision = 'contract-1'; await refresh(page); assert.equal(await consent(page).isChecked(), false);
+    await page.evaluate(() => { window.context.planningStatus = 'succeeded'; }); await refresh(page); await consent(page).check(); assert.equal(await button.isDisabled(), true);
+    await page.evaluate(() => { window.context.planningStatus = 'confirmed'; }); await refresh(page);
+    await profiles.selectOption('library-web-v2'); await consent(page).check(); assert.equal(await button.isDisabled(), true); await profiles.selectOption('library-web-v1'); await consent(page).check();
+    postStatus = 409; await button.click(); await page.getByRole('alert').waitFor({ state: 'visible' }); assert.equal(await consent(page).isChecked(), true); assert.equal(await profiles.inputValue(), 'library-web-v1');
+    postStatus = 200; await refresh(page); postExecution = repairRecord({ id: 'repair-attempt-2', operation: 'repair', kind: 'web_execution', repairSourceExecutionId: 'original-coded-row', repairFindingExecutionId: 'execution-1', repairSourceCommit: 'a'.repeat(40),
+      calls: 1, reviewCalls: 0, usage: { inputTokens: null, outputTokens: null }, versions: [], status: 'generating', actions: { canCancel: true, canDownload: true } });
+    await button.click(); await page.waitForFunction(() => document.querySelector('select[aria-label="执行记录"]').value === 'repair-attempt-2');
+    assert.deepEqual(requests.filter(item => item.method === 'POST').at(-1).body, { action: 'repair', profileId: 'library-web-v1', contractRevision: 'contract-1' });
+    assert.equal(await consent(page).isChecked(), false); assert.match(await page.locator('.ep-facts').textContent(), /编码调用：1 次/u); assert.match(await page.locator('.ep-facts').textContent(), /输入用量：未知/u);
+    assert.match(await page.locator('.ep-body').textContent(), /阻塞意见记录 execution-1/u); assert.equal(await download(page).count(), 0);
+    await page.getByRole('combobox', { name: '执行记录', exact: true }).selectOption('execution-1'); assert.match(await page.locator('.ep-facts').textContent(), /输入用量：29897/u);
+  });
+
+  await t.test('owned repair remains usable on desktop and narrow screens without hiding the fixed reference scope', async () => {
+    for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
+      const page = await pageFor(viewport); state.capabilities.repairBudget = repairBudget; state.executions = [repairRecord()]; await refresh(page); await consent(page).check();
+      const button = page.getByRole('button', { name: '保留代码并修复', exact: true }); assert.equal(await button.isEnabled(), true); const box = await button.boundingBox(); assert.ok(box.x >= 0 && box.x + box.width <= viewport.width);
+      assert.match(await page.locator('.ep-scope').textContent(), /首版仅开放服务端列出的固定示例/u); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      if (process.env.EXECUTION_PANEL_SCREENSHOTS === '1') { await mkdir(new URL('output/playwright/', root), { recursive: true }); await page.screenshot({ path: fileURLToPath(new URL(`output/playwright/repair-panel-${viewport.width}.png`, root)), fullPage: true }); }
+    }
+  });
+
+  await t.test('late repair replies cannot clear the newer action lock or restore old preview and download after a run revisit', async () => {
+    for (const oldResult of ['success', 'error']) await assertPendingPostIsolation({ action: 'repair', oldResult, revisit: true });
   });
 
   await t.test('desktop and 390×844 have usable controls, visible evidence and no horizontal overflow', async () => {

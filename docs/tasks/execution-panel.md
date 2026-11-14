@@ -1,5 +1,15 @@
 # 网页执行面板组件
 
+## 自有代码与有效阻塞意见修复入口（本轮，待独立复验）
+
+基准4df6c8d，新独立树web-owned-repair-service，复用已独立FIX的F05检查点和core修复seed。新增“保留代码并修复”，只使用后端canRepair；仍需当前规格/计划双确认、当前profile/完整repairContractRevision、已知本轮编码/Review/时长预算及费用勾选。POST仅`{action:'repair',profileId,contractRevision}`，不发送源码、问题、报告、路径或binding。输入使用配置模型，范围仍明确固定参考项目。
+
+界面说明原代码和有效阻塞意见会作为修复输入，生成新版本后全部检查和Review重新执行，原阻塞必须逐项复核关闭。原失败、原用量及源码历史保留，新记录显示独立编码调用和用量，null仍未知；选中修复记录时展示服务安全UUID与原提交，不显示私有目录/报告/回执。profile/model/全局或所选修复预算、contract、运行上下文和执行选择变化均使费用确认失效；成功创建repair后清除勾选，不能自动反复收费。
+
+继续使用activeAction token：修复POST在A→B→A后迟到的成功、失败及finally不能恢复旧下载/预览、发布旧错误、清新操作锁或替新运行确认费用。失败保持当前输入/选择，可刷新后恢复。新增系统Edge固定平台UI fixture覆盖按钮/profile/budget/双确认/ack与实际POST字段、未知用量、旧用量可回看、失败保留、桌面与390×844范围说明和焦点、跨运行token。截图在忽略的output/playwright/repair-panel-1440.png和repair-panel-390.png，已实际查看两种布局；这仅为平台UI测试，不是候选业务浏览器验收。root负责HTTP收费allowlist/API及后续实际模型修复；本树0真实API、不改原QA或公开发布。
+
+最终实际检查：系统Edge固定平台UI专项23/23通过（22场景及父项，15208.3013ms），服务专项显式实际MXC为73/73、0skip（新repair正向仍为trusteddeps），87脚本语法及git diff --check通过。最后只补任务记录，固定后交不同作者复验。未接根HTTP入口或调用真实修复模型，不能将UI fixture成功表述为业务候选通过。
+
 ## 本轮目标与边界
 
 基准：`702d318`，独立工作区和分支 `codex/execution-panel`。仅修改本任务记录、`public/execution-panel.js`、`tests/execution-panel.test.mjs`。目标是提供可接入原工作台的执行面板；不修改共享入口、服务端或用户数据，不调用真实模型，不推送或部署。

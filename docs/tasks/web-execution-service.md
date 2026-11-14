@@ -1,5 +1,23 @@
 # 单控制器Web执行生命周期服务
 
+## 自有代码与有效阻塞反馈修复（已实现及自测，待独立复验）
+
+基准4df6c8d，新独立树web-owned-repair-service；正式复用独立FIX的F05 920+300（本树de5b227/d84f271）。唯一修改service/panel、两个对应测试及两个task记录，root维护HTTP精确收费allowlist和总API。新增action repair及“保留代码并修复”：当前同project/run/source/spec/plan/profile的服务自有failed记录，必须有当前合法completed model Review blocking；支持failed recheck通过私有snapshot回到原coded source，格式无效Review只能原recheck。HTTP不能提供files、路径、报告、binding、issues或budget。
+
+list只核私有元数据，深准入在任何编码调用前由原inspector重新核真实Git/回执/报告，Finding报告必须在所选私有row根且bytes hash/JSON与SQLite完全匹配；canonical Review validator对原files逐issue核行号/证据及unique blocking open ID。新row固定source/finding服务ID、原core报告ID和哈希、当前contract及问题快照，原报告与代码不改。费用确认绑定当前profile/contract和独立本轮最多3编码/3Review/600秒预算；deadline从row建立包含准入，core只取得remaining，沿既有取消、清理等待及unknown source_history。
+
+core可信initialSource={files,sourceExecutionId,sourceCommit,sourceHash,sourceReportHash,reviewSourceExecutionId?,reviewSourceReportHash?}、previousIssues由服务私有proof导出。core建立新真实Git baseline，再让模型在原files和blocking反馈上修改；新commit/sourceHash都必须不同，当前完整检查及逐个旧issue resolution通过才可accepted。旧失败和旧用量保留，新row只计本轮。修复为普通web_execution/repairSource，当前候选用原Git gate复核，旧源的known blocking继续阻止旧commit发布，不阻止新代码。core固定且独立FIX前不调用真实API；本树仅明确trusteddeps fixtures与真实平台Edge界面测试，不能冒称业务修复已验收。
+
+正式依赖core f6684e3（本树45fb2d0）已由不同作者独立FIX；服务通过可信startExecution初始seed能力连接，不增加客户端能力注入。自有失败原编码记录可直接repair，失败recheck通过私有sourceServiceExecutionId回原编码；同当前binding/profile/current contract、完整Review身份/策略/清单绑定及合法blocking才有light许可，深准入还重验Review原issues/resolutions及旧问题ID集合、原源码行和证据、两个报告JSON与私有record及字节hash。每个编码/Review前的assertCurrent、完成发布与已验收预览/下载都重核私有proof，未知停止保留source_history中的source/finding根、报告、PID/control/probe/result；迟到成功不能覆盖取消/新来源/协调。费用预算覆盖深准入、core以及发布核对，最终以新候选sourceHash/commit和carried issue闭合及既有完整gate为准。
+
+DTO仅增加actions.canRepair、repairBudget、repairContractRevision及修复记录的operation、原编码/意见服务UUID和原commit；kind仍web_execution，原始报告hash、files、receipt和路径均不透传。F05批次撤权包含canRepair。收费repair和retry/recheck同样必须显式回传当前profileId/contractRevision；无字段、旧contract、额外client provenance/预算均拒绝。模型调用及旧用量不合并，普通retry仍为全新生成；无有效blocking的格式失败不显示repair。
+
+只读核对指定真实原候选与新的failed recheck：原编码和意见报告均与SQLite私有record一致，policy当前，4个允许源码文件及1个blocking通过canonical逐字行号核对，source lineage一致。前后两份报告SHA/size/mtime全同，无原件写入、无API/MXC。该只读准入不代替新修复候选的业务验收。
+
+本轮最终自测：显式`TASKFLOW_TEST_REAL_SANDBOX=1`及已验证执行程序，服务专项**73/73通过、0失败/跳过**（40449.9496ms），其中原薄负例仍使用真实executor/Git/MXC及fixture模型传输，实际失败自检、关闭交付、未知用量保留；新增repair正向/预览/下载为明确可信注入与fabricated receipts，不能称为真实业务修复验收。新增10项分组回归包含原coded/selected recheck lineage、种子反馈/独立用量、重复请求原子槽、私有report/path/binding/policy/issue与当前contract拒绝、新hash/commit及逐项resolution、旧blocking不洗掉、失败及迟到cancel/current、共享deadline、未知停止与有界drain、source_history隐私、发布/下载期间原报告改动、F05批次repair撤权。
+
+真实系统Edge平台UI fixture**23/23通过**（22场景及父项，15208.3013ms），桌面/390×844、费用与预算/双确认/当前scope、失败保留、源范围说明、crossrun token及文本安全回归通过，两种新增截图已实际查看；`npm run check`为87脚本、`git diff --check`通过。最后只更新两任务记录，不再修改被测脚本。完整Review结构、gate/Review所有绑定字段和当前policy另对指定真实旧报告只读验证成功，hash/size/mtime仍同。未执行真实正向repair模型调用、未改原QA/用户data、server或公共API入口；固定后由不同作者复验再由root串行接HTTP和实际修复，无推送/部署。
+
 ## F05执行侧项目检查点（已实现及自测，待独立复验）
 
 基准27072ea，独立tree/branch execution-project-checkpoint，唯一修改本记录、lib/web-execution-service.mjs和tests/web-execution-service.test.mjs。新增可信内部`withProjectCheckpoint(projectId, async work)`，返回callback结果并透传原异常；HTTP不暴露函数或此动作。获取时同步设置同项目barrier，查询该项目所有run的SQLite活动/待协调/非none预览以及同步登记的start/action/download在途请求，忙则409、不等待、不强停；finally释放。barrier内同项目新start/retry/recheck/preview/download拒绝，不同项目独立；cancel/stop仍走原真实停止流程，其在途请求也阻止获取检查点。关闭拒绝新检查点，等待已进入callback结束。
