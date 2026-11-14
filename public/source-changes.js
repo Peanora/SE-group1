@@ -18,8 +18,8 @@ const STYLE = `
 export function createSourceChanges({ api, getContext, onApplied = () => {}, onError = () => {} }) {
   if (typeof api !== 'function' || typeof getContext !== 'function') throw new TypeError('需求变更面板需要api和项目上下文。');
   let root, refs, mounted = false, destroyed = false, timer, projectId = '', epoch = 0, readId = 0;
-  let data = null, draft = emptyDraft(), action = null, error = '', notice = '', loading = false, edits = 0, detailSignature = '';
-  const drafts = new Map();
+  let data = null, dataRead = 0, draft = emptyDraft(), action = null, error = '', notice = '', loading = false, edits = 0, detailSignature = '';
+  const drafts = new Map(), applications = new Map();
   function emptyDraft() { return { baseRevision: null, baseGeneration: null, filename: '', content: '', reason: '', kind: 'other', requestKey: null, requestBody: null, uncertain: false, selectedId: '' }; }
   function node(tag, text, className) { const el = document.createElement(tag); if (text != null) el.textContent = text; if (className) el.className = className; return el; }
   function button(text, handler, primary = false) { const el = node('button', text, primary ? 'sc-primary' : ''); el.type = 'button'; el.addEventListener('click', handler); return el; }
@@ -57,7 +57,7 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
   }
   function syncContext() {
     const next = contextId(); if (next === projectId) return false;
-    persist(); projectId = next; epoch++; readId++; action = null; data = null; loading = false; error = ''; notice = ''; detailSignature = ''; edits++;
+    persist(); projectId = next; epoch++; readId++; action = null; data = null; dataRead = 0; applications.clear(); loading = false; error = ''; notice = ''; detailSignature = ''; edits++;
     draft = next ? restore(next) : emptyDraft(); fillForm(); return true;
   }
   function fillForm() { if (!refs) return; for (const key of ['filename', 'content', 'reason', 'kind']) refs[key].value = draft[key]; refs.file.value = ''; }
@@ -105,6 +105,20 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
       node('p', proposal?.impact?.requiresMigrationReview === true ? '需要单独审阅数据迁移；此操作不会执行迁移。' : '数据迁移尚未执行；持久化影响可能未知，后续仍需审阅。'));
   }
   function canApply() { const item = selected(); return !action && !stale() && data?.capabilities?.canApply === true && item?.status === 'pending' && item.baseRevision === current().revision && item.generation === current().generation; }
+  async function confirmApplications() {
+    for (const intent of applications.values()) {
+      if (!isCurrent(intent) || intent.notified || dataRead <= intent.readFloor || !validCurrent(current())) continue;
+      const confirmed = changes().find(change => change.id === intent.id);
+      if (confirmed?.status !== 'applied' || confirmed.projectId !== intent.projectId || confirmed.baseRevision !== intent.baseRevision || confirmed.generation !== intent.generation
+        || confirmed.sourceRevision !== intent.sourceRevision || confirmed.sourceRevision !== current().revision || confirmed.appliedGeneration !== intent.generation + 1 || confirmed.appliedGeneration !== current().generation) continue;
+      // Consume the notification before any callback await, including overlapping refreshes.
+      intent.notified = true;
+      if (action?.application === intent) action = null;
+      if (error === intent.lastError) error = '';
+      notice = '后端已确认新输入版本。旧运行只读；请重新生成并确认规格和计划。代码与数据库迁移尚未执行。'; render();
+      try { await onApplied(confirmed); } catch { if (isCurrent(intent)) report(new Error('需求已应用，项目列表刷新未完成，请刷新页面核对。')); }
+    }
+  }
   function render() {
     if (!refs || destroyed) return;
     refs.body.hidden = !projectId; refs.status.textContent = !projectId ? '请先选择项目，再查看或提出需求变更。' : loading && !data ? '正在读取需求输入版本…' : data ? (data.capabilities?.reason || '待应用请求仅在安全检查点发布。') : '尚未取得当前输入版本，请刷新核对。';
@@ -129,9 +143,9 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
       const response = await api(basePath(), { cache: 'no-store' });
       if (!isCurrent(token) || token.read !== readId) return false;
       if (!response || typeof response !== 'object' || !Array.isArray(response.changes)) throw new Error('变更状态格式不完整，请刷新核对。');
-      data = response;
+      data = response; dataRead = token.read;
       if (!draft.baseRevision && validCurrent(current())) { draft.baseRevision = current().revision; draft.baseGeneration = current().generation; draft.filename = current().source.filename; draft.content = current().source.content; fillForm(); }
-      persist(); render(); return true;
+      persist(); render(); await confirmApplications(); return true;
     } catch (failure) { if (isCurrent(token) && token.read === readId) { if (data) data = { ...data, capabilities: null }; report(failure); render(); } return false; }
     finally { if (isCurrent(token) && token.read === readId) { loading = false; render(); schedule(); } else if (!destroyed && syncContext()) { render(); void refresh(); } }
   }
@@ -161,17 +175,17 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
         if (draft.requestKey === requestKey) draft.uncertain = false; draft.selectedId = response.change.id; persist();
         notice = '请求已保存；当前输入未因保存而改变。请核对差异与后端状态。'; await refresh();
       } else {
-        const response = await api(`${basePath()}/${encodeURIComponent(item.id)}/apply`, { method: 'POST', body: JSON.stringify({ baseRevision: item.baseRevision, generation: item.generation }) }); if (!isCurrent(token)) return;
-        const refreshed = await refresh(); if (!isCurrent(token)) return;
-        const confirmed = changes().find(change => change.id === item.id);
-        if (response?.change?.status !== 'applied' || !refreshed || confirmed?.status !== 'applied' || !validCurrent(current()) || confirmed.sourceRevision !== current().revision || confirmed.appliedGeneration !== current().generation) throw new Error('应用结果尚未由后端当前版本确认，请刷新核对。请求不会自动重放。');
-        notice = '后端已确认新输入版本。旧运行只读；请重新生成并确认规格和计划。代码与数据库迁移尚未执行。';
-        try { await onApplied(confirmed); } catch { if (isCurrent(token)) report(new Error('需求已应用，项目列表刷新未完成，请刷新页面核对。')); }
+        const key = JSON.stringify([item.id, item.baseRevision, item.generation, item.sourceRevision]);
+        if (!applications.has(key)) applications.set(key, { projectId, epoch, id: item.id, baseRevision: item.baseRevision, generation: item.generation, sourceRevision: item.sourceRevision, readFloor: readId, notified: false });
+        token.application = applications.get(key);
+        await api(`${basePath()}/${encodeURIComponent(item.id)}/apply`, { method: 'POST', body: JSON.stringify({ baseRevision: item.baseRevision, generation: item.generation }) }); if (!isCurrent(token)) return;
+        await refresh(); if (!isCurrent(token)) return;
+        if (!token.application.notified) throw new Error('应用结果尚未由后端当前版本确认，请刷新核对。请求不会自动重放。');
       }
     } catch (failure) {
-      if (isCurrent(token)) { if (attemptedSave && draft.requestKey === submittedKey) { draft.uncertain = !Number.isInteger(failure?.status) || failure.status >= 500; persist(); } report(failure); if (kind === 'apply') notice = '应用未获确认。草稿已保留，可刷新后在安全检查点核对。'; }
+      if (isCurrent(token)) { if (kind === 'apply' && token.application?.notified) return; if (attemptedSave && draft.requestKey === submittedKey) { draft.uncertain = !Number.isInteger(failure?.status) || failure.status >= 500; persist(); } report(failure); if (kind === 'apply') { if (token.application) token.application.lastError = error; notice = '应用未获确认。草稿已保留，可刷新后在安全检查点核对。'; } }
     } finally { if (isCurrent(token) && action === token) { action = null; render(); schedule(); } else if (!destroyed && syncContext()) { render(); void refresh(); } }
   }
   return Object.freeze({ mount(element) { if (mounted || destroyed || !element?.append) throw new Error('需求变更面板只能挂载一次。'); mounted = true; build(element); syncContext(); fillForm(); render(); return refresh(); }, refresh,
-    destroy() { persist(); destroyed = true; mounted = false; epoch++; readId++; action = null; clearTimeout(timer); root?.remove(); refs = null; } });
+    destroy() { persist(); destroyed = true; mounted = false; epoch++; readId++; action = null; applications.clear(); clearTimeout(timer); root?.remove(); refs = null; } });
 }

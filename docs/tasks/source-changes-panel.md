@@ -15,3 +15,13 @@
 实际检查：锁定依赖通过`npm ci --ignore-scripts --offline --no-audit --no-fund`在新工作树本地安装，没有改变package/lock。最终`node --test tests/source-changes-panel.test.mjs`为**13/13通过，0失败/取消/跳过**（11557.0323ms），真实系统Edge、同源静态测试页和可信mock API。覆盖字段精确body、XSS原文、400/409/503与幂等/结果不明、applied双重确认、stale/capabilities/legacy、1440和390宽焦点选区/轮询/details/session重载、TXT/DOCX parse传输与失败/过大文件/解析期间编辑、跨项目和ABA旧POST/旧finally、乱序GET/销毁、applied/interrupted/unknown历史与晚应用通知。测试全部读取合成数据，不提供业务完成结论。两个新增JS文件的node --check及暂存diff --check通过；截图390/1440已生成并检查窄屏无横向溢出。日志和截图留在被忽略的output/verification/source-changes-panel/。
 
 未执行：真实需求/密钥/付费模型、实际DOCX后端解析（本轮测既定parse接口传输）、真实source-change存储/HTTP与app组合、全仓测试、目标业务迁移。未修改server/app/index/styles/API，也未接入产品；后续由根集成与非作者固定版本Review/真实HTTP浏览器验收。未推送或部署。
+
+## 4e2独立P2后的确认通知修订（自检完成，待新固定版独立复验）
+
+原4e2的13项通过未覆盖这一交错：apply后确认GET①挂起，手动GET②先返回applied/current一致，再释放①；①的readId已旧而返回false，perform将其误当没有确认，父onApplied永久未通知。原独立证据保持不变。另补POST503结果不明、后续GET已证实applied却未通知的恢复缺口。
+
+修订只在当前project/epoch记录真正发起的apply意图（changeId、baseRevision、baseGeneration、sourceRevision与GET序号起点）；不从任意历史applied创建通知。每个最新成功GET统一对照同项目/同change/base/gen、目标revision、appliedGeneration=base+1及当前revision/generation，任何字段不匹配都不通知。POST响应不是应用事实的来源；即使POST503，后续手动/轮询GET完整确认也可通知。特定GET被较新GET取代不再被当作负面事实。通知在任何await前同步去重并释放该意图的旧apply锁，旧GET/finally不能清除之后的新操作；父回调失败只提示刷新，保留applied事实且不重复通知。切项目、ABA或destroy清除该epoch意图，重载后的历史不自动通知；父级首次载入仍应自行读取当前项目。
+
+新增三组真实Edge回归，先将其中两组放在4e2源码运行，明确0/2失败复现（4e2-regression-red.log）；修订后完整16/16通过、0失败/取消/跳过（12465.3895ms，confirmation-fixed-tests.log）。新增覆盖两次确认GET乱序、确认后新save仍受独立action锁、503后有效GET恢复、8类身份/版本不匹配拒绝、通知去重、父async回调拒绝以及ABA历史不通知。原13项输入/focus/窄屏/错误/幂等/import全部保留。
+
+还将原独立probes.mjs复制到本树ignored output/verification/source-changes-panel/confirmation-probe/，只调整新预期和独立输出位置，0源报告改写：post-503和overlapping-get两种均onApplied=1，重叠场景无错误；两种UI均不再声称应用未确认，原503错误历史仍保留。两个新增脚本node --check及diff --check通过。此为作者自检与原探针复跑，仍需非作者对新提交复验；未改server/app或真实需求，0API/paid/spawn。

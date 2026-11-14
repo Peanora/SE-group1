@@ -26,6 +26,8 @@ const api=(url,options={})=>{
    if(window.mode.applyMode==='pending')return {change:structuredClone(change)};
    const result={...change,status:'applied',appliedGeneration:state.current.generation+1};
    if(window.mode.applyMode!=='responseOnly'){Object.assign(change,result);state.current={revision:change.sourceRevision,generation:result.appliedGeneration,source:change.source};state.versions.push(structuredClone(state.current));}
+   if(window.mode.applyThenFail)throw Object.assign(new Error('应用已发送，结果不确定'),{status:503});
+   if(window.mode.holdConfirmation)window.holds['GET:'+pid]=1;
    return {change:result};
   }
   if(window.mode.postStatus)throw Object.assign(new Error('保存失败，草稿已保留'),{status:window.mode.postStatus});
@@ -37,7 +39,7 @@ const api=(url,options={})=>{
  const key=method+':'+pid;if(window.holds[key]){window.holds[key]--;return new Promise((resolve,reject)=>window.pending.push({url,method,body,execute,resolve,reject}));}
  return execute();
 };
-window.panel=createSourceChanges({api,getContext:()=>window.ctx,onApplied:x=>window.applied.push(structuredClone(x)),onError:e=>window.errors.push(e.message)});
+window.panel=createSourceChanges({api,getContext:()=>window.ctx,onApplied:x=>{window.applied.push(structuredClone(x));if(window.mode.callbackFails)return Promise.reject(new Error('parent refresh failed'));},onError:e=>window.errors.push(e.message)});
 await window.panel.mount(document.querySelector('#panel'));window.ready=true;
 </script></body></html>`;
 let browser, server, address;
@@ -208,4 +210,42 @@ test('an applied response from an abandoned project cannot notify or change the 
   await page.evaluate(async () => { window.ctx.projectId = 'b'; await window.panel.refresh(); }); await edit(page, 'keep B input');
   await page.evaluate(() => window.release(0)); assert.equal(await body(page).inputValue(), 'keep B input'); assert.equal(await page.evaluate(() => window.applied.length), 0); assert.equal(await page.evaluate(() => window.states.b.current.revision), a);
   assert.equal(await save(page).isEnabled(), true); assert.equal(await page.getByRole('alert').isVisible(), false);
+  await page.evaluate(async () => { window.ctx.projectId = 'a'; await window.panel.refresh(); }); assert.equal(await page.evaluate(() => window.applied.length), 0, 'an abandoned epoch cannot later notify from historical applied data');
+});
+
+test('a newer confirmation GET can notify once while the apply-owned GET is pending, without a late false error', async t => {
+  const page = await pageFor(t); await edit(page); await save(page).click(); await saved(page);
+  await page.evaluate(() => { window.mode.holdConfirmation = true; }); await apply(page).click(); await page.waitForFunction(() => window.pending.length === 1);
+  await refresh(page); assert.equal(await page.evaluate(() => window.applied.length), 1);
+  assert.match(await page.locator('.source-changes').innerText(), /后端已确认新输入版本/);
+  await page.getByRole('button', { name: '基于当前版本重新编辑' }).click(); await edit(page, 'a subsequent draft'); await page.evaluate(() => { window.holds['POST:a'] = 1; }); await save(page).click(); await page.waitForFunction(() => window.pending.length === 2);
+  await page.evaluate(() => window.release(0)); assert.equal(await page.getByRole('button', { name: '正在保存，等待后端确认…' }).isDisabled(), true); assert.equal(await body(page).inputValue(), 'a subsequent draft');
+  assert.equal(await page.getByRole('alert').isVisible(), false); assert.deepEqual(await page.evaluate(() => window.errors), []);
+  await page.evaluate(() => window.release(1)); await page.waitForFunction(() => document.querySelector('button.sc-primary').textContent === '保存为待应用变更');
+  await refresh(page); assert.equal(await page.evaluate(() => window.applied.length), 1);
+});
+
+test('an unknown apply POST can recover from matching GET evidence only, with exact binding and one notification', async t => {
+  const page = await pageFor(t); await edit(page); await save(page).click(); await saved(page);
+  await page.evaluate(() => { window.mode.applyThenFail = true; }); await apply(page).click(); await page.getByRole('alert').waitFor({ state: 'visible' });
+  assert.equal(await page.evaluate(() => window.applied.length), 0);
+  for (const mismatch of ['projectId', 'id', 'baseRevision', 'generation', 'sourceRevision', 'appliedGeneration', 'currentRevision', 'currentGeneration']) {
+    await page.evaluate(mismatch => {
+      const state=window.states.a;window.restoreState=structuredClone(state);
+      if(mismatch==='currentRevision')state.current.revision='c'.repeat(64);
+      else if(mismatch==='currentGeneration')state.current.generation=9;
+      else state.changes[0][mismatch]=({projectId:'b',id:'other-change',baseRevision:'c'.repeat(64),generation:8,sourceRevision:'c'.repeat(64),appliedGeneration:9})[mismatch];
+    }, mismatch);
+    await refresh(page); assert.equal(await page.evaluate(() => window.applied.length), 0, mismatch);
+    await page.evaluate(() => { window.states.a = window.restoreState; });
+  }
+  await refresh(page); assert.equal(await page.evaluate(() => window.applied.length), 1); assert.equal(await page.getByRole('alert').isVisible(), false);
+  await refresh(page); assert.equal(await page.evaluate(() => window.applied.length), 1); assert.equal(await page.evaluate(() => window.requests.filter(x=>x.url.endsWith('/apply')).length), 1);
+});
+
+test('a parent callback failure preserves confirmed application and is not notified again on refresh', async t => {
+  const page = await pageFor(t); await edit(page); await save(page).click(); await saved(page);
+  await page.evaluate(() => { window.mode.callbackFails = true; }); await apply(page).click(); await page.waitForFunction(() => window.applied.length === 1); await page.getByRole('alert').waitFor({ state: 'visible' });
+  assert.match(await page.getByRole('alert').innerText(), /需求已应用/); assert.equal(await page.evaluate(() => window.states.a.changes[0].status), 'applied');
+  await refresh(page); assert.equal(await page.evaluate(() => window.applied.length), 1); assert.equal(await apply(page).isDisabled(), true);
 });
