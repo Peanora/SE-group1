@@ -21,7 +21,7 @@ async function fixture(t, options = {}) {
   } : undefined;
   const app = await createApp({ dataDir: directory, stepDelayMs: 0, ...appOptions, ...(forwarding ? { sourceChangeService: forwarding } : {}) });
   if (forwarding) service = await createSourceChangeService({ rootDir: path.join(directory, 'source-changes'), store: app.store,
-    withCheckpoint: (projectId, work) => app.orchestrator.withProjectCheckpoint(projectId, () => app.executionService.withProjectCheckpoint(projectId, work)) });
+    withCheckpoint: (projectId, work) => app.orchestrator.withProjectCheckpoint(projectId, () => app.executionService.withProjectCheckpoint(projectId, () => app.verificationPlanningService.withProjectCheckpoint(projectId, work))) });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await app.close(); assert.equal(path.dirname(directory), path.resolve(os.tmpdir())); assert.ok(path.basename(directory).startsWith('source-change-http-')); await rm(directory, { recursive: true, force: true }); });
   const url = `http://127.0.0.1:${app.server.address().port}`;
@@ -77,6 +77,10 @@ test('active planning and an execution checkpoint retain pending changes until b
     const checkpoint = app.executionService.withProjectCheckpoint(project.id, async () => { executing.resolve(); await finish.promise; });
     try { await executing.promise; assert.equal((await request(`/${change.id}/apply`, body)).status, 409); assert.equal(project.sourceGeneration, undefined); }
     finally { finish.resolve(); await checkpoint; }
+    const proposalEntered = deferred(), proposalFinish = deferred();
+    const proposalCheckpoint = app.verificationPlanningService.withProjectCheckpoint(project.id, async () => { proposalEntered.resolve(); await proposalFinish.promise; });
+    try { await proposalEntered.promise; assert.equal((await request(`/${change.id}/apply`, body)).status, 409); assert.equal(project.sourceGeneration, undefined); }
+    finally { proposalFinish.resolve(); await proposalCheckpoint; }
     assert.equal((await request(`/${change.id}/apply`, body)).status, 200);
     assert.equal(project.sourceGeneration, 1); assert.equal(run.sourceSuperseded, true);
   } finally { release.resolve(); app.store.save = save; }
@@ -97,7 +101,7 @@ test('parse is read-only, precise fields reject client capabilities and source A
   const cross = await fetch(url + route, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://attacker.example' }, body: JSON.stringify(base) });
   assert.equal(cross.status, 403);
   assert.equal((await request()).body.changes.length, 0);
-  assert.ok((await readdir(directory)).every(name => name === `${project.id}.json` || ['executions', 'source-changes'].includes(name)));
+  assert.ok((await readdir(directory)).every(name => name === `${project.id}.json` || ['executions', 'source-changes', 'verification-planning'].includes(name)));
 });
 
 test('HTTP list reads the latest source when publication completes while its change list is awaiting', async t => {

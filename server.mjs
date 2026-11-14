@@ -83,16 +83,20 @@ export async function createApp(options = {}) {
   });
   try { await orchestrator.init(); }
   catch (cause) { try { await executionService?.shutdown(); } catch { cause.executionCleanupFailed = true; } throw cause; }
-  let sourceChangeService;
+  let sourceChangeService, verificationPlanningService;
   try {
+    verificationPlanningService = options.verificationPlanningService === null ? null : options.verificationPlanningService ?? await (await import('./lib/verification-planning-service.mjs')).createVerificationPlanningService({
+      rootDir: path.resolve(options.verificationPlanningRootDir ?? path.join(store.directory, 'verification-planning')),
+      getPlanning: async (projectId, runId) => store.getPersistedRun(projectId, runId),
+    });
     sourceChangeService = options.sourceChangeService === null ? null : options.sourceChangeService ?? await (await import('./lib/source-change-service.mjs')).createSourceChangeService({
       rootDir: path.resolve(options.sourceChangeRootDir ?? path.join(store.directory, 'source-changes')), store,
       withCheckpoint: (projectId, work) => orchestrator.withProjectCheckpoint(projectId, () => {
-        if (typeof executionService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '当前执行服务无法确认项目安全检查点，变更仍可保存为待应用。');
-        return executionService.withProjectCheckpoint(projectId, work);
+        if (typeof executionService?.withProjectCheckpoint !== 'function' || typeof verificationPlanningService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '执行或测试提案服务无法确认项目安全检查点，变更仍可保存为待应用。');
+        return executionService.withProjectCheckpoint(projectId, () => verificationPlanningService.withProjectCheckpoint(projectId, work));
       }),
     });
-  } catch (cause) { await Promise.allSettled([orchestrator.shutdown(), executionService?.shutdown()]); throw cause; }
+  } catch (cause) { await Promise.allSettled([orchestrator.shutdown(), executionService?.shutdown(), verificationPlanningService?.shutdown()]); throw cause; }
   let closing;
   const publicDir = path.resolve(options.publicDir ?? path.join(ROOT, 'public'));
   const server = http.createServer(async (request, response) => {
@@ -135,8 +139,8 @@ export async function createApp(options = {}) {
             const changes = await sourceChangeService.list({ projectId });
             const current = store.getSourceVersion(projectId), project = store.getPersistedProject(projectId);
             return respond(response, 200, { current, versions: project.sourceVersions ?? [{ ...current, at: project.createdAt, changeId: null }],
-              changes, capabilities: { canApply: typeof executionService?.withProjectCheckpoint === 'function',
-                ...(typeof executionService?.withProjectCheckpoint === 'function' ? {} : { reason: '当前执行服务无法确认安全检查点，暂时只允许保存待应用变更。' }) } });
+              changes, capabilities: { canApply: typeof executionService?.withProjectCheckpoint === 'function' && typeof verificationPlanningService?.withProjectCheckpoint === 'function',
+                ...(typeof executionService?.withProjectCheckpoint === 'function' && typeof verificationPlanningService?.withProjectCheckpoint === 'function' ? {} : { reason: '执行或测试提案服务无法确认安全检查点，暂时只允许保存待应用变更。' }) } });
           }
           if (segments.length === 4 && method === 'POST') {
             const body = dataFields(await readJson(request), ['baseRevision', 'source', 'reason', 'kind', 'requestKey']);
@@ -157,6 +161,22 @@ export async function createApp(options = {}) {
         const runId = segments[4];
         const { project, run } = store.getRun(projectId, runId);
         if (segments.length === 5 && method === 'GET') return respond(response, 200, { run });
+        if (segments[5] === 'verification-plans') {
+          requireLocalExecutionRequest(request, server);
+          if (!verificationPlanningService) throw new HttpError(404, '当前服务尚未开放独立测试提案。');
+          const identity = { projectId, runId };
+          if (segments.length === 6 && method === 'GET') return respond(response, 200, await verificationPlanningService.list(identity));
+          if (segments.length === 7 && segments[6] === 'propose' && method === 'POST') {
+            const body = exactFields(await readJson(request), ['contractRevision']);
+            return respond(response, 202, await verificationPlanningService.propose({ ...identity, ...body }));
+          }
+          if (segments.length === 8 && ['revise', 'approve', 'reject', 'cancel'].includes(segments[7]) && method === 'POST') {
+            const action = segments[7], allowed = action === 'cancel' ? [] : action === 'revise' ? ['revision', 'proposal', 'feedback'] : ['revision', 'feedback'];
+            const body = dataFields(await readJson(request), allowed);
+            return respond(response, 200, await verificationPlanningService[action]({ ...identity, proposalId: segments[6], ...body }));
+          }
+          throw new HttpError(['GET', 'POST'].includes(method) ? 404 : 405, '未找到该测试提案接口或请求方法不受支持。');
+        }
         if (segments[5] === 'executions') {
           requireLocalExecutionRequest(request, server);
           if (!executionService) throw new HttpError(404, '当前服务尚未开放网页代码执行。');
@@ -224,14 +244,14 @@ export async function createApp(options = {}) {
   server.headersTimeout = 15_000;
   const close = () => {
     if (!closing) closing = (async () => {
-      const results = await Promise.allSettled([orchestrator.shutdown(), executionService?.shutdown(), sourceChangeService?.shutdown()]);
+      const results = await Promise.allSettled([orchestrator.shutdown(), executionService?.shutdown(), sourceChangeService?.shutdown(), verificationPlanningService?.shutdown()]);
       if (server.listening) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       const failure = results.find(result => result.status === 'rejected');
       if (failure) throw failure.reason;
     })();
     return closing;
   };
-  return { server, store, orchestrator, executionService, sourceChangeService, close };
+  return { server, store, orchestrator, executionService, sourceChangeService, verificationPlanningService, close };
 }
 
 export async function startServer(options = {}) {
