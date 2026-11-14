@@ -98,7 +98,9 @@ export async function createApp(options = {}) {
         }
         if (method === 'GET' && segments.length === 2 && segments[1] === 'health') {
           const config = planner.getModelConfig();
-          return respond(response, 200, { ok: true, model: { configured: config.configured, model: config.model ?? '' }, supportedFormats: ['.md', '.txt', '.docx'] });
+          return respond(response, 200, { ok: true, model: { configured: config.configured, model: config.model ?? '' },
+            modelPlanning: { engineeringMaxCalls: orchestrator.engineeringMaxCalls, engineeringTimeoutMs: orchestrator.engineeringTimeoutMs },
+            supportedFormats: ['.md', '.txt', '.docx'] });
         }
         if (segments[1] !== 'projects') throw new HttpError(404, '未找到该接口。');
         if (segments.length === 2) {
@@ -128,9 +130,10 @@ export async function createApp(options = {}) {
           }
           if (segments.length === 8 && segments[7] === 'action') {
             if (method !== 'POST') throw new HttpError(405, '执行动作请使用POST请求。');
-            const body = exactFields(await readJson(request), ['action']);
+            const input = await readJson(request);
+            const body = exactFields(input, ['retry', 'recheck'].includes(input?.action) ? ['action', 'profileId', 'contractRevision'] : ['action']);
             if (!['cancel', 'retry', 'recheck', 'preview', 'stop_preview'].includes(body.action)) throw new HttpError(400, '执行动作无效，请刷新后使用页面提供的操作。');
-            return respond(response, 200, await executionService.action({ ...identity, executionId: segments[6], action: body.action }));
+            return respond(response, 200, await executionService.action({ ...identity, executionId: segments[6], ...body }));
           }
           if (segments.length === 8 && segments[7] === 'download') {
             if (method !== 'GET') throw new HttpError(405, '源码下载仅支持读取。');

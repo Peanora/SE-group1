@@ -154,6 +154,13 @@ function renderHeader() {
 }
 function renderControls() {
   const run = state.run;
+  const modelNotice = $('#planning-model-notice'), modelBudget = state.health?.modelPlanning;
+  modelNotice.hidden = run?.mode !== 'model' && $('#mode-select').value !== 'model';
+  const knownBudget = Number.isSafeInteger(modelBudget?.engineeringMaxCalls) && modelBudget.engineeringMaxCalls > 0
+    && Number.isSafeInteger(modelBudget?.engineeringTimeoutMs) && modelBudget.engineeringTimeoutMs > 0;
+  modelNotice.textContent = `${run?.mode === 'model' && run.workflowVersion !== 2 ? '当前显示旧版运行，按原流程仅整理规格。' : ''}新版模型运行会发送需求以整理规格；确认规格后，还会请求工程设计并产生用量。${knownBudget ? `每次运行工程设计最多尝试 ${modelBudget.engineeringMaxCalls} 次，单次最多 ${modelBudget.engineeringTimeoutMs / 1000} 秒。` : '工程设计预算尚未获取，请刷新核对。'}架构与任务共用一次设计请求，结果仍需你审阅。`;
+  const design = run?.engineeringHistory?.at(-1);
+  if (design) modelNotice.textContent += ` 最近设计：${({ running: '处理中', succeeded: '草案已生成', failed: '失败', interrupted: '已中断' })[design.status] || '状态未知'}；输入 ${Number.isSafeInteger(design.usage?.inputTokens) ? design.usage.inputTokens : '未知'}、输出 ${Number.isSafeInteger(design.usage?.outputTokens) ? design.usage.outputTokens : '未知'} token。`;
   const active = ACTIVE.has(run?.status);
   const changing = state.busy || state.selectionPending;
   $('#start-run').disabled = !state.project || changing || active;
@@ -231,7 +238,9 @@ function renderTasks() {
   })).join('');
   const nodes = tasks.map((task) => { const pos = layout.positions.get(task.id); return `<button class="dev-task ${task.id === state.taskId ? 'selected' : ''}" style="left:${pos.x}px;top:${pos.y}px" data-task="${escape(task.id)}" data-focus-key="task-${escape(task.id)}" aria-pressed="${task.id === state.taskId}"><span class="dev-task-top"><span>${escape(task.id)}</span><span>${escape(task.category || '开发')}</span></span><span class="dev-task-title">${escape(task.title)}</span></button>`; }).join('');
   const sources = (selected.requirementIds || []).map((id) => state.run.spec?.requirements?.find((requirement) => requirement.id === id)).filter(Boolean);
-  return `<div class="task-workspace"><div class="task-graph-zone"><div class="task-caption">开发任务依赖图 / ${tasks.length} 个任务待开发 / 点击查看验收与来源</div><div class="task-graph-scroll"><div class="task-graph" style="width:${layout.width}px;height:${layout.height}px"><svg class="task-edges" width="${layout.width}" height="${layout.height}" aria-hidden="true"><defs><marker id="task-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#bfccdf"/></marker></defs>${paths}</svg>${nodes}</div></div></div><aside class="task-detail"><p class="task-detail-id">${escape(selected.id)} / ${escape(selected.category || '开发任务')}</p><h3>${escape(selected.title)}</h3><p>${escape(selected.description)}</p><h4>前置任务</h4><div>${selected.dependsOn?.length ? selected.dependsOn.map((id) => `<button class="pill" data-task="${escape(id)}">${escape(id)}</button>`).join('') : '<span class="pill">无前置任务</span>'}</div><h4>验收条件</h4><ul>${(selected.acceptance || []).map((item) => `<li>${escape(item)}</li>`).join('')}</ul>${selected.suggestedFiles?.length ? `<h4>建议文件</h4><div>${selected.suggestedFiles.map((file) => `<span class="pill">${escape(file)}</span>`).join('')}</div>` : ''}<h4>需求来源</h4>${sources.length ? sources.map((source) => `<div class="task-source-quote"><strong>${escape(source.id)} ${escape(source.title)}</strong><br>${escape(source.sourceQuote || source.description)}</div>`).join('') : '<p>基础工程或集成验证任务</p>'}</aside></div>`;
+  const boundary = [['计划修改范围', selected.writePaths], ['输入资料', selected.inputs], ['预期产出', selected.outputs]]
+    .filter(([, values]) => Array.isArray(values) && values.length).map(([label, values]) => `<h4>${label}</h4><ul>${values.map(value => `<li>${escape(value)}</li>`).join('')}</ul>`).join('');
+  return `<div class="task-workspace"><div class="task-graph-zone"><div class="task-caption">开发任务依赖图 / ${tasks.length} 个任务待开发 / 点击查看验收与来源</div><div class="task-graph-scroll"><div class="task-graph" style="width:${layout.width}px;height:${layout.height}px"><svg class="task-edges" width="${layout.width}" height="${layout.height}" aria-hidden="true"><defs><marker id="task-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#bfccdf"/></marker></defs>${paths}</svg>${nodes}</div></div></div><aside class="task-detail"><p class="task-detail-id">${escape(selected.id)} / ${escape(selected.category || '开发任务')}</p><h3>${escape(selected.title)}</h3><p>${escape(selected.description)}</p><h4>前置任务</h4><div>${selected.dependsOn?.length ? selected.dependsOn.map((id) => `<button class="pill" data-task="${escape(id)}">${escape(id)}</button>`).join('') : '<span class="pill">无前置任务</span>'}</div><h4>验收条件</h4><ul>${(selected.acceptance || []).map((item) => `<li>${escape(item)}</li>`).join('')}</ul>${selected.suggestedFiles?.length ? `<h4>建议文件</h4><div>${selected.suggestedFiles.map((file) => `<span class="pill">${escape(file)}</span>`).join('')}</div>` : ''}${boundary}<h4>需求来源</h4>${sources.length ? sources.map((source) => `<div class="task-source-quote"><strong>${escape(source.id)} ${escape(source.title)}</strong><br>${escape(source.sourceQuote || source.description)}</div>`).join('') : '<p>基础工程或集成验证任务</p>'}</aside></div>`;
 }
 function inlineMarkdown(text) {
   return escape(text).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -481,5 +490,6 @@ async function initialize() {
     }
   } catch (error) { $('#connection-status').className = 'connection-status disconnected'; $('#connection-status').innerHTML = '<span></span>服务未连接'; showError(new Error(`无法连接本地服务。请确认项目已启动，然后点击右上角刷新。${error.message ? `（${error.message}）` : ''}`)); }
 }
+$('#mode-select').addEventListener('change', renderControls);
 $('#refresh-button').addEventListener('click', initialize);
 initialize();

@@ -1,6 +1,6 @@
 # 本地原型接口约定
 
-本项目为软件开发需求规划工具，单用户本地运行。后端默认监听 127.0.0.1:4317，提供静态前端与 JSON API。无需安装运行依赖，要求 Node.js 22 或以上。
+本项目为需求规划与固定参考Web研发工具，单用户本地运行。后端默认监听127.0.0.1:4317，提供静态前端与JSON API。要求Node.js 22.21或以上，以锁定的playwright-core和系统Edge完成独立浏览器检查。
 
 ## 数据结构
 
@@ -20,7 +20,7 @@ sourceSnapshot为本次运行不可变原文，导出requirements.md也使用该
 
 ## 接口
 
-- GET `/api/health` → `{ok:true, model:{configured:boolean,model:string}, supportedFormats:['.md','.txt','.docx']}`
+- GET `/api/health` → `{ok:true, model:{configured:boolean,model:string}, modelPlanning:{engineeringMaxCalls,engineeringTimeoutMs}, supportedFormats:['.md','.txt','.docx']}`。工程规划预算来自当前编排器，不包含凭据。
 - GET `/api/projects` → `{projects:[{id,name,createdAt,updatedAt,filename,lastRunStatus,runCount}]}`
 - POST `/api/projects`，JSON `{name?,filename,content? ,fileBase64?}` → 201 `{project}`。文本使用 content，DOCX 使用 fileBase64。
 - GET `/api/projects/:pid` → `{project}`
@@ -46,6 +46,12 @@ sourceSnapshot为本次运行不可变原文，导出requirements.md也使用该
 approvals为`{spec:null|{revision,at,feedback},plan:null|{revision,specRevision,at,feedback}}`。specQuestions为`[{id,question,answer,blocking:true}]`；decisions记录`{action,revision,specRevision,at,feedback,newRevision?}`。revisionHistory.spec/plan为已替换版本`{version,revision,specRevision,at,spec,specQuestions,tasks,artifacts,stages,review,approvals}`。确认和修订不会把文档完成升级为代码完成。
 
 仍未答复的既有blocking问题不能通过删掉或替换questions解除，必须先答复并保存处理依据。页面计划审阅可返回规格编辑；保存新规格后旧确认失效，重新经过规格确认和规划。尚未保存的草稿不是已批准规格。
+
+### 新版模型工程规划
+
+新版model运行在规格确认后，由architecture/tasks共享一次工程模型请求，生成经校验的实体、角色/接口、页面选择器和任务。DevTask增加writePaths/inputs/outputs，suggestedFiles与writePaths保持一致；计划版本另外绑定完整engineeringPlan，人工改任务同步更新草案/hash及架构。原接口、实体、页面及全图可写文件集合不能通过任务编辑改变；规格回修后重新规划。local/v1仍使用旧规则，无engineeringPlan时旧计划hash公式保持不变。
+
+每运行默认最多3次工程适配器尝试，单次60秒；失败不静默回退规则。engineeringCalls记录尝试预留，不等于已证实收费请求数。engineeringHistory只公开版本、状态、模型/用量、结束枚举及回执摘要；原四字段回执仅保存在data/.private，不能进入导出包。用量未知为null；回执IO超时/取消后未确认标unconfirmed，迟到结果不能发布。最终保存失败撤回草案及成功状态，公开固定persistence_failed，不传播底层路径/异常。工程草案仍为structural_only、待开发且须计划确认，不授予执行权限。
 
 ## 内部规划函数
 
@@ -102,7 +108,7 @@ approvals为`{spec:null|{revision,at,feedback},plan:null|{revision,specRevision,
 - 允许最多60个、单文件128KiB、合计2MiB的文本源码文件，仅开放`src/public/migrations/tests/docs`及根README。package、lock、server、runtime和平台入口由控制器保护。模型不提交Shell命令、环境或验收结论。应用仅导出受保护worker约定的`createApp/handle`；候选仅在MXC内运行，不在宿主导入。
 - 新候选先完成18项HTTP/SQLite自检，再并行运行全新独立HTTP/SQLite、21项Edge和Review。每次修复形成新Git提交并重检。`isWebTaskAccepted`统一检查当前身份、完整清单、数据库观察、正常进程停止和Review阻塞；fixture/diagnostic不能通过真实验收。
 - 编码和Review适配器支持私有`onReceipt({model,finishReason,usage,content})`。回执在结构检查前保存并有大小限制；异常结束、凭据回显、存储失败不升级为有效建议。仅纯格式错误允许在原次数预算内纠正一次；未知用量保持null。Review接收平台生成的逐行编号，返回行号及逐字证据必须一致。
-- `inspectWebRecheckSource({executionRoot,sourceReportPath,signal?})`只读核对可信根内原`web-execution-*`记录、模型回执、当前Git blob/HEAD/干净状态、源码及保护外壳。`startWebRecheck({...上述来源,reviewer,reviewerKind?,executable?,signal?,timeoutMs?,maxReviewCalls?,onEvent?,assertCurrent?})`只建同源新快照，不改原Git或原报告；编码调用0，模型用量只计本次新Review。所有检查重新运行，最后仍调用同一完整门禁。命令默认为只读，付费模式须同时`--run --model-review`。详见[复验协议](tasks/web-recheck.md)。
+- `inspectWebRecheckSource({executionRoot,sourceReportPath,sourceBinding?,signal?})`只读核对可信根内原`web-execution-*`记录、模型回执、当前Git blob/HEAD/干净状态、源码及保护外壳。可信sourceBinding仅含projectId/runId/taskId/specRevision/planRevision，逐项匹配原记录；省略时保持CLI固定规格校验。它不代表审批，服务另查当前双确认。`startWebRecheck({...上述来源,outputDir?,reviewer,reviewerKind?,executable?,signal?,timeoutMs?,maxReviewCalls?,onEvent?,assertCurrent?})`只建同源新快照，不改原Git或原报告；默认输出至executionRoot，也可由可信服务指定另一个自有根。快照无伪造.git，provenance记录原报告hash、原提交/回执和来源绑定。编码调用0，模型用量只计本次新Review；全部检查重跑，最后仍调用同一完整门禁。命令默认为只读，付费模式须同时`--run --model-review`，不开放新来源绑定参数。详见[复验协议](tasks/web-recheck.md)。
 - `createWebDelivery({files,binding,report,requirements,spec,plan})`只接受当前同版本完整通过结论，返回`{zip,manifest}`。包包含源码、保护外壳、需求/规格/计划及白名单验收摘要；排除数据库、真实.env、原始模型回执和私有日志。manifest逐文件哈希，不把归档历史声明当作新验收。
 - `inspectWebArchive(bytes)`有界检查平台ZIP格式、路径、CRC、清单与当前保护外壳；不在宿主导入包内代码。`revalidateWebArchive({archiveFile,outputDir,executable?,signal?,timeoutMs?})`在新副本执行固定HTTP/SQLite与Edge，默认120秒、上限600秒。成功为`checks_passed/taskAccepted:false/historicalAcceptanceVerified:false`，表示本次检查通过，未获得新的模型Review。命令为`npm run web:verify -- --archive <路径>`。
 
@@ -114,10 +120,12 @@ approvals为`{spec:null|{revision,at,feedback},plan:null|{revision,specRevision,
 
 - GET基础路径 → `{capabilities:{canStart,profiles:[{id,title,description,contractRevision}],reason,model:{name},budget},executions:[ExecutionDTO]}`。模型名称不包含凭据，未知用量为null。
 - POST基础路径`/start`，仅`{profileId,contractRevision}` → 202 `{execution}`。服务重新核对当前v2规格、计划、来源hash、双确认及结构检查，固定参考范围版本必须匹配；同一规划存在编码、预览或未确认停止时409。上传内容仅关联快照，不传给参考模型，不视为命令或完成范围。
-- POST基础路径`/:eid/action`，仅`{action:'cancel'|'retry'|'preview'|'stop_preview'}` → `{execution,preview?}`。cancel先记录请求，再等真实停止；retry使用当前审批新建尝试，不覆盖原历史。preview仅为当前已验收源码建立独立数据副本，有期限且占用活动槽；启动中停止保留实际PID及停止结果。
+- POST基础路径`/:eid/action` → `{execution,preview?}`。收费动作retry/recheck必须提交`{action,profileId,contractRevision}`，匹配当前明确选择的参考范围；缺少400、过期409，旧页面不能按新契约自动收费。cancel/preview/stop_preview只接受`{action}`。cancel先记录请求，再等真实停止；retry使用当前审批新建编码尝试，不覆盖原历史。recheck仅复用服务自有、已正常停止的原始模型候选，创建0编码的新检查尝试，完整重跑HTTP/SQLite、浏览器及最多2次Review；旧验收规则的代码可以重检，旧通过结论不能继承。preview仅为当前已验收源码建立独立数据副本，有期限且占用活动槽；启动中停止保留实际PID及停止结果。
 - GET基础路径`/:eid/download` → `application/zip`。重新核对当前规划、源码文件/Git对象/保护外壳及完整验收门禁后才创建交付包；不接受客户端路径、报告、预算或通过标记。
 
 ExecutionDTO包含执行编号、尝试、范围、状态、是否通过、调用次数、用量/预算、版本/差异、事件、错误、预览及服务端actions许可。检查项只公开id/name/passed和净化后的可选error/expected/actual文本，每字段最多2000字符；不公开工作区路径、模型原始回执、PID/control/probe或进程stdout。Review问题含相对文件/行号与处理记录，全部作为文本展示。
+
+复验DTO另有kind:web_recheck、来源服务执行编号/提交、recheckBudget和当前复验范围版本；actions.canRecheck仅为轻量按钮条件，实际动作在模型调用前深查原私有报告/真实Git/回执和当前归属。来源根、输出根和绑定只由服务私有记录派生，客户端不能传。预览/下载对复验快照另外重验来源provenance和全部文件字节，不以缺少.git放宽原始编码候选的Git校验。
 
 服务持久化在独立SQLite中，原规划JSON不迁移。owner与活动槽事务控制同run拒重；每次状态控制递增版本，异步结束重新核对，取消或待协调不能被迟到成功覆盖。`source_history`和`preview_history`私有保留正常及未知停止证据。旧双活存档迁移保留多个待协调历史而不撞唯一索引；未知进程不自动当作已停止，阻止新的活动。该单控制器生命周期不等于多Worker租约/可靠恢复，正式TaskStore及通用验收模型尚未接入此链路。
 
