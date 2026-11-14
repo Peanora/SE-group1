@@ -231,6 +231,69 @@ test('receipt/result mismatch, missing receipt, non-stop, unknown policy and inv
   }
 });
 
+test('caught receipt boundary violations remain fatal even when provider returns the first valid proposal', async t => {
+  let getters = 0;
+  const getter = receipt(); Object.defineProperty(getter, 'content', { enumerable: true, get() { getters++; return 'must not execute'; } });
+  for (const invalid of [receipt(), undefined, { content: 'malformed' }, receipt(undefined, { usage: { inputTokens: -1, outputTokens: null } }), getter]) {
+    const f = await fixture(t, { dependencies: { createModel: fakeModel(async input => {
+      await input.onReceipt(receipt()); await assert.rejects(input.onReceipt(invalid)); return result();
+    }) } });
+    const row = await wait(f.service, (await propose(f.service)).id, value => value.status !== 'generating');
+    assert.equal(row.status, 'failed'); assert.equal(row.errorCode, 'receipt_failed'); assert.equal(row.proposal, null); assert.equal(row.approved, false); assert.equal(row.actions.canApprove, false);
+    assert.equal(row.receiptState, 'saved'); assert.ok(row.receipt.sha256); assert.deepEqual(row.usage, { inputTokens: 7, outputTokens: 11 }); assert.equal(row.finishReason, 'stop');
+    await assert.rejects(f.service.approve(edit(row)), error => error.status === 409);
+  }
+  assert.equal(getters, 0);
+  const f = await fixture(t, { dependencies: { createModel: fakeModel(async input => {
+    await assert.rejects(input.onReceipt({ content: 'invalid first receipt' }));
+    await input.onReceipt(receipt()).catch(() => {}); return result();
+  }) } });
+  const row = await wait(f.service, (await propose(f.service)).id, value => value.status !== 'generating');
+  assert.equal(row.status, 'failed'); assert.equal(row.errorCode, 'receipt_failed'); assert.equal(row.proposal, null);
+  assert.equal(row.receiptState, 'not_received'); assert.deepEqual(row.usage, { inputTokens: null, outputTokens: null });
+});
+
+test('caught late receipt violation during final planning read cannot publish a draft', async t => {
+  const finalEntered = deferred(), finalRead = deferred(); let reads = 0, captured;
+  const f = await fixture(t, { getPlanning: () => ++reads === 3 ? (finalEntered.resolve(), finalRead.promise) : planning(),
+    dependencies: { createModel: fakeModel(async input => { captured = input; await input.onReceipt(receipt()); return result(); }) } });
+  const contractRevision = (await f.service.list(ids)).capabilities.contractRevision; reads = 0;
+  const reservation = (await f.service.propose({ ...ids, contractRevision })).proposal;
+  await finalEntered.promise; await assert.rejects(captured.onReceipt(receipt())); finalRead.resolve(planning());
+  const row = await wait(f.service, reservation.id, value => value.status !== 'generating');
+  assert.equal(row.status, 'failed'); assert.equal(row.errorCode, 'receipt_failed'); assert.equal(row.proposal, null); assert.equal(row.receiptState, 'saved'); assert.deepEqual(row.usage, { inputTokens: 7, outputTokens: 11 });
+});
+
+test('explicit source generations reject malformed values before reservation and before human approval', async t => {
+  let calls = 0; const f = await fixture(t, { dependencies: { createModel: fakeModel(async input => { calls++; await input.onReceipt(receipt()); return result(); }) } });
+  const original = structuredClone(f.data), bad = [-1, null, 0.5, NaN, Infinity, '0', false, {}, Number.MAX_SAFE_INTEGER + 1];
+  for (const side of ['run', 'project']) for (const value of bad) {
+    Object.assign(f.data, structuredClone(original)); delete f.data.project.sourceGeneration; delete f.data.run.sourceGeneration; f.data[side].sourceGeneration = value;
+    const state = await f.service.list(ids); assert.equal(state.capabilities.canPropose, false, `${side}/${String(value)}`); assert.equal(state.proposals.length, 0);
+    await assert.rejects(f.service.propose({ ...ids, contractRevision: state.capabilities.contractRevision }), error => error.status === 409);
+  }
+  assert.equal(calls, 0); Object.assign(f.data, structuredClone(original));
+  const row = await wait(f.service, (await propose(f.service)).id, 'draft');
+  for (const mutate of [data => { data.run.sourceGeneration = null; }, data => { delete data.project.sourceGeneration; data.run.sourceGeneration = -1; },
+    data => { data.project.sourceGeneration = '0'; }, data => { data.project.sourceGeneration = 1; }, data => { data.project.currentSourceRevision = 'a'.repeat(64); }, data => { data.run.sourceSuperseded = true; }]) {
+    Object.assign(f.data, structuredClone(original)); mutate(f.data); const old = (await f.service.list(ids)).proposals[0];
+    assert.equal(old.current, false); assert.equal(old.approved, false); assert.equal(old.actions.canApprove, false);
+    await assert.rejects(f.service.approve(edit(row)), error => error.status === 409);
+  }
+  assert.equal(calls, 1); Object.assign(f.data, original); assert.equal((await f.service.approve(edit(row))).proposal.approved, true);
+});
+
+test('only missing or undefined legacy generations default to zero and matched safe generations retain their real binding', async t => {
+  for (const [projectGeneration, runGeneration] of [[undefined, undefined], [undefined, 0], [0, undefined], [0, 0], [7, 7], [Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]]) {
+    const f = await fixture(t); f.data.project.sourceGeneration = projectGeneration; f.data.run.sourceGeneration = runGeneration;
+    const row = await wait(f.service, (await propose(f.service)).id, 'draft'); assert.equal(row.binding.sourceGeneration, runGeneration === undefined ? 0 : runGeneration);
+    assert.equal((await f.service.approve(edit(row))).proposal.approved, true);
+  }
+  const f = await fixture(t); delete f.data.project.sourceGeneration; delete f.data.run.sourceGeneration;
+  const row = await wait(f.service, (await propose(f.service)).id, 'draft'); assert.equal(row.binding.sourceGeneration, 0);
+  f.data.run.sourceGeneration = 1; assert.equal((await f.service.list(ids)).proposals[0].current, false);
+});
+
 test('malformed/credential escaped outputs remain private and usage unknown stays null; no automatic format retry', async t => {
   for (const content of ['{"version":', JSON.stringify(proposal()).replace('资源HTTP测试', [...config.apiKey].map(c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`).join(''))]) {
     let calls = 0;
