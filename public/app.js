@@ -1,6 +1,7 @@
 import { createPlanningReview } from './planning-review.js';
 import { createExecutionPanel } from './execution-panel.js';
 import { createSourceChanges } from './source-changes.js';
+import { createVerificationPlans } from './verification-plans.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -8,6 +9,7 @@ const escape = (value = '') => String(value).replace(/[&<>"']/g, (c) => ({ '&': 
 const state = { health: null, projects: [], project: null, run: null, stageId: 'spec', taskId: null, artifactName: 'task.md', tab: 'events', raw: false, busy: false, epoch: 0, selectionPending: false, pollTimer: null, feedback: '', importFile: null, filename: 'requirements.md' };
 let executionContextKey = '';
 let sourceContextKey = '';
+let verificationContextKey = '';
 function historicalRun(run = state.run) {
   return !!run && (run.sourceSuperseded === true || (state.project?.currentSourceRevision !== undefined
     && (run.sourceRevision !== state.project.currentSourceRevision || (run.sourceGeneration ?? 0) !== state.project.sourceGeneration)));
@@ -26,6 +28,13 @@ void executionPanel.mount(document.querySelector('#execution-panel-host'));
 function syncExecutionPanel() {
   const next = JSON.stringify(executionContext());
   if (next !== executionContextKey) { executionContextKey = next; void executionPanel.refresh(); }
+}
+const verificationPlans = createVerificationPlans({ api, getContext: executionContext, onError: error => showError(error) });
+void verificationPlans.mount(document.querySelector('#verification-plans-host'));
+function syncVerificationPlans() {
+  $('#verification-plans-section').hidden = !state.run || state.selectionPending;
+  const next = JSON.stringify(executionContext());
+  if (next !== verificationContextKey) { verificationContextKey = next; void verificationPlans.refresh(); }
 }
 const sourceChanges = createSourceChanges({ api: sourceApi, getContext: () => ({ projectId: state.selectionPending ? '' : state.project?.id ?? '' }),
   onApplied: async change => { if (change.projectId !== state.project?.id || state.selectionPending) return; if (await refreshSourceProject(change.projectId, state.epoch)) toast('新需求已应用，请重新编排并确认规格和计划'); },
@@ -227,7 +236,7 @@ function renderControls() {
   $('#workflow-subtitle').textContent = run ? `${run.mode === 'model' ? '模型规划' : '本地规则规划'}　运行 ${run.id.slice(-8)}${run.workflowVersion === 2 ? '　两次人工确认' : '　旧版流程'}` : '六个阶段，两次确认，保留每版依据';
   $('#workflow-confirmation-legend').textContent = run && run.workflowVersion !== 2 ? '旧版流程：导出前确认' : '先确认规格，再确认计划';
   $('#source-history-notice').hidden = !historical;
-  planningReview.render(); syncSourceChanges();
+  planningReview.render(); syncSourceChanges(); syncVerificationPlans();
   $('#event-count').textContent = run?.events?.length || 0;
   $('#task-count').textContent = run?.tasks?.length || 0;
   $('#artifact-count').textContent = run?.artifacts?.length || 0;
