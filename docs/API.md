@@ -1,5 +1,14 @@
 # 本地原型接口约定
 
+## 模糊需求澄清
+
+新版model规格响应允许requirements为空且questions非空，解析器生成`spec.clarificationRequired:true`。Run仍使用`awaiting_spec`，页面显示“等待补充需求”，不发布规格审批、不生成下游计划；缺少问题、非法JSON、引用或结构错误仍拒绝。普通规格和旧版记录沿用原有确认契约。
+
+沿用运行action接口，新增`{action:"clarify_spec",revision,answers:{"Q-001":"…"}}`：仅当前新版model澄清停点可用，全部问题须有非空答复。动作先保存回答与历史，再调度规格阶段；重复/过期/在途/已换需求/预算耗尽返回错误，不新增调用。`revise_spec`可单独保存回答，不调用模型。澄清与重试共享冻结的specificationBudget，不额外增加次数。
+
+`clarificationHistory`保留问题编号、问题、答复、原规格revision和时间；模型输入为不可变sourceSnapshot正文加已保存回答，补充数据没有执行授权。新调用以inputRevision绑定合成输入，同时保留原sourceRevision。新规格的sourceClarifications由服务端历史派生并参与specRevision，原文引用可来自原文或补充回答；客户端不能通过修订覆盖该来源。原requirements.md不变，spec.md和plan.json保留补充信息。重新生成后仍需显式确认规格、确认计划。新调用失败保留回答与回执，可在原预算内重试；重启按已有中断规则处理，不自动调用模型。无需迁移旧数据，原失败记录不改写成功。
+
+
 ## 开发任务模拟编排
 
 新增接口前缀：`/api/projects/:projectId/runs/:planningId/simulations`。它与规划运行`/runs/:id`和固定参考源码`/executions`独立。仅本机请求可读写；旧需求/未确认/未完成规划导出/非法图/未解决写入冲突不能启动。每项目一个活动模拟运行，活动期间拒绝规划修订和需求发布；已结束或中断记录保留原版本。

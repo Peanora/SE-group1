@@ -212,3 +212,76 @@ test('the final metadata save cannot publish a specification after source owners
     assert.equal(x.run.specificationHistory[0].code, 'stale_revision'); assert.equal(x.run.specificationHistory[0].status, 'failed'); assert.equal(x.run.artifacts.some(item => item.name === 'spec.md'), false);
   });
 });
+
+const vague = () => ({ ...raw(), requirements: [], questions: ['目标平台是什么？', '首版功能是什么？'] });
+const answers = { 'Q-001': 'Web网页', 'Q-002': '访客可以查看资源列表。' };
+test('空需求进入澄清停点，保存回答不调用模型，答复后新规格可确认并导出；补充引用和原文均可追溯', async t => {
+  const inputs = [];
+  const x = await setup(t, { fetchImpl: async (_url, options) => {
+    inputs.push(JSON.parse(JSON.parse(options.body).messages[1].content).document);
+    const final = raw(); final.requirements[0].sourceQuote = answers['Q-002'];
+    return reply(JSON.stringify(inputs.length === 1 ? vague() : final));
+  } });
+  await terminal(x, 'awaiting_spec'); const original = structuredClone(x.run.sourceSnapshot), revision = x.run.sourceRevision;
+  assert.equal(x.run.spec.clarificationRequired, true); assert.equal(x.run.specQuestions.length, 2);
+  assert.ok(x.run.stages.filter(s => ['architecture','tasks'].includes(s.id)).every(s => s.attempt === 0));
+  await assert.rejects(x.orchestrator.action(x.project.id,x.run.id,{action:'approve_spec',revision:x.run.specRevision}), /仍待澄清/);
+  const old = x.run.specRevision;
+  await assert.rejects(x.orchestrator.action(x.project.id,x.run.id,{action:'clarify_spec',revision:old,answers:{'Q-001':'Web'}}), /回答全部/);
+  assert.equal(x.run.specRevision, old); assert.equal(x.calls(),1);
+  await x.orchestrator.action(x.project.id,x.run.id,{action:'revise_spec',revision:old,answers});
+  assert.equal(x.calls(),1);
+  await assert.rejects(x.orchestrator.action(x.project.id,x.run.id,{action:'clarify_spec',revision:old,answers}),{status:409});
+  await x.orchestrator.action(x.project.id,x.run.id,{action:'clarify_spec',revision:x.run.specRevision,answers});
+  await terminal(x,'awaiting_spec'); assert.equal(x.calls(),2);
+  assert.ok(inputs[1].includes(answers['Q-002'])); assert.deepEqual(x.run.sourceSnapshot,original); assert.equal(x.run.sourceRevision,revision);
+  assert.equal(x.run.spec.clarificationRequired,undefined); assert.equal(x.run.approvals.spec,null);
+  assert.equal(x.run.spec.sourceClarifications[0].answers[1].answer,answers['Q-002']);
+  assert.notEqual(x.run.specificationHistory[0].inputRevision,x.run.specificationHistory[1].inputRevision);
+  await x.orchestrator.action(x.project.id,x.run.id,{action:'approve_spec',revision:x.run.specRevision}); await terminal(x,'awaiting_review');
+  await x.orchestrator.action(x.project.id,x.run.id,{action:'approve_plan',revision:x.run.planRevision,specRevision:x.run.specRevision}); await terminal(x,'succeeded');
+  const exported=JSON.parse(x.run.artifacts.find(a=>a.name==='plan.json').content);
+  assert.equal(exported.clarificationHistory[0].answers[1].answer,answers['Q-002']);
+  const restarted=await new ProjectStore(x.directory).init();assert.deepEqual(restarted.getRun(x.project.id,x.run.id).run.clarificationHistory,x.run.clarificationHistory);
+});
+test('澄清调用不扩大冻结预算，预算耗尽时仍可保存回答', async t => {
+  const x=await setup(t,{fetchImpl:async()=>reply(JSON.stringify(vague())),options:{specificationMaxCalls:1}});await terminal(x,'awaiting_spec');
+  await x.orchestrator.action(x.project.id,x.run.id,{action:'revise_spec',revision:x.run.specRevision,answers});
+  await assert.rejects(x.orchestrator.action(x.project.id,x.run.id,{action:'clarify_spec',revision:x.run.specRevision,answers}),/次数已用尽/);
+  assert.equal(x.calls(),1);assert.equal(x.run.specQuestions[1].answer,answers['Q-002']);
+});
+test('补充调用失败保留回答及失败回执，重试采用相同补充输入且不自动确认', async t => {
+  let calls=0;
+  const x=await setup(t,{fetchImpl:async()=>{calls++;return reply(calls===1?JSON.stringify(vague()):calls===2?'broken':JSON.stringify(raw()));}});await terminal(x,'awaiting_spec');
+  await x.orchestrator.action(x.project.id,x.run.id,{action:'clarify_spec',revision:x.run.specRevision,answers});await terminal(x,'failed');
+  assert.equal(x.run.clarificationHistory.length,1);assert.equal(x.run.specificationHistory[1].status,'failed');
+  assert.equal(x.run.specQuestions[1].answer,answers['Q-002']);
+  await retry(x);await terminal(x,'awaiting_spec');assert.equal(x.calls(),3);assert.equal(x.run.approvals.spec,null);
+  assert.equal(x.run.specificationHistory[1].inputRevision,x.run.specificationHistory[2].inputRevision);
+});
+test('澄清动作保存失败不发起新请求、也不丢失原停点', async t => {
+  const x=await setup(t,{fetchImpl:async()=>reply(JSON.stringify(vague()))});await terminal(x,'awaiting_spec');
+  const before=structuredClone(x.run),save=x.store.save;
+  x.store.save=async()=>{throw new Error('controlled save failure');};
+  await assert.rejects(x.orchestrator.action(x.project.id,x.run.id,{action:'clarify_spec',revision:x.run.specRevision,answers}),/运行记录保存失败/);
+  x.store.save=save;assert.deepEqual(x.run,before);assert.equal(x.calls(),1);
+});
+
+test('空需求且无可回答问题仍拒绝，不能把无效输出标成澄清成功', async t => {
+  const x=await setup(t,{fetchImpl:async()=>reply(JSON.stringify({...raw(),requirements:[],questions:[]}))});await terminal(x,'failed');
+  assert.equal(x.run.spec,null);assert.equal(x.run.specificationHistory[0].code,'invalid_model_response');
+});
+
+test('模型问题上下文不能冒充用户需求引用；保存的多行答复可逐字引用', async t => {
+  let calls=0;
+  const x=await setup(t,{fetchImpl:async()=>{
+    calls++; const result=calls===1?{...vague(),questions:['需要支持支付吗？']}:raw();
+    if(calls>1)result.requirements[0].sourceQuote=calls===2?'支持支付':'首版不包含支付';
+    return reply(JSON.stringify(result));
+  }});await terminal(x,'awaiting_spec');
+  await x.orchestrator.action(x.project.id,x.run.id,{action:'clarify_spec',revision:x.run.specRevision,answers:{'Q-001':'首版不包含支付\n只查看资源'}});await terminal(x,'failed');
+  assert.equal(x.run.specificationHistory[1].code,'invalid_model_response');
+  await retry(x);await terminal(x,'awaiting_spec');assert.equal(x.run.spec.requirements[0].sourceQuote,'首版不包含支付');
+  const changed=structuredClone(x.run.spec);changed.requirements[0].sourceQuote='支持支付';
+  await assert.rejects(x.orchestrator.action(x.project.id,x.run.id,{action:'revise_spec',revision:x.run.specRevision,spec:changed}),/原文引用/);
+});
