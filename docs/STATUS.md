@@ -8,6 +8,8 @@
 
 验证：109脚本语法通过；显式真实MXC/Edge全量 **694/694**，失败/取消/跳过0，149608.2183ms；随后补充恢复状态文案并重新跑4/4真实Edge桌面/390px页面，失败/跳过0。独立非作者14项离线断言及最后异步窗口1项探针通过，无剩余阻塞，未独立跑全量。真实模型调用0，未修改本地.env，测试临时采用当前安装的有效执行器。详见[tasks/specification-failure-guidance](tasks/specification-failure-guidance.md)。
 
+生产代码05bead9已快进合入本地main并更新4317工作台：监听28296，启动器38520；健康接口、首页及两个前端脚本HTTP200，脚本与源码匹配。实际用户失败记录的派生说明为saved_response_valid、remaining0、canRetry:false、canRevalidate:true。5份原项目JSON在备份/重启/只读诊断前后逐字节不变，模型调用仍为3。备份和启动日志在output/spec-failure-rollout-20261116。未代用户执行恢复，未推送GitHub或公网部署。
+
 无需迁移旧数据；旧失败保留，可免费重新校验的能力由当前读取结果决定，不自动恢复用户运行。下一项验收：用户刷新失败项目，显式重新校验最后保存响应，核对新规格及问题，再自行确认。
 
 
