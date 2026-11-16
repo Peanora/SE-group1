@@ -18,6 +18,8 @@ Agent 开发前阅读 [AGENTS.md](AGENTS.md)，其中包含完整开发流程、
 
 ## 启动
 
+Windows双击`start.cmd`启动普通工作台，双击`start-demo.cmd`启动独立模拟示例（4320端口）。启动入口会先验证Node.js版本及`node:sqlite`，默认Node过旧时查找本机可用运行环境；不修改系统PATH。`npm start`使用同一检测入口。可设置`TASKFLOW_NODE`为合适node程序的绝对路径；显式配置无效时明确报错，不静默忽略。直接执行`node server.mjs`仍要求当前终端Node.js本身符合要求。
+
 安装 Node.js 22.21 或以上版本，在项目目录执行：
 
 ```powershell

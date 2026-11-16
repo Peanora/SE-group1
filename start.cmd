@@ -1,11 +1,9 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+set "TASKFLOW_BOOTSTRAP=node"
 where node >nul 2>nul
-if errorlevel 1 (
-  echo Please install Node.js 22 or later, then run this file again.
-  pause
-  exit /b 1
-)
-node server.mjs
+if errorlevel 1 set "TASKFLOW_BOOTSTRAP=%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
+if defined TASKFLOW_NODE set "TASKFLOW_BOOTSTRAP=%TASKFLOW_NODE%"
+"%TASKFLOW_BOOTSTRAP%" scripts\start-local.mjs %*
 if errorlevel 1 pause
