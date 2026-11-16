@@ -1,5 +1,36 @@
 # 本地原型接口约定
 
+## 开发任务模拟编排
+
+新增接口前缀：`/api/projects/:projectId/runs/:planningId/simulations`。它与规划运行`/runs/:id`和固定参考源码`/executions`独立。仅本机请求可读写；旧需求/未确认/未完成规划导出/非法图/未解决写入冲突不能启动。每项目一个活动模拟运行，活动期间拒绝规划修订和需求发布；已结束或中断记录保留原版本。
+
+| 方法和后缀 | 返回或作用 |
+| --- | --- |
+| GET 前缀 | `{runs, canStart, reason}`，仅已保存的模拟快照及启动阻止原因 |
+| POST 前缀 | 202 `{simulation}`；参数见下方 |
+| POST `/:simulationId/action` | `{simulation}`，暂停、继续、失败重试或人工确认 |
+| GET `/:simulationId/download` | JSON下载，外层`kind:simulation, realAcceptance:false`及完整模拟记录 |
+
+启动JSON：`{planRevision, concurrency:2, durationMs:1200, failOnceIds:[], confirmationIds:[]}`。除planRevision外可省略；并发1至8，模拟时长0至10000毫秒；选项ID必须属于当前计划。首次失败选项只影响指定任务第一次尝试。任务定义的`requiresConfirmation:true`或confirmationIds指定的任务在结果产生后等待人工确认；这是该次模拟运行的选项，不修改计划定义或真实验收许可。未知字段和未知ID拒绝，不接受前端传入完成状态。
+
+操作JSON：`{action:pause}`、`{action:resume}`、`{action:retry,taskId}`、`{action:confirm,taskId,attempt,reason}`（示意值为字符串）。confirm要求当前待确认任务的成功模拟尝试编号和1至5000字符的非空依据；保存时间、依据、尝试及计划版本。失败/阻塞任务、过期/重复确认、complete等普通完成操作均拒绝。暂停在派发边界生效，在途任务可结束；重试只重跑失败任务，成功分支和失败历史保留。
+
+记录包含项目/规划ID、sourceRevision/sourceGeneration、specRevision、planRevision/planVersion、冻结spec和任务definition、并发/模拟选项、事件及时间。每任务保存status、reason、requiresConfirmation、attempts和history。
+
+| 任务status | 页面含义 |
+| --- | --- |
+| pending | 待开始，等待依赖 |
+| ready | 就绪，等待并发槽 |
+| running | 后端模拟执行中 |
+| awaiting_confirmation | 结果已产生，待人工确认 |
+| completed | 模拟完成，非真实验收 |
+| failed | 失败，可按版本重试 |
+| blocked | 前置失败或阻塞，不允许人工强制完成 |
+
+运行status另有paused和interrupted。重启后活动运行显式中断；在途尝试保存interrupted，任务转failed，未派发任务重新计算依赖。待确认结果仍可人工确认，但继续派发需人工resume；中断失败任务也可retry。默认不自动重跑。每次新计划启动创建全新任务状态，旧记录可读及导出，旧版本操作返回409。
+
+执行器接口：`execute({task,attempt,failOnce,durationMs,signal}) → Promise<{outcome:'completed'|'failed',summary}>`。本轮仅SimulatedExecutor，不执行代码/命令或业务测试；替换接口不自动获得真实验收能力。状态在调度服务中更新，先保存后派发；保存失败停止该项目新派发并返回503，需重启核对。没有多Worker、事务数据库迁移或团队身份认证。所有模拟记录均标记`kind:simulation`、`realAcceptance:false`，不创建真实执行行、不放开预览/源码下载。
+
 本项目为需求规划与固定参考Web研发工具，单用户本地运行。后端默认监听127.0.0.1:4317，提供静态前端与JSON API。要求Node.js 22.21或以上，以锁定的playwright-core和系统Edge完成独立浏览器检查。
 
 ## 数据结构

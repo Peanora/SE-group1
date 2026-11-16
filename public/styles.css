@@ -19,3 +19,18 @@ dialog{padding:0;border:1px solid #dce4f0;border-radius:13px;box-shadow:0 28px 9
 @media(max-width:760px){.review-banner{padding:18px 15px}.review-intro p{font-size:10px}.review-steps{gap:12px;margin:18px 0 12px}.review-steps strong{font-size:11px}.review-steps small{font-size:9px}.review-steps li{gap:6px;align-items:flex-start}.review-steps li>span{width:22px;height:22px;font-size:10px}.review-stack{grid-template-columns:1fr;gap:0}.review-stack .review-field{margin-bottom:10px}.review-context-grid,.review-approval-grid{grid-template-columns:1fr;gap:0}.review-editor{padding:13px}.review-field input,.review-field textarea{font-size:12px}.review-item-body{padding:12px 12px 0}.review-section-heading{align-items:flex-start;flex-direction:column;gap:4px}.review-item>summary{padding:10px}.review-item>summary>strong{font-size:11px}.review-item>summary>small{display:block;margin-left:24px}.review-actions{width:100%;display:grid;grid-template-columns:1fr 1fr}.review-actions .button:last-child{grid-column:1/-1}.review-version{font-size:10px}.review-history>summary>span{display:block;margin-left:16px}.review-history-list time{display:block;margin:3px 0}.review-actions .button{min-height:40px;font-size:12px}.review-questions{margin-top:16px}}
 .source-change-entry { margin-top: 24px; }
 .source-change-entry > summary { padding: 16px 20px; border: 1px solid var(--border, #dce3ec); border-radius: 10px; background: white; cursor: pointer; font-weight: 600; }
+/* Independent simulated task runs; these styles never imply real acceptance. */
+.simulation-panel { padding: 20px; border-bottom: 1px solid #dbe3ee; background: #f6f8fc; overflow-wrap: anywhere; }
+.simulation-panel h3 { margin: 0 0 10px; }
+.simulation-panel p { font-size: 13px; line-height: 1.7; }
+.simulation-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 14px 0; }
+.simulation-panel label { display: grid; gap: 6px; font-size: 13px; min-width: 0; }
+.simulation-panel input, .simulation-panel select, .simulation-panel textarea { width: 100%; min-width: 0; padding: 8px; border: 1px solid #c5d1e0; border-radius: 6px; background: white; box-sizing: border-box; }
+.simulation-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 12px 0; }
+.simulation-task-detail { border-top: 1px solid #c5d1e0; border-bottom: 1px solid #c5d1e0; padding: 10px 0; }
+.simulation-task-detail ol { padding-left: 20px; font-size: 12px; overflow-wrap: anywhere; }
+.dev-task.sim-running { border-color: #3975d5; background: #eaf2ff; }
+.dev-task.sim-completed { border-color: #21855f; background: #eefaf4; }
+.dev-task.sim-failed, .dev-task.sim-blocked { border-color: #c45555; background: #fff1f1; }
+.dev-task.sim-awaiting_confirmation { border-color: #b88729; background: #fff8e6; }
+.dev-task.sim-ready { border-color: #7b62c5; }

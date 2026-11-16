@@ -1,6 +1,7 @@
 import { createPlanningReview } from './planning-review.js';
 import { createExecutionPanel } from './execution-panel.js';
 import { createSourceChanges } from './source-changes.js';
+import { createSimulatedTasks, SIM_STATUS } from './simulated-tasks.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -8,6 +9,15 @@ const escape = (value = '') => String(value).replace(/[&<>"']/g, (c) => ({ '&': 
 const state = { health: null, projects: [], project: null, run: null, stageId: 'spec', taskId: null, artifactName: 'task.md', tab: 'events', raw: false, busy: false, epoch: 0, selectionPending: false, pollTimer: null, feedback: '', importFile: null, filename: 'requirements.md' };
 let executionContextKey = '';
 let sourceContextKey = '';
+let simulationContextKey = '';
+const simulatedTasks = createSimulatedTasks({ api, getContext: () => ({ projectId: state.selectionPending ? '' : state.project?.id ?? '',
+  runId: state.selectionPending ? '' : state.run?.id ?? '', planRevision: state.run?.planRevision ?? '', current: !state.selectionPending && !historicalRun() }),
+  onUpdate: () => { if (state.tab === 'tasks') renderRecords(); }, onError: showError });
+simulatedTasks.mount(document.querySelector('#simulation-panel-host'));
+function syncSimulatedTasks() {
+  const key = JSON.stringify([state.selectionPending, state.project?.id, state.run?.id, state.run?.planRevision, historicalRun()]);
+  if (key !== simulationContextKey) { simulationContextKey = key; void simulatedTasks.refresh(); }
+}
 function historicalRun(run = state.run) {
   return !!run && (run.sourceSuperseded === true || (state.project?.currentSourceRevision !== undefined
     && (run.sourceRevision !== state.project.currentSourceRevision || (run.sourceGeneration ?? 0) !== state.project.sourceGeneration)));
@@ -273,7 +283,8 @@ function taskLayout(tasks) {
   return { positions, width: Math.max(750, (Math.max(...levels.values()) + 1) * 230 + 24), height: Math.max(280, Math.max(...counts.values()) * 110 + 26) };
 }
 function renderTasks() {
-  const tasks = state.run?.tasks || [];
+  const simulation = simulatedTasks.selection();
+  const tasks = simulation ? simulation.tasks.map(task => task.definition) : state.run?.tasks || [];
   if (!tasks.length) return emptyContent('graph', '开发任务将在这里展开', '任务拆解完成后，可检查依赖关系、验收条件与需求来源。');
   if (!tasks.some((task) => task.id === state.taskId)) state.taskId = tasks[0].id;
   const selected = tasks.find((task) => task.id === state.taskId);
@@ -283,11 +294,11 @@ function renderTasks() {
     const x1 = from.x + 196, x2 = to.x, y1 = from.y + 44, y2 = to.y + 44;
     return `<path class="task-edge" d="M${x1} ${y1}C${x1 + 30} ${y1},${x2 - 30} ${y2},${x2} ${y2}" marker-end="url(#task-arrow)"/>`;
   })).join('');
-  const nodes = tasks.map((task) => { const pos = layout.positions.get(task.id); return `<button class="dev-task ${task.id === state.taskId ? 'selected' : ''}" style="left:${pos.x}px;top:${pos.y}px" data-task="${escape(task.id)}" data-focus-key="task-${escape(task.id)}" aria-pressed="${task.id === state.taskId}"><span class="dev-task-top"><span>${escape(task.id)}</span><span>${escape(task.category || '开发')}</span></span><span class="dev-task-title">${escape(task.title)}</span></button>`; }).join('');
-  const sources = (selected.requirementIds || []).map((id) => state.run.spec?.requirements?.find((requirement) => requirement.id === id)).filter(Boolean);
-  const boundary = [['计划修改范围', selected.writePaths], ['输入资料', selected.inputs], ['预期产出', selected.outputs]]
+  const nodes = tasks.map((task) => { const pos = layout.positions.get(task.id); return `<button class="dev-task ${simulation ? 'sim-' + simulation.tasks.find(item => item.id === task.id)?.status : ''} ${task.id === state.taskId ? 'selected' : ''}" style="left:${pos.x}px;top:${pos.y}px" data-task="${escape(task.id)}" data-focus-key="task-${escape(task.id)}" aria-pressed="${task.id === state.taskId}"><span class="dev-task-top"><span>${escape(task.id)}</span><span>${escape(simulation ? SIM_STATUS[simulation.tasks.find(item => item.id === task.id)?.status] : task.category || '开发')}</span></span><span class="dev-task-title">${escape(task.title)}</span></button>`; }).join('');
+  const sources = (selected.requirementIds || []).map((id) => (simulation?.spec ?? state.run.spec)?.requirements?.find((requirement) => requirement.id === id)).filter(Boolean);
+  const boundary = [['计划修改范围', selected.writePaths], ['输入资料', selected.inputs?.length ? selected.inputs : ['当前计划未明确输入资料，请结合前置任务与规格来源核对。']], ['预期产出', selected.outputs?.length ? selected.outputs : ['当前计划未明确输出，请结合目标与验收条件核对。']]]
     .filter(([, values]) => Array.isArray(values) && values.length).map(([label, values]) => `<h4>${label}</h4><ul>${values.map(value => `<li>${escape(value)}</li>`).join('')}</ul>`).join('');
-  return `<div class="task-workspace"><div class="task-graph-zone"><div class="task-caption">开发任务依赖图 / ${tasks.length} 个任务待开发 / 点击查看验收与来源</div><div class="task-graph-scroll"><div class="task-graph" style="width:${layout.width}px;height:${layout.height}px"><svg class="task-edges" width="${layout.width}" height="${layout.height}" aria-hidden="true"><defs><marker id="task-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#bfccdf"/></marker></defs>${paths}</svg>${nodes}</div></div></div><aside class="task-detail"><p class="task-detail-id">${escape(selected.id)} / ${escape(selected.category || '开发任务')}</p><h3>${escape(selected.title)}</h3><p>${escape(selected.description)}</p><h4>前置任务</h4><div>${selected.dependsOn?.length ? selected.dependsOn.map((id) => `<button class="pill" data-task="${escape(id)}">${escape(id)}</button>`).join('') : '<span class="pill">无前置任务</span>'}</div><h4>验收条件</h4><ul>${(selected.acceptance || []).map((item) => `<li>${escape(item)}</li>`).join('')}</ul>${selected.suggestedFiles?.length ? `<h4>建议文件</h4><div>${selected.suggestedFiles.map((file) => `<span class="pill">${escape(file)}</span>`).join('')}</div>` : ''}${boundary}<h4>需求来源</h4>${sources.length ? sources.map((source) => `<div class="task-source-quote"><strong>${escape(source.id)} ${escape(source.title)}</strong><br>${escape(source.sourceQuote || source.description)}</div>`).join('') : '<p>基础工程或集成验证任务</p>'}</aside></div>`;
+  return `<div class="task-workspace"><div class="task-graph-zone"><div class="task-caption">开发任务依赖图 / ${tasks.length} 个任务 / ${simulation ? '模拟运行 · 不代表真实软件验收' : '待实施计划'} / 点击查看状态、验收与来源</div><div class="task-graph-scroll"><div class="task-graph" style="width:${layout.width}px;height:${layout.height}px"><svg class="task-edges" width="${layout.width}" height="${layout.height}" aria-hidden="true"><defs><marker id="task-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#bfccdf"/></marker></defs>${paths}</svg>${nodes}</div></div></div><aside class="task-detail"><p class="task-detail-id">${escape(selected.id)} / ${escape(selected.category || '开发任务')}</p><h3>${escape(selected.title)}</h3><p>${escape(selected.description)}</p>${simulatedTasks.detail(selected.id)}<h4>前置任务</h4><div>${selected.dependsOn?.length ? selected.dependsOn.map((id) => `<button class="pill" data-task="${escape(id)}">${escape(id)}</button>`).join('') : '<span class="pill">无前置任务</span>'}</div><h4>验收条件</h4><ul>${(selected.acceptance || []).map((item) => `<li>${escape(item)}</li>`).join('')}</ul>${selected.suggestedFiles?.length ? `<h4>建议文件</h4><div>${selected.suggestedFiles.map((file) => `<span class="pill">${escape(file)}</span>`).join('')}</div>` : ''}${boundary}<h4>需求来源</h4>${sources.length ? sources.map((source) => `<div class="task-source-quote"><strong>${escape(source.id)} ${escape(source.title)}</strong><br>${escape(source.sourceQuote || source.description)}</div>`).join('') : '<p>基础工程或集成验证任务</p>'}</aside></div>`;
 }
 function inlineMarkdown(text) {
   return escape(text).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -342,7 +353,7 @@ function renderArtifacts() {
 function renderRecords() {
   for (const button of $$('[data-tab]')) button.setAttribute('aria-selected', String(button.dataset.tab === state.tab));
   $('#records-body').setAttribute('aria-labelledby', `tab-${state.tab}`);
-  $('#records-hint').textContent = ({ events: '执行状态与操作记录', tasks: '开发任务用于后续编码', artifacts: '可阅读、可交接的项目产物' })[state.tab];
+  $('#records-hint').textContent = ({ events: '执行状态与操作记录', tasks: '待实施计划与独立模拟运行（非真实验收）', artifacts: '可阅读、可交接的项目产物' })[state.tab];
   const oldEvents = $('.event-list'); const followEvents = !oldEvents || oldEvents.scrollHeight - oldEvents.scrollTop - oldEvents.clientHeight < 45;
   const savedScroll = {};
   for (const name of ['event-list', 'task-graph-scroll', 'task-detail', 'artifact-content', 'artifact-list']) { const element = $(`.${name}`); if (element) savedScroll[name] = { x: element.scrollLeft, y: element.scrollTop }; }
@@ -350,7 +361,7 @@ function renderRecords() {
   for (const [name, pos] of Object.entries(savedScroll)) { const element = $(`.${name}`); if (element) { element.scrollLeft = pos.x; element.scrollTop = pos.y; } }
   if (state.tab === 'events' && followEvents && $('.event-list')) $('.event-list').scrollTop = $('.event-list').scrollHeight;
 }
-function renderRun() { renderControls(); renderWorkflow(); renderInspector(); renderRecords(); syncExecutionPanel(); }
+function renderRun() { renderControls(); renderWorkflow(); renderInspector(); renderRecords(); syncExecutionPanel(); syncSimulatedTasks(); }
 function renderAll() { renderProjects(); renderHeader(); renderRun(); }
 
 function setBusy(value) { state.busy = value; renderControls(); $('#create-project-button').disabled = value; $('#create-project-button').textContent = value ? '正在创建…' : '创建项目'; $$('[data-close-dialog]', $('#project-dialog')).forEach((button) => { button.disabled = value; }); }

@@ -6,6 +6,7 @@ import { ProjectStore } from './lib/store.mjs';
 import { Orchestrator } from './lib/orchestrator.mjs';
 import { HttpError, parseDocument } from './lib/documents.mjs';
 import { createZip } from './lib/zip.mjs';
+import { SimulatedTaskService } from './lib/simulated-tasks.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const MAX_REQUEST = 6 * 1024 * 1024;
@@ -83,6 +84,14 @@ export async function createApp(options = {}) {
   });
   try { await orchestrator.init(); }
   catch (cause) { try { await executionService?.shutdown(); } catch { cause.executionCleanupFailed = true; } throw cause; }
+  const simulationService = new SimulatedTaskService(store, { executor: options.simulatedExecutor,
+    assertControlAvailable: projectId => {
+      if (orchestrator.closed || orchestrator.projectActions.has(projectId) || orchestrator.projectAdmissions.has(projectId) || orchestrator.projectCheckpoints.has(projectId)) throw new HttpError(409, '项目规划或需求变更正在保存，请稍后操作模拟运行。');
+    },
+    withCheckpoint: (projectId, work) => orchestrator.withProjectCheckpoint(projectId, work) });
+  try { await simulationService.init(); }
+  catch (cause) { await Promise.allSettled([orchestrator.shutdown(), executionService?.shutdown()]); throw cause; }
+  orchestrator.assertSimulationIdle = projectId => simulationService.assertIdle(projectId);
   let sourceChangeService;
   try {
     sourceChangeService = options.sourceChangeService === null ? null : options.sourceChangeService ?? await (await import('./lib/source-change-service.mjs')).createSourceChangeService({
@@ -92,7 +101,7 @@ export async function createApp(options = {}) {
         return executionService.withProjectCheckpoint(projectId, work);
       }),
     });
-  } catch (cause) { await Promise.allSettled([orchestrator.shutdown(), executionService?.shutdown()]); throw cause; }
+  } catch (cause) { await Promise.allSettled([simulationService.shutdown(), orchestrator.shutdown(), executionService?.shutdown()]); throw cause; }
   let closing;
   const publicDir = path.resolve(options.publicDir ?? path.join(ROOT, 'public'));
   const server = http.createServer(async (request, response) => {
@@ -157,6 +166,27 @@ export async function createApp(options = {}) {
         const runId = segments[4];
         const { project, run } = store.getRun(projectId, runId);
         if (segments.length === 5 && method === 'GET') return respond(response, 200, { run });
+        if (segments[5] === 'simulations') {
+          requireLocalExecutionRequest(request, server);
+          if (segments.length === 6 && method === 'GET') {
+            let reason = '';
+            try { simulationService.binding(projectId, runId); simulationService.assertIdle(projectId); }
+            catch (error) { reason = error.message; }
+            return respond(response, 200, { runs: simulationService.list(projectId, runId), canStart: !reason, reason });
+          }
+          if (segments.length === 6 && method === 'POST') return respond(response, 202, { simulation: await simulationService.start(projectId, runId, await readJson(request)) });
+          if (segments.length === 8 && segments[7] === 'action' && method === 'POST') return respond(response, 200, {
+            simulation: await simulationService.action(projectId, runId, segments[6], await readJson(request)),
+          });
+          if (segments.length === 8 && segments[7] === 'download' && method === 'GET') {
+            const simulation = simulationService.list(projectId, runId).find(item => item.id === segments[6]);
+            if (!simulation) throw new HttpError(404, '未找到模拟记录。');
+            return respond(response, 200, { kind: 'simulation', realAcceptance: false, simulation }, 'application/json; charset=utf-8', {
+              'Content-Disposition': 'attachment; filename="simulated-task-history.json"',
+            });
+          }
+          throw new HttpError(404, '未找到该模拟编排接口。');
+        }
         if (segments[5] === 'executions') {
           requireLocalExecutionRequest(request, server);
           if (!executionService) throw new HttpError(404, '当前服务尚未开放网页代码执行。');
@@ -224,14 +254,14 @@ export async function createApp(options = {}) {
   server.headersTimeout = 15_000;
   const close = () => {
     if (!closing) closing = (async () => {
-      const results = await Promise.allSettled([orchestrator.shutdown(), executionService?.shutdown(), sourceChangeService?.shutdown()]);
+      const results = await Promise.allSettled([simulationService.shutdown(), orchestrator.shutdown(), executionService?.shutdown(), sourceChangeService?.shutdown()]);
       if (server.listening) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       const failure = results.find(result => result.status === 'rejected');
       if (failure) throw failure.reason;
     })();
     return closing;
   };
-  return { server, store, orchestrator, executionService, sourceChangeService, close };
+  return { server, store, orchestrator, simulationService, executionService, sourceChangeService, close };
 }
 
 export async function startServer(options = {}) {
