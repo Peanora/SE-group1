@@ -91,11 +91,11 @@ test('missing, duplicate, malformed or inconsistent provider receipts fail close
 test('run budget is durable, failures do not refund attempts and exhausted retry sends no new request', async t => {
   const x = await setup(t, { fetchImpl: async () => reply('{'), options: { specificationMaxCalls: 2 } }); await terminal(x); const first = structuredClone(x.run.specificationHistory[0]);
   await retry(x); await terminal(x); assert.equal(x.run.specificationCalls, 2); assert.equal(x.calls(), 2); assert.deepEqual(x.run.specificationHistory[0], first);
-  await retry(x); await terminal(x); assert.equal(x.calls(), 2); assert.equal(x.run.specificationHistory.length, 2); assert.match(x.run.stages.find(item => item.id === 'spec').error, /预算已用尽/);
+  await assert.rejects(retry(x), /次数已用尽/); await terminal(x); assert.equal(x.calls(), 2); assert.equal(x.run.specificationHistory.length, 2); assert.match(x.run.stages.find(item => item.id === 'spec').error, /JSON/); assert.equal((await x.orchestrator.describeRun(x.project,x.run)).specificationFailure.canRetry,false);
   const disk = JSON.parse(await readFile(path.join(x.directory, x.project.id + '.json'), 'utf8')); assert.equal(disk.runs[0].specificationCalls, 2);
   assert.deepEqual(x.run.specificationBudget, { maxCalls: 2, timeoutMs: 90000 }); await x.orchestrator.shutdown();
   const restoredStore = await new ProjectStore(x.directory).init(), restored = new Orchestrator(restoredStore, x.trusted, { stepDelayMs: 0, specificationMaxCalls: 5 }); x.register(restored); await restored.init();
-  const restoredRun = restoredStore.get(x.project.id).runs[0]; await restored.action(x.project.id, restoredRun.id, { action: 'retry', stageId: 'spec' });
+  const restoredRun = restoredStore.get(x.project.id).runs[0]; await assert.rejects(restored.action(x.project.id, restoredRun.id, { action: 'retry', stageId: 'spec' }), /次数已用尽/);
   await waitFor(() => restoredRun.status === 'failed' && !restored.state(restoredRun).active.size && !restored.state(restoredRun).driving); assert.equal(x.calls(), 2); assert.equal(restoredRun.specificationHistory.length, 2);
 });
 
@@ -284,4 +284,49 @@ test('模型问题上下文不能冒充用户需求引用；保存的多行答�
   await retry(x);await terminal(x,'awaiting_spec');assert.equal(x.run.spec.requirements[0].sourceQuote,'首版不包含支付');
   const changed=structuredClone(x.run.spec);changed.requirements[0].sourceQuote='支持支付';
   await assert.rejects(x.orchestrator.action(x.project.id,x.run.id,{action:'revise_spec',revision:x.run.specRevision,spec:changed}),/原文引用/);
+});
+
+test('平台添加的答复包装可规范化，纯问题引用和伪造包装仍拒绝', () => {
+  const input='原始需求\nQ-001 目标平台是什么？\n答复：Windows';
+  assert.equal(planner.normalizeSourceQuote('答复：Windows',input,['原始需求','Windows']),'Windows');
+  assert.equal(planner.normalizeSourceQuote('Q-001 目标平台是什么？\n答复：Windows',input,['原始需求','Windows']),'Windows');
+  assert.equal(planner.normalizeSourceQuote('目标平台是什么',input,['原始需求','Windows']),null);
+  assert.equal(planner.normalizeSourceQuote('伪造问题\n答复：Windows',input,['原始需求','Windows']),null);
+});
+test('具体引用失败原因被保留，公开说明不包含模型正文或私有路径', async t => {
+  const bad=raw();bad.requirements[0].sourceQuote='not-in-source-private';
+  const x=await setup(t,{fetchImpl:async()=>reply(JSON.stringify(bad))});await terminal(x);
+  const dto=await x.orchestrator.describeRun(x.project,x.run);
+  assert.equal(dto.specificationFailure.reason,'requirement_quote_not_found');assert.equal(dto.specificationFailure.requirementIndex,1);
+  assert.match(x.run.stages.find(s=>s.id==='spec').error,/第1条需求/);
+  assert.equal(JSON.stringify(dto.specificationFailure).includes('not-in-source-private'),false);assert.equal(JSON.stringify(dto.specificationFailure).includes(x.directory),false);
+});
+const oldRejected = async t => {
+  const x=await setup(t,{options:{specificationMaxCalls:1},provider:async(text,name,options,actual)=>{await actual(text,name,options);throw new Error('legacy validator failure');}});
+  await terminal(x);return x;
+};
+test('预算已尽可免费重新校验可信响应，不修改原失败/用量，也不自动审批或再请求模型', async t => {
+  const x=await oldRejected(t),old=structuredClone(x.run.specificationHistory);
+  const dto=await x.orchestrator.describeRun(x.project,x.run);assert.equal(dto.specificationFailure.canRevalidate,true);assert.equal(dto.specificationFailure.canRetry,false);
+  await x.orchestrator.action(x.project.id,x.run.id,{action:'revalidate_spec',attemptId:old[0].id});
+  assert.equal(x.run.status,'awaiting_spec');assert.equal(x.run.approvals.spec,null);assert.equal(x.run.specificationCalls,1);assert.equal(x.calls(),1);
+  assert.deepEqual(x.run.specificationHistory,old);assert.equal(x.run.specificationRevalidations.length,1);
+  await assert.rejects(x.orchestrator.action(x.project.id,x.run.id,{action:'revalidate_spec',attemptId:old[0].id}),{status:409});
+  const disk=await new ProjectStore(x.directory).init();assert.deepEqual(disk.getRun(x.project.id,x.run.id).run.specificationHistory,old);
+});
+test('免费重新校验拒绝旧响应编号、输入变更、篡改回执，保存失败撤回新规格', async t => {
+  const x=await oldRejected(t);const attempt=x.run.specificationHistory[0],before=structuredClone(x.run);
+  await assert.rejects(x.orchestrator.action(x.project.id,x.run.id,{action:'revalidate_spec',attemptId:'foreign'}),{status:409});
+  const originalSave=x.store.save;x.store.save=async()=>{throw new Error('controlled storage failure');};
+  await assert.rejects(x.orchestrator.action(x.project.id,x.run.id,{action:'revalidate_spec',attemptId:attempt.id}),/保存失败/);x.store.save=originalSave;assert.deepEqual(x.run,before);
+  const {writeFile}=await import('node:fs/promises');const file=receiptFile(x);await writeFile(file,'{}');
+  const dto=await x.orchestrator.describeRun(x.project,x.run);assert.equal(dto.specificationFailure.canRevalidate,false);
+  await assert.rejects(x.orchestrator.action(x.project.id,x.run.id,{action:'revalidate_spec',attemptId:attempt.id}),{status:409});assert.equal(x.calls(),1);assert.deepEqual(x.run,before);
+});
+
+test('重新校验最后一个异步边界之后输入变化不能发布旧规格', async t => {
+  const x=await oldRejected(t),saved=x.orchestrator.savedSpecification.bind(x.orchestrator),before=structuredClone(x.run);
+  x.orchestrator.savedSpecification=async(...args)=>{const result=await saved(...args);x.run.clarificationHistory=[{answers:[{question:'平台？',answer:'changed'}]}];return result;};
+  await assert.rejects(x.orchestrator.action(x.project.id,x.run.id,{action:'revalidate_spec',attemptId:before.specificationHistory[0].id}),{status:409});
+  assert.deepEqual(x.run,before);assert.equal(x.calls(),1);
 });

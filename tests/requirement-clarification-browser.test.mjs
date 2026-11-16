@@ -47,3 +47,28 @@ for (const width of [1440, 390]) test(`Edge ${width}px：一句话需求可澄�
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
   assert.deepEqual(errors, []);
 });
+
+for (const width of [1440,390]) test(`Edge ${width}px：旧失败显示原因、禁用耗尽重试，并可免费重新校验`, { timeout:45000 }, async t => {
+  const directory=await mkdtemp(path.join(os.tmpdir(),'taskflow-failure-browser-'));let calls=0,browser;
+  const raw={title:'客户端',summary:'Windows客户端',goals:[],roles:[],acceptanceScenarios:[],constraints:[],assumptions:[],questions:[],requirements:[{title:'客户端',description:'Windows客户端',sourceQuote:'Windows',acceptance:['可以启动']}],stack:{frontend:'待确认',backend:'待确认',storage:'待确认'}};
+  const app=await createApp({dataDir:directory,stepDelayMs:0,specificationMaxCalls:1,planner:{...planner,getModelConfig:()=>({configured:true,model:'mock'}),analyzeWithModel:async(text,name,options)=>{
+    await planner.analyzeWithModel(text,name,{...options,config:{baseUrl:'http://localhost',model:'mock',apiKey:''},fetchImpl:async()=>{calls++;return new Response(JSON.stringify({choices:[{finish_reason:'stop',message:{content:JSON.stringify(raw)}}]}));}});
+    throw new Error('legacy validator failure');
+  }}});
+  t.after(async()=>{await browser?.close();await app.close();assert.equal(path.dirname(directory),path.resolve(os.tmpdir()));await rm(directory,{recursive:true,force:true});});
+  const project=await app.store.create({name:'旧校验失败',source:{filename:'requirements.md',content:'Windows客户端'}});
+  const run=await app.orchestrator.createRun(project.id,{mode:'model'});
+  for(let n=0;run.status!=='failed'||app.orchestrator.state(run).active.size||app.orchestrator.state(run).driving;n++){if(n>500)throw Error('timeout');await new Promise(r=>setTimeout(r,10));}
+  const old=structuredClone(run.specificationHistory);
+  await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));browser=await chromium.launch({channel:'msedge',headless:true});
+  const page=await browser.newPage({viewport:{width,height:950}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto(`http://127.0.0.1:${app.server.address().port}`);
+  await page.getByRole('button',{name:'重新校验已保存响应（不调用模型）',exact:true}).waitFor();
+  assert.match(await page.locator('#stage-inspector').innerText(),/引用格式校验/);
+  assert.equal(await page.getByRole('button',{name:'调用次数已用尽',exact:true}).isDisabled(),true);
+  await page.reload();await page.getByRole('button',{name:'重新校验已保存响应（不调用模型）',exact:true}).click();
+  await page.getByRole('heading',{name:'先确认规格，再生成开发计划',exact:true}).waitFor();
+  assert.match(await page.locator('#planning-model-notice').innerText(),/已免费重新校验/);
+  assert.equal(calls,1);assert.equal(run.specificationCalls,1);assert.deepEqual(run.specificationHistory,old);assert.equal(run.approvals.spec,null);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);assert.deepEqual(errors,[]);
+});

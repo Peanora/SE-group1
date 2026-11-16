@@ -136,7 +136,7 @@ export async function createApp(options = {}) {
           throw new HttpError(405, '该接口不支持此请求方法。');
         }
         const projectId = segments[2];
-        if (segments.length === 3 && method === 'GET') return respond(response, 200, { project: store.get(projectId) });
+        if (segments.length === 3 && method === 'GET') return respond(response, 200, { project: { ...store.get(projectId), runs: await Promise.all(store.get(projectId).runs.map(run => orchestrator.describeRun(store.get(projectId), run))) } });
         if (segments[3] === 'changes') {
           requireLocalExecutionRequest(request, server); store.get(projectId);
           if (!sourceChangeService) throw new HttpError(404, '当前服务尚未开放需求输入变更。');
@@ -165,7 +165,7 @@ export async function createApp(options = {}) {
         if (segments.length === 4 && method === 'POST') return respond(response, 201, { run: await orchestrator.createRun(projectId, await readJson(request)) });
         const runId = segments[4];
         const { project, run } = store.getRun(projectId, runId);
-        if (segments.length === 5 && method === 'GET') return respond(response, 200, { run });
+        if (segments.length === 5 && method === 'GET') return respond(response, 200, { run: await orchestrator.describeRun(project, run) });
         if (segments[5] === 'simulations') {
           requireLocalExecutionRequest(request, server);
           if (segments.length === 6 && method === 'GET') {

@@ -1,5 +1,15 @@
 # 本地原型接口约定
 
+## 规格失败说明与保存响应重新校验
+
+失败的model规格GET（项目详情和单运行）可附加派生的`specificationFailure`：固定reason/message、可选requirementIndex、remaining、canRetry/canRevalidate、attemptId及nextStep。不公开原始响应/异常/私有路径，不为诊断写入用户数据。历史invalid_model_response可读取同源回执离线诊断，原历史不改写。
+
+`{action:"revalidate_spec",attemptId}`仅支持当前输入、正常settled且saved的最后一次invalid_model_response失败回执。路径由服务器派生，验证文件类型/真实路径/链接、字节数及SHA256、sourceRevision与inputRevision；解析使用当前引用白名单，不调用模型、不增加预算。最终发布再次核对项目/运行/输入/规格和回执版本；保存失败撤回。新规格待确认，原调用失败及用量原样保留；单独追加specificationRevalidations，记录响应摘要、输入和新规格版本。重复、过期、其他活动运行、待核对请求、篡改/缺失回执均拒绝，不授予审批或执行许可。
+
+引用允许逐字命中原文或用户回答。平台自己的上下文中若包含`答复：Windows`或完整问题加答复，可仅去除实际存在于合成输入的包装，再校验剩余答复是否逐字来自白名单；规格保存为规范化引用。纯模型问题和不存在于合成输入的伪造包装仍拒绝。
+
+规格预算耗尽时，retry在操作入口返回409，不重新派发、不追加模型尝试；页面禁用重试并解释保留回答及免费重新校验（若可用）。真实引用错误、无效JSON等通过固定错误分类显示，不透传模型正文或未知异常。
+
 ## 模糊需求澄清
 
 新版model规格响应允许requirements为空且questions非空，解析器生成`spec.clarificationRequired:true`。Run仍使用`awaiting_spec`，页面显示“等待补充需求”，不发布规格审批、不生成下游计划；缺少问题、非法JSON、引用或结构错误仍拒绝。普通规格和旧版记录沿用原有确认契约。
