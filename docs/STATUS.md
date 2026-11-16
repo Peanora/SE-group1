@@ -1,5 +1,15 @@
 # 当前实现与开发交接
 
+## 2026-11-17 可复现验收流程
+
+新增 `npm run acceptance`，把固定需求到规划导出的闭环做成可重复执行的验收：使用 `examples/library-system.md`，在临时数据目录创建项目并以 local 模式跑两次，自动回答示例问题、确认规格/计划、下载ZIP；比较 requirements/spec/architecture/task/review/handoff 的哈希和去除runId/确认时间后的plan投影，校验ZIP文件清单和模型调用为0。报告写入 `output/acceptance-<时间>/` 的 `acceptance.json`/`acceptance.md`，并保存两次ZIP。生产代码`6729182`。
+
+实际执行 `npm run acceptance -- --out output/acceptance-smoke2`：状态 `planning_passed_only`，规划通过、可复现、模型调用0；两次均8条需求、12个任务，文档哈希和计划投影一致。`npm run check`为117脚本语法通过；`npm test`为701项，671通过、30跳过、0失败、0取消，98,240.1947ms；跳过为未启用真实MXC/显式真实Edge的既有集成项。
+
+可选Web交付复核用 `--archive`：尝试本地 `output/live-web-delivery-3lVPQC/library-web-source.zip` 时，规划通过，但固定Web复核被明确拒绝，原因是该包由旧独立验收规则生成、当前清单/规则哈希不一致；没有把包内历史Review当成新结论，也没有放宽规则。因此默认报告 `complete:false`，需使用当前规则重新生成的固定参考源码包、MXC和Edge才能完成Web部分。手工界面验收步骤见[可复现验收流程](ACCEPTANCE.md)。
+
+本轮没有调用真实模型、没有修改用户项目数据或原失败记录，也没有把自动确认说成人工业务验收。下一步：用户可用该命令在验收现场生成报告；若验收要求固定Web执行，需要先准备当前规则兼容的源码包并在本机MXC/Edge环境运行 `--archive`。
+
 ## 2026-11-17 工程草案免费重新校验
 
 用户最新 `library-system` 运行在 architecture/tasks 连续失败。只读核对保存回执：第1次草案合法但8个接口路径使用 `{recordId}`，平台只接受 `:recordId`；第2次草案合法但页面选择器使用无效ARIA角色 `text`。两次共消耗2/3工程调用，页面只显示通用失败，用户无法复用第1次已保存的可用草案。生产代码`a1d9dd8`。

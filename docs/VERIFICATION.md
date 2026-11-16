@@ -209,3 +209,11 @@ QA平台PTY正常STOP退出0；63820/57843/51033已无监听，4317仍原PID8473
 新增单元回归：`{issueId}`路由参数规范化为`:parameter`并写回草案。新增集成回归：更早的saved工程回执在运行失败后可经`revalidate_engineering`复用，不新增模型调用、engineeringCalls不变，任务与检查恢复并停在计划确认。临时数据副本对真实`library-system`失败运行复演：failed→awaiting_review，10任务、review通过。
 
 实际运行`library-system/4d3eb701-fd5f-4d4b-9e29-343836ad878a`已执行免费重新校验：使用第1次保存草案，`{recordId}`规范化后通过；architecture/tasks/review succeeded，engineeringCalls保持2，planRevision `9fc9de131e3880468e3a7a271338ad4985ae22c57cebeb189342a571614e6612`，审批为空。原两次失败、用量和回执未改写；未确认计划或导出，未新增付费调用。证据见`docs/tasks/engineering-draft-recovery.md`。
+
+## 2026-11-17 可复现验收流程
+
+生产代码`6729182`。`npm run check`为117脚本语法通过；`npm test`为701项，671通过、30跳过、0失败、0取消，98,240.1947ms。30项跳过为未启用真实MXC或显式真实Edge的既有集成项。新增验收测试两次本地规划产生相同文档和计划投影，模型调用0。
+
+`npm run acceptance -- --out output/acceptance-smoke2`实际结果：`planning_passed_only`，规划通过、可复现、模型调用0；两次运行均8条需求、12个任务，文档哈希和计划投影一致，ZIP均含7个预期文件。`npm test`包含该验收回归。
+
+`npm run acceptance -- --out output/acceptance-smoke-web --archive output/live-web-delivery-3lVPQC/library-web-source.zip`：规划通过；固定Web复核返回failed，原因是本地ZIP为旧独立验收规则生成，当前`manifestHash/browserManifestHash/reviewPolicyHash`不一致。没有把旧包历史Review当作新结论，未放宽规则；报告`complete:false`。需使用当前规则重新生成的源码包和本机MXC/Edge才能完成Web部分。证据见`docs/tasks/reproducible-acceptance.md`和`docs/ACCEPTANCE.md`。
