@@ -22,13 +22,17 @@
 
 ## 规格失败说明与保存响应重新校验
 
-失败的model规格GET（项目详情和单运行）可附加派生的`specificationFailure`：固定reason/message、可选requirementIndex、remaining、canRetry/canRevalidate、attemptId及nextStep。不公开原始响应/异常/私有路径，不为诊断写入用户数据。历史invalid_model_response可读取同源回执离线诊断，原历史不改写。
+失败的model规格GET（项目详情和单运行）可附加派生的`specificationFailure`：固定reason/label/message、可选requirementIndex/requirementTitle/field/detail、remaining、canRetry/canRevalidate、attemptId、nextStep及supplement。`repairable`表示当前失败可能由需求信息不足或规格条目无法追溯引起；`supplement.fields`给出固定字段（目标、使用者、首版范围、不包含、验收标准、依据说明、其他说明）及问题，`saved`来自最近保存的补充草稿或已提交的补充轮次，`canRetry`表示是否还有冻结预算。`detail`只来自控制器自己的校验说明；模型原始响应、私有路径和异常正文仍不公开。历史invalid_model_response可读取同源回执离线诊断，原历史不改写。
 
 `{action:"revalidate_spec",attemptId}`仅支持当前输入、正常settled且saved的最后一次invalid_model_response失败回执。路径由服务器派生，验证文件类型/真实路径/链接、字节数及SHA256、sourceRevision与inputRevision；解析使用当前引用白名单，不调用模型、不增加预算。最终发布再次核对项目/运行/输入/规格和回执版本；保存失败撤回。新规格待确认，原调用失败及用量原样保留；单独追加specificationRevalidations，记录响应摘要、输入和新规格版本。重复、过期、其他活动运行、待核对请求、篡改/缺失回执均拒绝，不授予审批或执行许可。
 
 引用允许逐字命中原文或用户回答。平台自己的上下文中若包含`答复：Windows`或完整问题加答复，可仅去除实际存在于合成输入的包装，再校验剩余答复是否逐字来自白名单；规格保存为规范化引用。纯模型问题和不存在于合成输入的伪造包装仍拒绝。
 
 规格预算耗尽时，retry在操作入口返回409，不重新派发、不追加模型尝试；页面禁用重试并解释保留回答及免费重新校验（若可用）。真实引用错误、无效JSON等通过固定错误分类显示，不透传模型正文或未知异常。
+
+### 补充规格信息并重新整理
+
+新增运行action `{action:"supplement_spec",revision,answers,retry:false}`。仅新版model运行、规格阶段失败、无其他活动运行/阶段或在途规格请求时可用；revision必须是当前`sourceRevision`。answers只接受当前失败`supplement.fields`列出的字段，每项最多4000字符，至少一项非空；未知字段、空答复、超长或非文本拒绝。`retry:false`只把补充内容保存为`specificationRepair`草稿，不调用模型、不改状态、不增加预算，供页面刷新后继续编辑。`retry:true`先校验仍有冻结规格调用预算，再把补充内容作为`kind:"spec_repair"`的问答轮次写入`clarificationHistory`，清除草稿、重置规格及下游阶段并重新调度；新模型输入为原需求快照加已保存回答，原sourceSnapshot/sourceRevision不变，`inputRevision`变化。补充问题使用固定问题文本，不是用户需求原文；模型只能在用户答复正文或原文中逐字引用。新规格仍需人工确认，不自动审批或生成计划。预算耗尽时只能保存草稿；补充草稿在直接`retry`规格阶段时也会先提交，避免保存内容被忽略。
 
 ## 模糊需求澄清
 

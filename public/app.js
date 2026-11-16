@@ -1,4 +1,5 @@
 import { createPlanningReview } from './planning-review.js';
+import { createSpecRepair } from './spec-repair.js';
 import { createExecutionPanel } from './execution-panel.js';
 import { createSourceChanges } from './source-changes.js';
 import { createSimulatedTasks, SIM_STATUS } from './simulated-tasks.js';
@@ -183,6 +184,20 @@ const planningReview = createPlanningReview({
   showArtifact: (name) => { showArtifact(name); $('#records-body').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); },
   toast,
 });
+function openSourceEditor() {
+  const section = $('#source-changes-section');
+  if (!section || section.hidden) { toast('当前项目没有可提交的原始需求修改入口。'); return; }
+  section.open = true;
+  section.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+}
+const specRepair = createSpecRepair({
+  container: $('#spec-repair-host'), getState: () => ({ run: historicalRun() ? { ...state.run, sourceSuperseded: true } : state.run, busy: state.busy || state.selectionPending }),
+  submit: reviewAction, refresh: async () => {
+    const id = state.run?.id, epoch = state.epoch;
+    const { run } = await api(basePath());
+    if (id === state.run?.id && epoch === state.epoch) { updateRun(run); schedulePoll(); }
+  }, toast, openSourceEditor,
+});
 
 function renderProjects() {
   $('#project-count').textContent = state.projects.length;
@@ -239,7 +254,7 @@ function renderControls() {
   $('#workflow-subtitle').textContent = run ? `${run.mode === 'model' ? '模型规划' : '本地规则规划'}　运行 ${run.id.slice(-8)}${run.workflowVersion === 2 ? '　两次人工确认' : '　旧版流程'}` : '六个阶段，两次确认，保留每版依据';
   $('#workflow-confirmation-legend').textContent = run && run.workflowVersion !== 2 ? '旧版流程：导出前确认' : '先确认规格，再确认计划';
   $('#source-history-notice').hidden = !historical;
-  planningReview.render(); syncSourceChanges();
+  planningReview.render(); specRepair.render(); syncSourceChanges();
   $('#event-count').textContent = run?.events?.length || 0;
   $('#task-count').textContent = run?.tasks?.length || 0;
   $('#artifact-count').textContent = run?.artifacts?.length || 0;
@@ -260,7 +275,8 @@ function renderInspector() {
   const artifacts = state.run?.artifacts?.filter((artifact) => artifact.stageId === stage.id) || [];
   const note = state.run?.status === 'awaiting_spec' && ['spec', 'architecture', 'tasks'].includes(stage.id) ? state.run.spec?.clarificationRequired ? '需求范围尚不明确。请在下方回答问题，再点击“根据回答整理规格”。' : '请在下方答复待确认问题并保存修订；确认规格后才会生成架构和任务。' : stage.id === 'export' && state.run?.status === 'awaiting_review' ? `检查下方计划后，点击“${state.run?.workflowVersion === 2 ? '确认计划并导出' : '确认并导出'}”继续。` : stage.status === 'blocked' ? '前置阶段尚未成功。解决失败并重试后，编排器会重新检查依赖。' : stage.status === 'succeeded' ? '本阶段结果已保存。后续重试会保留成功分支。' : '每个阶段成功后发布产物；下游只读取已成功的结果。';
   const failure = stage.id === 'spec' ? state.run?.specificationFailure : null;
-  const failureText = failure ? `${failure.message} ${failure.nextStep}` : stage.error;
+  const failureDetail = failure?.detail && failure.detail !== failure.message ? ` ${failure.detail}` : '';
+  const failureText = failure ? `${failure.message}${failureDetail} ${failure.nextStep}` : stage.error;
   const retryDisabled = state.busy || failure?.canRetry === false;
   const recovery = failure?.canRevalidate ? `<button class="button button-primary" data-revalidate-spec="${escape(failure.attemptId)}" ${state.busy ? 'disabled' : ''}>重新校验已保存响应（不调用模型）</button>` : '';
   const html = `<div class="inspector-eyebrow"><span>阶段详情</span><span class="status-tag status-${escape(stage.status)}">${escape(STATUS[stage.status] || stage.status)}</span></div><h3 class="inspector-title">${escape(stage.title)}</h3><p class="inspector-description">${escape(fallback.description)}</p><dl class="inspector-info"><dt>前置依赖</dt><dd>${stage.dependsOn.length ? stage.dependsOn.map((id) => escape(stageTitle(id))).join('、') : '无，可直接启动'}</dd><dt>尝试次数</dt><dd>${stage.attempt || '尚未执行'}</dd><dt>执行用时</dt><dd>${duration(stage)}</dd><dt>输出产物</dt><dd>${artifacts.length ? artifacts.map((artifact) => `<button class="inspector-artifact-link" data-artifact="${escape(artifact.name)}" data-focus-key="inspector-${escape(artifact.name)}">${escape(artifact.name)}</button>`).join('') : escape(fallback.output)}</dd></dl>${stage.error ? `<div class="stage-error">${escape(failureText)}${recovery}${state.run?.status === 'failed' && stage.status === 'failed' ? `<button class="button button-outline" data-retry="${escape(stage.id)}" data-focus-key="retry-${escape(stage.id)}" ${retryDisabled ? 'disabled' : ''}>${failure?.canRetry === false ? '调用次数已用尽' : '重试此阶段'}</button>` : ''}</div>` : ''}<p class="inspector-note">${escape(note)}</p>`;

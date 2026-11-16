@@ -330,3 +330,67 @@ test('重新校验最后一个异步边界之后输入变化不能发布旧规�
   await assert.rejects(x.orchestrator.action(x.project.id,x.run.id,{action:'revalidate_spec',attemptId:before.specificationHistory[0].id}),{status:409});
   assert.deepEqual(x.run,before);assert.equal(x.calls(),1);
 });
+
+test('规格引用失败给出具体位置和可补充字段，补充先保存再用一次预算重试且不自动确认', async t => {
+  let calls=0;const documents=[];
+  const bad=()=>{const value=raw();value.requirements[0].sourceQuote='only-in-model-question';return value;};
+  const x=await setup(t,{fetchImpl:async(_url,options)=>{calls++;documents.push(JSON.parse(JSON.parse(options.body).messages[1].content).document);return reply(JSON.stringify(calls===1?bad():raw()));}});
+  await terminal(x);
+  const failure=(await x.orchestrator.describeRun(x.project,x.run)).specificationFailure;
+  assert.equal(failure.reason,'requirement_quote_not_found');assert.equal(failure.requirementIndex,1);
+  assert.match(failure.message,/第1条需求「查看资源」/);assert.match(failure.message,/需求引用/);
+  assert.equal(failure.repairable,true);assert.equal(failure.supplement.available,true);
+  assert.deepEqual(failure.supplement.fields.map(field=>field.id),['evidence','scope','note']);
+  assert.equal(failure.supplement.canRetry,true);assert.match(failure.supplement.note,/不覆盖原始需求/);
+  assert.equal(JSON.stringify(failure).includes('only-in-model-question'),false);
+  const sourceBefore=structuredClone(x.run.sourceSnapshot),revisionBefore=x.run.sourceRevision;
+  await assert.rejects(x.orchestrator.action(x.project.id,x.run.id,{action:'supplement_spec',revision:revisionBefore,answers:{unknown:'x'},retry:false}),/不支持/);
+  await assert.rejects(x.orchestrator.action(x.project.id,x.run.id,{action:'supplement_spec',revision:'0'.repeat(64),answers:{evidence:'说明'},retry:false}),{status:409});
+  await x.orchestrator.action(x.project.id,x.run.id,{action:'supplement_spec',revision:revisionBefore,answers:{evidence:'首版只查看资源列表。'},retry:false});
+  assert.equal(calls,1);assert.equal(x.run.status,'failed');
+  const saved=(await x.orchestrator.describeRun(x.project,x.run)).specificationFailure.supplement.saved;
+  assert.equal(saved.evidence,'首版只查看资源列表。');
+  await x.orchestrator.action(x.project.id,x.run.id,{action:'supplement_spec',revision:revisionBefore,answers:{evidence:'首版只查看资源列表。'},retry:true});
+  await terminal(x,'awaiting_spec');
+  assert.equal(calls,2);assert.equal(x.run.specificationRepair,undefined);
+  assert.equal(x.run.clarificationHistory.at(-1).kind,'spec_repair');
+  assert.equal(x.run.approvals.spec,null);assert.equal(x.run.spec.requirements[0].title,'查看资源');
+  assert.ok(documents[1].includes('首版只查看资源列表。'));
+  assert.deepEqual(x.run.sourceSnapshot,sourceBefore);assert.equal(x.run.sourceRevision,revisionBefore);
+  assert.notEqual(x.run.specificationHistory[0].inputRevision,x.run.specificationHistory[1].inputRevision);
+});
+
+test('直接重试失败规格时一并带入已保存的补充信息，不额外增加调用', async t => {
+  let calls=0;const documents=[];
+  const bad=()=>{const value=raw();value.requirements[0].sourceQuote='not-in-source';return value;};
+  const x=await setup(t,{fetchImpl:async(_url,options)=>{calls++;documents.push(JSON.parse(JSON.parse(options.body).messages[1].content).document);return reply(JSON.stringify(calls===1?bad():raw()));}});
+  await terminal(x);
+  await x.orchestrator.action(x.project.id,x.run.id,{action:'supplement_spec',revision:x.run.sourceRevision,answers:{evidence:'首版只查看资源列表。'},retry:false});
+  await retry(x);await terminal(x,'awaiting_spec');
+  assert.equal(calls,2);assert.equal(x.run.specificationRepair,undefined);
+  assert.equal(x.run.clarificationHistory.at(-1).kind,'spec_repair');
+  assert.ok(documents[1].includes('首版只查看资源列表。'));
+  assert.equal(x.run.approvals.spec,null);assert.equal(x.run.sourceSnapshot.content,source);
+});
+
+test('没有需求也没有可回答问题失败后列出补充字段，预算耗尽仍可保存但不能再次调用', async t => {
+  const x=await setup(t,{fetchImpl:async()=>reply(JSON.stringify({...raw(),requirements:[],questions:[]})),options:{specificationMaxCalls:1}});
+  await terminal(x);
+  const failure=(await x.orchestrator.describeRun(x.project,x.run)).specificationFailure;
+  assert.equal(failure.reason,'no_requirements_or_questions');assert.equal(failure.repairable,true);
+  assert.deepEqual(failure.supplement.fields.map(field=>field.id),['goal','users','scope','acceptance']);
+  assert.equal(failure.supplement.canRetry,false);
+  await x.orchestrator.action(x.project.id,x.run.id,{action:'supplement_spec',revision:x.run.sourceRevision,answers:{scope:'首版只查看资源列表。'},retry:false});
+  assert.equal(x.calls(),1);assert.equal(x.run.specificationRepair.answers.scope,'首版只查看资源列表。');
+  await assert.rejects(x.orchestrator.action(x.project.id,x.run.id,{action:'supplement_spec',revision:x.run.sourceRevision,answers:{scope:'首版只查看资源列表。'},retry:true}),/已用尽/);
+  assert.equal(x.calls(),1);
+});
+
+test('模型响应已保存但后置规格校验失败时记录为规格校验失败，而不是版本失效', async t => {
+  const duplicate=raw();duplicate.questions=['是否需要审核？','是否需要审核？'];
+  const x=await setup(t,{fetchImpl:async()=>reply(JSON.stringify(duplicate))});await terminal(x);
+  const attempt=x.run.specificationHistory[0],failure=(await x.orchestrator.describeRun(x.project,x.run)).specificationFailure;
+  assert.equal(attempt.status,'failed');assert.equal(attempt.code,'invalid_model_response');
+  assert.equal(failure.repairable,true);assert.equal(failure.requirementIndex,undefined);
+  assert.equal(x.run.spec,null);assert.equal(x.run.approvals.spec,null);
+});

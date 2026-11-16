@@ -193,3 +193,11 @@ af093Windows默认来源核对修复经root/非作者同版98语法及显式668/
 root实际web:verify对该包全新副本HTTP18/18+Edge21/21，report output/delivery-verification/delivery-revalidation-Bfnx6D/revalidation.json，status checks_passed、taskAccepted/historicalAcceptanceVerified均false（不把包内历史声明当证明）。干净解压离线npm ci退出0、npm start实际启动localhost51033，7项版本/隐私/匿名拒绝/登录/借阅库存/归还重复409/登出及原源码不变检查全过，STOP_CONFIRMED退出0；停止后全部20交付文件hash仍一致。配置凭据、私有回执、本地路径、数据库均未出现在交付内容，已知凭据扫描通过。汇总final-recheck-delivery-summary.json、clean-start-smoke-73020f7.json为本轮事实，截图存在不代替业务检查。
 
 QA平台PTY正常STOP退出0；63820/57843/51033已无监听，4317仍原PID84732。旧两个报告565f25d7/67ffc342及修复报告9e72fdf5保持；e820 accepted/active0/preview none。此为固定参考软件交付，动态DSL、任意业务生成、团队/Worker能力不因此完成，未推送或部署。包的额外非作者复核另行保存，不把未跑的独立检查写成完成。
+
+## 2026-11-17 规格失败定位与补充修改
+
+基线`5aaae2e`。`npm run check`为114脚本语法通过；`npm test`为698项，668通过、30跳过、0失败、0取消，98,780.1309ms。30项跳过均为未启用真实MXC或显式真实Edge环境的既有集成项；本功能另跑真实Edge 1440px/390px浏览器回归。
+
+新增离线/编排回归4项：引用失败返回需求序号/标题及`evidence/scope/note`字段、保存草稿0模型调用、补充后1次预算内重试且不自动确认；直接重试带入已保存草稿；空需求且无问题返回补充字段、预算耗尽仍可保存但不能再次调用；已保存响应后置校验失败记录为`invalid_model_response`而非`stale_revision`。新增真实Edge回归2项覆盖诊断可见、免费保存、刷新恢复、显式重试进入待确认规格、无控制台错误/横向溢出。关联澄清、预算披露浏览器回归7/7通过。
+
+真实用户失败回执仅只读离线核对：可派生`requirement_quote_not_found`、第20条需求“浏览器网页应用交付形态”、剩余1次、`evidence/scope/note`补充字段；未改写原运行、未新增付费调用、未验证真实模型下一轮采纳质量。证据见`docs/tasks/specification-repair.md`。

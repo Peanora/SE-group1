@@ -3,7 +3,7 @@ const copy = (value) => structuredClone(value);
 const short = (value) => value ? String(value).slice(0, 10) : '尚未生成';
 const lines = (value) => String(value).split('\n').map((line) => line.trim()).filter(Boolean);
 const date = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—';
-const actionNames = { use_platform_defaults: '采用平台默认方案', clarify_spec: '补充需求并整理规格', approve_spec: '确认规格', reject_spec: '退回规格', revise_spec: '修订规格', approve_plan: '确认计划', reject_plan: '退回计划', revise_plan: '修订计划' };
+const actionNames = { use_platform_defaults: '采用平台默认方案', clarify_spec: '补充需求并整理规格', supplement_spec: '补充规格信息', approve_spec: '确认规格', reject_spec: '退回规格', revise_spec: '修订规格', approve_plan: '确认计划', reject_plan: '退回计划', revise_plan: '修订计划' };
 
 // This editor owns its inputs. Polling updates status without replacing live drafts or focus.
 export function createPlanningReview({ container, getState, submit, refresh, showArtifact, toast }) {

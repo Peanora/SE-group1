@@ -1,0 +1,61 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { chromium } from 'playwright-core';
+import { createApp } from '../server.mjs';
+import * as planner from '../lib/planner.mjs';
+
+for (const width of [1440, 390]) test(`Edge ${width}px：规格失败可定位、保存补充信息并在提示后重新整理`, { timeout: 60000 }, async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'taskflow-spec-repair-browser-'));
+  const source = '我想做一个资源查看系统';
+  const valid = { title: '资源查看系统', summary: '首版提供资源列表', goals: ['查看资源'], roles: [], acceptanceScenarios: [], constraints: [], assumptions: [], questions: [], requirements: [{ title: '查看资源', description: '用户可以查看资源列表', sourceQuote: source, acceptance: ['用户可以看到资源列表'] }], stack: { frontend: 'HTML/CSS/JS', backend: 'Node.js', storage: 'SQLite' } };
+  const invalid = structuredClone(valid); invalid.requirements[0].sourceQuote = '模型问题中的文字';
+  let calls = 0, received = '';
+  const app = await createApp({ dataDir: directory, stepDelayMs: 0, planner: { ...planner,
+    getModelConfig: () => ({ configured: true, model: 'spec-repair-mock' }),
+    analyzeWithModel: (text, name, options) => planner.analyzeWithModel(text, name, { ...options, config: { baseUrl: 'http://localhost', model: 'spec-repair-mock', apiKey: '' }, fetchImpl: async () => {
+      calls++; received = text;
+      return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(calls === 1 ? invalid : valid) } }] }));
+    } }) } });
+  let browser;
+  t.after(async () => { await browser?.close(); await app.close(); assert.equal(path.dirname(directory), path.resolve(os.tmpdir())); await rm(directory, { recursive: true, force: true }); });
+  const project = await app.store.create({ name: '资源项目', source: { filename: 'requirements.md', content: source } });
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  browser = await chromium.launch({ channel: 'msedge', headless: true });
+  const page = await browser.newPage({ viewport: { width, height: 950 } }), errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  await page.goto(`http://127.0.0.1:${app.server.address().port}`);
+  await page.locator('#mode-select').selectOption('model');
+  await page.locator('#start-run').click();
+  await page.getByRole('heading', { name: '规格整理未完成：定位问题并补充信息', exact: true }).waitFor();
+  assert.match(await page.locator('#stage-inspector').innerText(), /第1条需求/);
+  assert.match(await page.locator('#spec-repair-host').innerText(), /第 1 条需求/);
+  assert.equal(await page.locator('[data-spec-repair-field="evidence"]').count(), 1);
+  assert.equal(await page.locator('[data-spec-repair-field="scope"]').count(), 1);
+  assert.equal(await page.locator('[data-spec-repair-action="save"]').isDisabled(), true);
+  await page.locator('[data-spec-repair-field="evidence"]').fill('首版只查看资源列表。');
+  assert.equal(await page.locator('[data-spec-repair-action="save"]').isEnabled(), true);
+  await page.locator('[data-spec-repair-action="save"]').click();
+  await page.getByText('补充信息已保存；本次未调用模型', { exact: true }).waitFor();
+  assert.equal(calls, 1);
+  assert.equal(app.store.get(project.id).runs[0].specificationRepair.answers.evidence, '首版只查看资源列表。');
+  await page.reload();
+  await page.getByRole('heading', { name: '规格整理未完成：定位问题并补充信息', exact: true }).waitFor();
+  assert.equal(await page.locator('[data-spec-repair-field="evidence"]').inputValue(), '首版只查看资源列表。');
+  await page.locator('[data-spec-repair-action="retry"]').click();
+  await page.getByRole('heading', { name: '先确认规格，再生成开发计划', exact: true }).waitFor();
+  assert.equal(calls, 2);
+  assert.ok(received.includes('首版只查看资源列表。'));
+  const run = app.store.get(project.id).runs[0];
+  assert.equal(run.status, 'awaiting_spec');
+  assert.equal(run.approvals.spec, null);
+  assert.equal(run.specificationRepair, undefined);
+  assert.equal(run.clarificationHistory.at(-1).kind, 'spec_repair');
+  assert.equal(run.sourceSnapshot.content, source);
+  assert.equal(await page.getByRole('button', { name: '确认规格并继续', exact: true }).isEnabled(), true);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  assert.deepEqual(errors, []);
+});
