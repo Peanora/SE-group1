@@ -139,6 +139,12 @@ test('roles and requirement maps come only from fixed context; tasks must cover 
   rejects(raw => { raw.tasks.forEach(item => { item.requirementIds = ['REQ1']; }); }, /覆盖/u); rejects(raw => { raw.tasks[0].requirementIds = []; });
 });
 
+test('OpenAPI-style route parameters are normalized to the platform colon form', () => {
+  const raw = proposal(); raw.routes[1].path = '/api/issues/{issueId}/assignee';
+  const result = draft(raw);
+  assert.equal(result.proposal.routes[1].path, '/api/issues/:parameter/assignee');
+});
+
 test('REST and view paths reject URLs/encoding/traversal, and parameter-renaming cannot duplicate endpoints', () => {
   for (const path of ['https://external.invalid/', '//external.invalid/a', '/api/%2e%2e/secret', '/api/../secret', '/api//x', '/api\\x', '/api#fragment', '/api?x=1', '/api/:id/:id', '/api/:id.json', '/api/']) {
     rejects(raw => { raw.routes[0].path = path; }); rejects(raw => { raw.views[0].path = path; });

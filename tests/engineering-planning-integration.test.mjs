@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rm, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -82,6 +83,27 @@ test('共享无效草案同时失败，重试共享新尝试并保留旧回执�
   await waitFor(() => x.run.status === 'awaiting_review');
   assert.equal(x.calls(), 2); assert.equal(x.run.engineeringHistory.length, 2); assert.deepEqual(x.run.engineeringHistory[0], old);
   assert.notEqual(x.run.engineeringHistory[1].receipt.id, old.receipt.id);
+});
+
+test('失败后可免费重新校验更早的已保存工程草案并继续，不新增模型调用', async t => {
+  const x = await setup(t, { fetchImpl: async () => reply('{"version":1') });
+  await x.approve(); await waitFor(() => x.run.status === 'failed');
+  const calls = x.calls(), run = x.run, project = x.project;
+  const value = proposal(); value.routes[0].path = '/api/resources/{resourceId}';
+  const id = '11111111-1111-4111-8111-111111111111';
+  const content = JSON.stringify(value), receiptText = JSON.stringify({ model: 'design-mock', finishReason: 'stop', usage: { inputTokens: 23, outputTokens: 34 }, content });
+  const directory = path.join(x.directory, '.private', 'engineering-receipts', project.id, run.id);
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, `${id}.json`), receiptText);
+  run.engineeringHistory.push({ id, attempt: 2, specRevision: run.specRevision, sourceRevision: run.sourceRevision, modelPolicyHash: engineeringModelPolicy.hash,
+    status: 'failed', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), model: 'design-mock', usage: { inputTokens: 23, outputTokens: 34 },
+    finishReason: 'stop', receipt: { id, sha256: createHash('sha256').update(receiptText).digest('hex'), bytes: Buffer.byteLength(receiptText) }, receiptState: 'saved', code: 'invalid_model_response' });
+  await x.orchestrator.action(project.id, run.id, { action: 'revalidate_engineering' });
+  await waitFor(() => run.status === 'awaiting_review');
+  assert.equal(x.calls(), calls); assert.equal(run.engineeringCalls, 1); assert.equal(run.engineeringHistory.length, 2);
+  assert.equal(run.tasks.length, 1); assert.equal(run.engineeringPlan.proposal.routes[0].path, '/api/resources/:parameter');
+  assert.equal(run.engineeringRevalidations.length, 1); assert.equal(run.engineeringRevalidations[0].attemptId, id);
+  assert.equal(run.approvals.plan, null);
 });
 
 test('串行阶段也共用失败缓存，传输/配置错误无回退且未知用量不填零', async t => {
