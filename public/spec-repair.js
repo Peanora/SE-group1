@@ -39,16 +39,15 @@ export function createSpecRepair({ container, getState, submit, refresh, toast, 
   }
   function sync() {
     if (!current || container.hidden) return;
-    const { busy, failure, supplement } = validState();
-    if (!busy && supplement) {
-      const hasAnswer = (supplement.fields || []).some(field => String(current.answers[field.id] || '').trim());
-      $$('[data-spec-repair-action="save"]').forEach(button => { button.disabled = pending || busy || !hasAnswer; });
-      $$('[data-spec-repair-action="retry"]').forEach(button => { button.disabled = pending || busy || !hasAnswer || !supplement.canRetry; });
-      $$('[data-spec-repair-action="source"]').forEach(button => { button.disabled = pending || busy; });
-      const status = container.querySelector('#spec-repair-status');
-      if (status) status.textContent = !hasAnswer ? '请至少填写一项补充信息。' : !supplement.canRetry ? '本次规格调用次数已用尽；可以保存补充信息，但不能再调用模型。' : pending ? '正在处理…' : '可以仅保存补充信息，也可以保存后重新整理规格。重新整理会新增一次模型请求。';
-    }
-    $$('input, textarea').forEach(element => { element.disabled = pending || busy; });
+    const { busy, supplement } = validState();
+    const lock = pending || busy;
+    const hasAnswer = Boolean(supplement && (supplement.fields || []).some(field => String(current.answers[field.id] || '').trim()));
+    $$('[data-spec-repair-action="save"]').forEach(button => { button.disabled = lock || !hasAnswer; });
+    $$('[data-spec-repair-action="retry"]').forEach(button => { button.disabled = lock || !hasAnswer || !supplement?.canRetry; });
+    $$('[data-spec-repair-action="source"]').forEach(button => { button.disabled = lock; });
+    $$('input, textarea').forEach(element => { element.disabled = lock; });
+    const status = container.querySelector('#spec-repair-status');
+    if (status && supplement) status.textContent = !hasAnswer ? '请至少填写一项补充信息。' : !supplement.canRetry ? '本次规格调用次数已用尽；可以保存补充信息，但不能再调用模型。' : pending ? '正在处理…' : '可以仅保存补充信息，也可以保存后重新整理规格。重新整理会新增一次模型请求。';
     const error = container.querySelector('#spec-repair-error');
     if (error) { error.textContent = current.error || ''; error.hidden = !current.error; }
   }
