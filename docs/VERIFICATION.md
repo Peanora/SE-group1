@@ -217,3 +217,9 @@ QA平台PTY正常STOP退出0；63820/57843/51033已无监听，4317仍原PID8473
 `npm run acceptance -- --out output/acceptance-smoke2`实际结果：`planning_passed_only`，规划通过、可复现、模型调用0；两次运行均8条需求、12个任务，文档哈希和计划投影一致，ZIP均含7个预期文件。`npm test`包含该验收回归。
 
 `npm run acceptance -- --out output/acceptance-smoke-web --archive output/live-web-delivery-3lVPQC/library-web-source.zip`：规划通过；固定Web复核返回failed，原因是本地ZIP为旧独立验收规则生成，当前`manifestHash/browserManifestHash/reviewPolicyHash`不一致。没有把旧包历史Review当作新结论，未放宽规则；报告`complete:false`。需使用当前规则重新生成的源码包和本机MXC/Edge才能完成Web部分。证据见`docs/tasks/reproducible-acceptance.md`和`docs/ACCEPTANCE.md`。
+
+## 2026-11-17 工程草案自动修正与本地兜底
+
+生产代码`92efd53`。`npm run check`为117脚本语法通过；`npm test`为703项，673通过、30跳过、0失败、0取消，99,368.0102ms。30项跳过为未启用真实MXC或显式真实Edge的既有集成项。
+
+新增回归：无效工程JSON首次失败后自动带具体校验反馈重试一次，第二次成功，engineeringCalls=2且两条私有回执保留；模型连续失败后显式`use_local_engineering`不新增模型调用，本地架构/任务/检查成功并停在计划确认，plan.json含engineeringFallback；`{resourceId}`路径和`text/image/textarea`等ARIA别名规范化并写回；原免费重校验、预算耗尽、凭据/传输/取消边界保持通过。未调用真实付费模型，未修改用户运行。证据见`docs/tasks/engineering-auto-repair.md`。

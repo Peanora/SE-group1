@@ -131,9 +131,13 @@ approvals为`{spec:null|{revision,at,feedback},plan:null|{revision,specRevision,
 
 每运行默认最多3次工程适配器尝试，单次60秒；失败不静默回退规则。engineeringCalls记录尝试预留，不等于已证实收费请求数。engineeringHistory只公开版本、状态、模型/用量、结束枚举及回执摘要；原四字段回执仅保存在data/.private，不能进入导出包。用量未知为null；回执IO超时/取消后未确认标unconfirmed，迟到结果不能发布。最终保存失败撤回草案及成功状态，公开固定persistence_failed，不传播底层路径/异常。工程草案仍为structural_only、待开发且须计划确认，不授予执行权限。
 
-模型常把路由参数写成OpenAPI风格的`{recordId}`；控制器在校验前将其规范化为平台使用的`:recordId`，规范化后的完整草案参与hash和文档渲染。路径仍必须是应用内相对路径，空段、点段、编码、重复参数和不安全字符继续拒绝。
+模型常把路由参数写成OpenAPI风格的`{recordId}`、把纯文本选择器角色写成`text`；控制器在校验前把前者规范化为`:recordId`，把`text/image/textarea/select/dropdown/anchor/listbox`等常见别名映射到有效ARIA角色，并把规范化结果写回草案参与hash和文档渲染。路径仍必须是应用内相对路径，空段、点段、编码、重复参数和不安全字符继续拒绝。
 
-失败的architecture/tasks GET可附加`engineeringFailure`：固定code/attemptId、remaining、canRetry、canRevalidate、message及nextStep。`{action:"revalidate_engineering"}`仅用于新版model运行、规格已确认且architecture/tasks失败、无其他活动阶段/运行/规格请求；服务器按attempt从新到旧读取同当前specRevision/sourceRevision的私有工程回执，核对普通文件、字节数和SHA256，解析并重新执行当前结构校验。任一保存草案通过后发布其规范化engineeringPlan；只追加engineeringRevalidations（attemptId、hash、policyHash、时间），不改写原失败、用量或engineeringCalls，不调用模型。新草案不能引入规格外实体/接口/页面/可写文件；不授予计划确认或执行许可。若所有保存草案仍不符合规则，409返回当前校验说明；JSON、回执、运行版本或活动状态不匹配均拒绝。公开接口不返回私有回执正文、路径或异常。
+模型草案首次未通过`invalid_model_response`（JSON不合法或结构校验失败）时，控制器自动带**控制器自己的校验说明**再请求一次；该说明包含具体路由/页面/任务/文件位置，例如“共享文件src/app.mjs的任务A与任务B必须处于同一串行依赖链”或“页面VIEW的选择器X角色无效”。自动修正消耗下一次engineeringCalls和私有回执，只尝试一次；若第二次仍失败才进入失败停点。反馈只含固定校验文本，不含整个模型正文或私有路径。
+
+失败的architecture/tasks GET可附加`engineeringFailure`：固定code/attemptId、remaining、canRetry、canRevalidate、canUseLocal、message、可选detail及nextStep。`{action:"revalidate_engineering"}`仅用于新版model运行、规格已确认且architecture/tasks失败、无其他活动阶段/运行/规格请求；服务器按attempt从新到旧读取同当前specRevision/sourceRevision的私有工程回执，核对普通文件、字节数和SHA256，解析并重新执行当前结构校验。任一保存草案通过后发布其规范化engineeringPlan；只追加engineeringRevalidations（attemptId、hash、policyHash、时间），不改写原失败、用量或engineeringCalls，不调用模型。新草案不能引入规格外实体/接口/页面/可写文件；不授予计划确认或执行许可。若所有保存草案仍不符合规则，409返回当前校验说明；JSON、回执、运行版本或活动状态不匹配均拒绝。公开接口不返回私有回执正文、路径或异常。
+
+`{action:"use_local_engineering"}`是显式兜底：仅新版model运行、规格已确认、architecture/tasks失败且没有engineeringPlan时可用。它不调用模型，写入`engineeringFallback{version,specRevision,at,reason}`，清除engineeringPlan，重置architecture/tasks/review/export并由本地确定性规则生成架构、任务和检查；任务仍须人工计划确认。架构/task文档和plan.json明确标注`本地规则生成`/`engineeringFallback`，不是模型工程草案，不授予执行许可。规格修订会清除该兜底，使新规格回到模型工程规划；预算耗尽仍可使用本地兜底。自动修正与本地兜底都不静默把模型失败当成成功。
 
 ## 内部规划函数
 
