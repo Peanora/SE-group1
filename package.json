@@ -15,6 +15,7 @@
     "simulation:demo": "node scripts/create-simulation-demo.mjs",
     "simulation:test": "node --test --test-concurrency=2 tests/simulated-tasks.test.mjs tests/simulated-tasks-browser.test.mjs tests/engineering-plan.test.mjs tests/engineering-planning-integration.test.mjs tests/planning-review.test.mjs tests/planning-project-actions.test.mjs tests/server.test.mjs tests/store.test.mjs tests/orchestrator.test.mjs tests/source-change-http.test.mjs",
     "check": "node scripts/check-syntax.mjs",
+    "acceptance": "node scripts/acceptance.mjs",
     "execution:check": "node scripts/check-executor.mjs",
     "web:check": "node scripts/check-web-executor.mjs",
     "web:verify": "node scripts/verify-web-delivery.mjs"
