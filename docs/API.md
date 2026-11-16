@@ -1,5 +1,12 @@
 # 本地原型接口约定
 
+## 问答确认来源
+
+控制器从已保存clarificationHistory派生C-轮次-问题序号来源。明确“都要/全部需要”等全选回答只授权对应列举选项；单一、无备选项的明确肯定可授权对应事项。否定不授权问题引用；含糊/多问句确认标记unresolved，并在规格中保留需进一步回答的问题。来源同时保留原问题、原回答、decision及quotes，不授予执行或审批权限。
+
+规格请求可信options新增confirmedSources（有界文本数组，每项为带编号的来源JSON文本），不从HTTP接收该参数；与document一起作为模型输入数据。引用白名单由原文、回答及派生的confirmed选项组成，回执复核和人工修订相同。原planningSourceText不变，既有inputRevision仍能核对原问答；新规格clarificationSources/version=confirmed-qa-v1及需求sourceRefs保存来源，参与specRevision。客户端不能伪造来源记录或引用编号。已有失败仍走hash绑定私有回执免费重新校验，不新增调用或改写旧失败，恢复后仍需人工确认。
+
+
 ## 平台默认方案与项目删除
 
 用户2026-11-16明确选择当前只使用平台统一Web方案。新版workflowVersion=2的本地规则、模型规格、修订和免费响应恢复，均由控制器设置stack={frontend:"HTML/CSS/JS",backend:"Node.js",storage:"SQLite"}及platformDefaults/web-v1，参与specRevision。模型技术栈缺失或客户端技术配置不能覆盖默认值；旧适配器默认行为与v1记录不补造新方案。纯粹技术选型问题不要求用户回答，审计、加密、数据保存及未知问题保留。页面和spec.md明确Web交付边界，不声称原生Windows安装包已实现。
