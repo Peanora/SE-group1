@@ -1,4 +1,16 @@
-﻿# 当前实现与开发交接
+# 当前实现与开发交接
+
+## 2026-11-17 工程草案免费重新校验
+
+用户最新 `library-system` 运行在 architecture/tasks 连续失败。只读核对保存回执：第1次草案合法但8个接口路径使用 `{recordId}`，平台只接受 `:recordId`；第2次草案合法但页面选择器使用无效ARIA角色 `text`。两次共消耗2/3工程调用，页面只显示通用失败，用户无法复用第1次已保存的可用草案。生产代码`a1d9dd8`。
+
+本轮在工程校验前把OpenAPI风格 `{param}` 规范化为 `:param` 并写回草案；路径安全规则不变。新增 `revalidate_engineering`：仅失败的新版model运行、规格已确认且architecture/tasks失败时，按attempt从新到旧读取同specRevision/sourceRevision的服务器自有回执，核对普通文件/字节/SHA256后重新执行当前结构校验；任一草案通过即发布engineeringPlan，原失败、用量和engineeringCalls不变，单独追加engineeringRevalidations，不调用模型，再重置架构/任务/检查/导出并继续。无可用草案时409返回校验说明。失败DTO增加engineeringFailure（remaining/canRetry/canRevalidate/message/nextStep），页面在architecture/tasks失败时提供“重新校验保存的工程草案（不调用模型）”。
+
+验证：`npm run check`为114脚本语法通过；`npm test`为700项，670通过、30跳过、0失败、0取消，97,506.0123ms；跳过均为未启用真实MXC或显式真实Edge的既有集成项。新增单元回归验证 `{issueId}` 路由规范化；新增集成回归构造更早保存回执，执行重新校验后模型调用不变、任务/检查恢复并停在计划确认。真实用户运行 `library-system`/`4d3eb701-fd5f-4d4b-9e29-343836ad878a` 已实际执行该动作：状态由failed变为awaiting_review，architecture/tasks/review succeeded，10个任务，review通过，engineeringCalls仍为2，planRevision `9fc9de13…`，计划审批仍为空。原两次失败事件、用量和私有回执保留；未自动确认计划、未导出、未新增付费调用。
+
+本地服务最终监听12792、启动器19664；健康接口200，4个项目可读取。用户刷新后打开 `library-system` 的最新运行，核对架构/任务/检查与计划，再点击“确认计划并导出”即可；未替用户确认。按钮接线经语法检查，动作经HTTP与集成验证；本轮没有单独的该按钮真实Edge截图。
+
+限制：只规范化路由参数写法；JSON损坏、共享文件并行写、无效ARIA角色等仍会拒绝，需重试模型或调整规则。重新校验复用旧模型响应，业务语义仍须人工审阅，不代表软件已编码或验收。
 
 ## 2026-11-17 规格失败定位与补充修改
 

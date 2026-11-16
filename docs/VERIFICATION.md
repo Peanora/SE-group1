@@ -1,4 +1,4 @@
-﻿# 首版验证记录
+# 首版验证记录
 
 验证日期：2026 年 11 月 10 日。环境：Windows，Node.js v22.21.0，浏览器 Chromium。
 
@@ -201,3 +201,11 @@ QA平台PTY正常STOP退出0；63820/57843/51033已无监听，4317仍原PID8473
 新增离线/编排回归4项：引用失败返回需求序号/标题及`evidence/scope/note`字段、保存草稿0模型调用、补充后1次预算内重试且不自动确认；直接重试带入已保存草稿；空需求且无问题返回补充字段、预算耗尽仍可保存但不能再次调用；已保存响应后置校验失败记录为`invalid_model_response`而非`stale_revision`。新增真实Edge回归2项覆盖诊断可见、免费保存、刷新恢复、显式重试进入待确认规格、无控制台错误/横向溢出。关联澄清、预算披露浏览器回归7/7通过。
 
 真实用户失败回执仅只读离线核对：可派生`requirement_quote_not_found`、第20条需求“浏览器网页应用交付形态”、剩余1次、`evidence/scope/note`补充字段；未改写原运行、未新增付费调用、未验证真实模型下一轮采纳质量。证据见`docs/tasks/specification-repair.md`。
+
+## 2026-11-17 工程草案免费重新校验
+
+生产代码`a1d9dd8`。`npm run check`为114脚本语法通过；`npm test`为700项，670通过、30跳过、0失败、0取消，97,506.0123ms。30项跳过为未启用真实MXC或显式真实Edge的既有集成项。
+
+新增单元回归：`{issueId}`路由参数规范化为`:parameter`并写回草案。新增集成回归：更早的saved工程回执在运行失败后可经`revalidate_engineering`复用，不新增模型调用、engineeringCalls不变，任务与检查恢复并停在计划确认。临时数据副本对真实`library-system`失败运行复演：failed→awaiting_review，10任务、review通过。
+
+实际运行`library-system/4d3eb701-fd5f-4d4b-9e29-343836ad878a`已执行免费重新校验：使用第1次保存草案，`{recordId}`规范化后通过；architecture/tasks/review succeeded，engineeringCalls保持2，planRevision `9fc9de131e3880468e3a7a271338ad4985ae22c57cebeb189342a571614e6612`，审批为空。原两次失败、用量和回执未改写；未确认计划或导出，未新增付费调用。证据见`docs/tasks/engineering-draft-recovery.md`。
