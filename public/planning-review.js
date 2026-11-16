@@ -3,7 +3,7 @@ const copy = (value) => structuredClone(value);
 const short = (value) => value ? String(value).slice(0, 10) : '尚未生成';
 const lines = (value) => String(value).split('\n').map((line) => line.trim()).filter(Boolean);
 const date = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—';
-const actionNames = { clarify_spec: '补充需求并整理规格', approve_spec: '确认规格', reject_spec: '退回规格', revise_spec: '修订规格', approve_plan: '确认计划', reject_plan: '退回计划', revise_plan: '修订计划' };
+const actionNames = { use_platform_defaults: '采用平台默认方案', clarify_spec: '补充需求并整理规格', approve_spec: '确认规格', reject_spec: '退回规格', revise_spec: '修订规格', approve_plan: '确认计划', reject_plan: '退回计划', revise_plan: '修订计划' };
 
 // This editor owns its inputs. Polling updates status without replacing live drafts or focus.
 export function createPlanningReview({ container, getState, submit, refresh, showArtifact, toast }) {
@@ -54,11 +54,11 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
       const remaining = Math.max(0, Math.min(run.specificationBudget?.maxCalls ?? 3, getState().health?.modelPlanning?.specificationMaxCalls ?? 3) - (run.specificationCalls ?? 0));
       return `<p class="review-help">你已提供项目想法，但具体范围还不明确。请补充以下信息；不确定的项目可以写明“首版暂不包含”。回答会保留，原始需求不会被覆盖。</p><section class="review-questions"><h4>需要补充的信息</h4><span id="review-question-count"></span>${(run.specQuestions || []).map(q => `<div class="review-question">${field(`${q.id}　${q.question}（必须回答）`, `answer.${q.id}`, draft.answers[q.id] || '', { multiline: true, rows: 3, max: 4000 })}</div>`).join('')}</section><p class="review-help">“保存修订”只保存回答，不调用模型。“根据回答整理规格”会新增一次模型请求，产生正常用量；当前运行剩余最多 ${remaining} 次。整理后仍需确认规格，尚未开始编码。</p>`;
     }
-    return `<div class="review-form-grid">${field('规格标题', 'spec.title', spec.title, { max: 300 })}${field('需求摘要', 'spec.summary', spec.summary, { multiline: true, rows: 3, max: 10000 })}</div>
-      <fieldset class="review-stack"><legend>技术选型</legend>${field('前端', 'stack.frontend', spec.stack?.frontend || '', { max: 500 })}${field('服务端', 'stack.backend', spec.stack?.backend || '', { max: 500 })}${field('数据存储', 'stack.storage', spec.stack?.storage || '', { max: 500 })}</fieldset>
+    return `<div class="review-form-grid">${field('规格标题', 'spec.title', spec.title, { max: 200 })}${field('需求摘要', 'spec.summary', spec.summary, { multiline: true, rows: 3, max: 10000 })}</div>
+      <section class="review-stack"><strong>${spec.platformDefaults ? '平台默认方案（无需填写）' : '旧版技术配置（请采用平台默认方案）'}</strong><p>${escape(spec.platformDefaults?.description || '当前仅支持平台统一的网页方案；采用后会重新生成规格版本并保留回答。')}</p><details><summary>查看技术配置</summary><p>前端：${escape(spec.stack?.frontend || '待确定')}；服务端：${escape(spec.stack?.backend || '待确定')}；存储：${escape(spec.stack?.storage || '待确定')}</p></details></section>
       <details class="review-context" data-review-details="context"><summary>目标、角色与其他规格内容（只读）</summary><div class="review-context-grid"><div><h4>项目目标</h4>${list(spec.goals)}<h4>用户角色</h4>${list(spec.roles)}</div><div><h4>约束</h4>${list(spec.constraints)}<h4>假设</h4>${list(spec.assumptions)}<h4>验收场景</h4>${list(spec.acceptanceScenarios)}</div></div></details>
       <div class="review-section-heading"><h4>需求与验收</h4><span>${spec.requirements?.length || 0} 项；原文引用保留</span></div>
-      <div class="review-item-list">${(spec.requirements || []).map((requirement, index) => `<details class="review-item" data-review-details="requirement-${index}" ${index === 0 ? 'open' : ''}><summary><span>${escape(requirement.id)}</span><strong>${escape(requirement.title)}</strong></summary><div class="review-item-body">${field('需求标题', `requirement.${index}.title`, requirement.title, { max: 300 })}${field('需求描述', `requirement.${index}.description`, requirement.description, { multiline: true, rows: 3 })}${field('验收条件', `requirement.${index}.acceptance`, (requirement.acceptance || []).join('\n'), { multiline: true, rows: 3, help: '每行一条可检查的条件。' })}<div class="review-source"><strong>原文引用（只读）</strong><blockquote>${escape(requirement.sourceQuote)}</blockquote></div></div></details>`).join('')}</div>
+      <div class="review-item-list">${(spec.requirements || []).map((requirement, index) => `<details class="review-item" data-review-details="requirement-${index}" ${index === 0 ? 'open' : ''}><summary><span>${escape(requirement.id)}</span><strong>${escape(requirement.title)}</strong></summary><div class="review-item-body">${field('需求标题', `requirement.${index}.title`, requirement.title, { max: 200 })}${field('需求描述', `requirement.${index}.description`, requirement.description, { multiline: true, rows: 3 })}${field('验收条件', `requirement.${index}.acceptance`, (requirement.acceptance || []).join('\n'), { multiline: true, rows: 3, help: '每行一条可检查的条件。' })}<div class="review-source"><strong>原文引用（只读）</strong><blockquote>${escape(requirement.sourceQuote)}</blockquote></div></div></details>`).join('')}</div>
       <section class="review-questions" aria-labelledby="review-questions-title"><div class="review-section-heading"><h4 id="review-questions-title">待确认问题</h4><span id="review-question-count"></span></div><p class="review-help">逐项写明决定，再点击“保存修订”。保存回答后，仍需单独确认规格。</p>${(run.specQuestions || []).length ? run.specQuestions.map((q, index) => `<div class="review-question">${field(`${q.id}　${q.question}${q.blocking ? '（必须回答）' : ''}`, `answer.${q.id}`, draft.answers[q.id] || '', { multiline: true, rows: 2, max: 4000 })}<button type="button" class="text-button" data-suggest-answer="${index}">填入推荐回答</button></div>`).join('') : '<p class="review-help">本版没有待确认问题。</p>'}<p class="review-help" id="review-suggestion-note" hidden>推荐回答来自本地规则，只是一项建议。请核对并修改，再自行保存和确认。</p></section>`;
   }
   function planEditor(run, draft) {
@@ -89,6 +89,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     const blocked = !legacy && rejected(run, draft.kind, revision);
     const lock = busy || pending;
     $$('input, textarea, [data-suggest-answer]').forEach((element) => { element.disabled = lock || !waiting; });
+    $$('[data-platform-defaults]').forEach(button => { button.disabled = lock; });
     $$('[data-review-mode]').forEach((button) => { button.disabled = lock; });
     $$('[data-review-action]').forEach((button) => {
       const action = button.dataset.reviewAction;
@@ -133,6 +134,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     const version = kind === 'spec' ? run.specVersion : run.planVersion;
     const failedSpec = run.status === 'failed' && run.stages?.some(s => s.id === 'spec' && s.status === 'failed');
     container.innerHTML = `<div class="review-intro"><span class="review-check" aria-hidden="true">${failedSpec ? '!' : active ? '?' : '✓'}</span><div><h3 id="review-heading">${failedSpec ? '规格整理未完成，回答已保留' : legacy ? '旧版记录：开发计划等待审阅' : revisingSpec ? '修订已确认规格' : active ? kind === 'spec' ? run.spec?.clarificationRequired ? '需要补充需求信息' : '先确认规格，再生成开发计划' : '开发计划已生成，请确认后导出' : '本次运行的确认与修订记录'}</h3><p>${legacy ? '这条记录沿用旧版流程；本次确认仅用于导出规划文档。' : revisingSpec ? '保存新规格会使现有规格确认和开发计划失效。你需要重新确认规格，再生成并确认计划。' : active ? run.spec?.clarificationRequired ? '这不是执行故障。模型还无法确定具体功能，请回答下方问题后继续。' : '修改与确认分开记录，每次确认只对所显示的保存版本有效。' : '这里保留真实确认依据。开发任务仍需后续编码与验收。'}</p></div><button type="button" class="text-button" data-review-document="${kind === 'spec' ? 'spec.md' : 'task.md'}">${kind === 'spec' ? '查看规格文档' : '查看任务文档'}</button></div>
+      ${run.workflowVersion === 2 && !run.spec?.platformDefaults && ['awaiting_spec','awaiting_review','failed'].includes(run.status) && run.stages?.find(s => s.id === 'spec')?.status === 'succeeded' ? '<div class="review-plan-basis"><p>当前统一按浏览器网页应用规划，无需填写技术方案。旧规格需要免费采用默认方案，并重新确认。</p><button type="button" class="button button-primary" data-platform-defaults>采用默认方案并重新确认</button></div>' : ''}
       ${localMode ? `<div class="review-plan-basis"><button type="button" class="text-button" data-review-mode="${revisingSpec ? 'plan' : 'spec'}">${revisingSpec ? '返回计划审阅' : '返回规格修订'}</button><p>${revisingSpec ? '尚未保存的规格草稿不会改变已确认规格。返回计划审阅时，两份草稿都会保留。' : '发现规格问题可返回修订。切换视图会保留尚未保存的计划和规格草稿。'}</p></div>` : ''}
       ${legacy ? '' : `<ol class="review-steps"><li class="${run.approvals?.spec?.revision === run.specRevision ? 'confirmed' : kind === 'spec' ? 'current' : ''}"><span>1</span><div><strong>确认规格</strong><small>第 ${escape(run.specVersion || 1)} 版 / ${escape(short(run.specRevision))}</small></div></li><li class="${run.approvals?.plan?.revision === run.planRevision && run.planRevision ? 'confirmed' : kind === 'plan' && active ? 'current' : ''}"><span>2</span><div><strong>确认开发计划</strong><small>${run.planRevision ? `第 ${escape(run.planVersion || 1)} 版 / ${escape(short(run.planRevision))}` : '规格确认后生成'}</small></div></li></ol><p class="review-version">${kind === 'spec' ? '规格' : '计划'}第 ${escape(version || 1)} 版 / ${escape(short(revision))}${run.sourceRevision ? ` / 需求快照 ${escape(short(run.sourceRevision))}` : ''}</p>`}
       ${active ? `${legacy ? '' : `<div class="review-editor">${kind === 'spec' ? specEditor(run, draft) : planEditor(run, draft)}</div>`}<div class="review-feedback-area">${field(revisingSpec ? '规格修订说明（选填）' : '审阅意见（退回修改时必填）', 'feedback', draft.feedback, { multiline: true, rows: 2, max: 4000 })}</div><p id="review-action-error" class="inline-error" role="alert" hidden></p><div class="review-bottom"><div><p id="review-draft-status" class="review-help" aria-live="polite"></p><button type="button" id="review-load-current" class="text-button" hidden>放弃本地草稿，载入最新版本</button></div><div class="review-actions">${legacy ? '' : `${revisingSpec ? '' : '<button type="button" class="button button-outline" data-review-action="reject">退回修改</button>'}<button type="button" class="button ${revisingSpec ? 'button-primary' : 'button-outline'}" data-review-action="save">保存修订</button>`}${revisingSpec ? '' : '<button type="button" class="button button-primary" id="approve-button" data-review-action="approve">确认</button>'}</div></div>` : ''}
@@ -205,8 +207,8 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
       draft.error = '请在审阅意见中说明需要修改的位置和原因。'; persist(draft); syncControls(); $('[data-review-field="feedback"]')?.focus(); return;
     }
     if (action === 'save' && draft.kind === 'spec' && !run.spec?.clarificationRequired) {
-      const invalid = !draft.spec.title?.trim() || !draft.spec.summary?.trim() || Object.values(draft.spec.stack || {}).some((value) => !value.trim()) || (draft.spec.requirements || []).some((r) => !r.title.trim() || !r.description.trim() || !r.acceptance.length);
-      if (invalid) { draft.error = '请填写规格标题、摘要、技术选型，以及每项需求的标题、描述和验收条件。'; persist(draft); syncControls(); return; }
+      const invalid = !draft.spec.title?.trim() || !draft.spec.summary?.trim() || (draft.spec.requirements || []).some((r) => !r.title.trim() || !r.description.trim() || !r.acceptance.length);
+      if (invalid) { draft.error = '请填写规格标题、摘要，以及每项需求的标题、描述和验收条件。'; persist(draft); syncControls(); return; }
     }
     if (action === 'save' && draft.kind === 'plan' && draft.tasks.some((task) => !task.title.trim() || !task.description.trim() || !task.acceptance.length)) {
       draft.error = '请填写每项任务的标题、描述和至少一条验收条件。'; persist(draft); syncControls(); return;
@@ -235,6 +237,16 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     } finally { pending = false; syncControls(); }
   }
   container.addEventListener('click', (event) => {
+    const defaults = event.target.closest('[data-platform-defaults]');
+    if (defaults) {
+      const {run,busy}=getState(); if (pending || busy || !run || run.sourceSuperseded) return;
+      pending=true; defaults.disabled=true;
+      submit('use_platform_defaults',{revision:run.specRevision,spec:currentDraft?.spec ?? run.spec,answers:currentDraft?.answers ?? {}})
+        .then(()=>{if(currentDraft)clearDraft(currentDraft);viewKey='';render();toast('已免费采用默认网页方案，请重新确认规格');})
+        .catch(error=>{if(currentDraft){currentDraft.error=error.message;persist(currentDraft);}viewKey='';render();})
+        .finally(()=>{pending=false;syncControls();});
+      return;
+    }
     const modeButton = event.target.closest('[data-review-mode]');
     if (modeButton) {
       const { run, busy } = getState();

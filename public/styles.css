@@ -34,3 +34,6 @@ dialog{padding:0;border:1px solid #dce4f0;border-radius:13px;box-shadow:0 28px 9
 .dev-task.sim-failed, .dev-task.sim-blocked { border-color: #c45555; background: #fff1f1; }
 .dev-task.sim-awaiting_confirmation { border-color: #b88729; background: #fff8e6; }
 .dev-task.sim-ready { border-color: #7b62c5; }
+
+.project-row{display:flex;align-items:stretch;gap:3px;margin-bottom:8px;min-width:0}.project-row .project-item{flex:1;min-width:0;width:0;margin-bottom:0}.project-delete{flex:none;width:30px;border:1px solid transparent;border-radius:7px;background:transparent;color:#c5d3e7;cursor:pointer;font-size:22px}.project-delete:hover,.project-delete:focus-visible{background:#633744;color:#fff;border-color:#ff9fa8}.project-delete:disabled{opacity:.4;cursor:wait}
+@media(max-width:760px){.project-row{flex:none;margin-bottom:0;max-width:240px}.project-row .project-item{width:auto;max-width:205px}.project-delete{width:29px;min-height:34px}}

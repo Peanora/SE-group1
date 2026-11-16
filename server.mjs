@@ -8,6 +8,8 @@ import { HttpError, parseDocument } from './lib/documents.mjs';
 import { createZip } from './lib/zip.mjs';
 import { SimulatedTaskService } from './lib/simulated-tasks.mjs';
 
+import { DEFAULT_STACK, PLATFORM_DEFAULTS } from './lib/platform-defaults.mjs';
+
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const MAX_REQUEST = 6 * 1024 * 1024;
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
@@ -124,7 +126,7 @@ export async function createApp(options = {}) {
         }
         if (method === 'GET' && segments.length === 2 && segments[1] === 'health') {
           const config = planner.getModelConfig();
-          return respond(response, 200, { ok: true, model: { configured: config.configured, model: config.model ?? '' },
+          return respond(response, 200, { ok: true, platformDefaults: { ...PLATFORM_DEFAULTS, stack: { ...DEFAULT_STACK } }, model: { configured: config.configured, model: config.model ?? '' },
             modelPlanning: { engineeringMaxCalls: orchestrator.engineeringMaxCalls, engineeringTimeoutMs: orchestrator.engineeringTimeoutMs,
               specificationMaxCalls: orchestrator.specificationMaxCalls, specificationTimeoutMs: orchestrator.specificationTimeoutMs },
             supportedFormats: ['.md', '.txt', '.docx'] });
@@ -136,6 +138,18 @@ export async function createApp(options = {}) {
           throw new HttpError(405, '该接口不支持此请求方法。');
         }
         const projectId = segments[2];
+        if (segments.length === 3 && method === 'DELETE') {
+          requireLocalExecutionRequest(request, server);
+          const body = exactFields(await readJson(request), ['confirmationName']);
+          const result = await orchestrator.withProjectCheckpoint(projectId, async () => {
+            if (store.get(projectId).runs.some(run => run.status === 'running')) throw new HttpError(409, '项目仍在运行，请等待阶段结束后再删除。');
+            const remove = () => store.remove(projectId, body.confirmationName);
+            if (executionService === null) return remove();
+            if (typeof executionService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '无法确认代码执行和预览状态，暂不能删除项目。');
+            return executionService.withProjectCheckpoint(projectId, remove);
+          });
+          return respond(response, 200, result);
+        }
         if (segments.length === 3 && method === 'GET') return respond(response, 200, { project: { ...store.get(projectId), runs: await Promise.all(store.get(projectId).runs.map(run => orchestrator.describeRun(store.get(projectId), run))) } });
         if (segments[3] === 'changes') {
           requireLocalExecutionRequest(request, server); store.get(projectId);

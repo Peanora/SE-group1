@@ -186,7 +186,7 @@ const planningReview = createPlanningReview({
 
 function renderProjects() {
   $('#project-count').textContent = state.projects.length;
-  $('#project-list').innerHTML = state.projects.length ? state.projects.map((project) => `<button class="project-item ${project.id === state.project?.id ? 'active' : ''}" data-project="${escape(project.id)}" aria-current="${project.id === state.project?.id ? 'page' : 'false'}"><svg class="project-icon" viewBox="0 0 20 22" aria-hidden="true"><path d="M3 2h9l5 5v13H3Z"/><path d="M12 2v6h5M6 12h8M6 16h5"/></svg><span class="project-info"><span class="project-name">${escape(project.name)}</span><span class="project-meta">${escape(project.lastRunStatus ? STATUS[project.lastRunStatus] || project.lastRunStatus : '尚未编排')} / ${project.runCount || 0} 次运行</span></span><span class="project-state-dot ${escape(project.lastRunStatus || '')}"></span></button>`).join('') : '<div class="empty-projects">尚无项目<br>从一份需求文档开始</div>';
+  $('#project-list').innerHTML = state.projects.length ? state.projects.map((project) => `<div class="project-row"><button class="project-item ${project.id === state.project?.id ? 'active' : ''}" data-project="${escape(project.id)}" aria-current="${project.id === state.project?.id ? 'page' : 'false'}"><svg class="project-icon" viewBox="0 0 20 22" aria-hidden="true"><path d="M3 2h9l5 5v13H3Z"/><path d="M12 2v6h5M6 12h8M6 16h5"/></svg><span class="project-info"><span class="project-name">${escape(project.name)}</span><span class="project-meta">${escape(project.lastRunStatus ? STATUS[project.lastRunStatus] || project.lastRunStatus : '尚未编排')} / ${project.runCount || 0} 次运行</span></span><span class="project-state-dot ${escape(project.lastRunStatus || '')}"></span></button><button type="button" class="project-delete" data-delete-project="${escape(project.id)}" aria-label="删除项目：${escape(project.name)}" title="删除项目">×</button></div>`).join('') : '<div class="empty-projects">尚无项目<br>从一份需求文档开始</div>';
 }
 function renderHeader() {
   $('#project-title').textContent = state.project?.name || '需求编排工作台';
@@ -219,6 +219,7 @@ function renderControls() {
   if (design) modelNotice.textContent += ` 最近设计：${({ running: '处理中', succeeded: '草案已生成', failed: '失败', interrupted: '已中断' })[design.status] || '状态未知'}；输入 ${Number.isSafeInteger(design.usage?.inputTokens) ? design.usage.inputTokens : '未知'}、输出 ${Number.isSafeInteger(design.usage?.outputTokens) ? design.usage.outputTokens : '未知'} token。`;
   const historical = historicalRun(run), active = !historical && ACTIVE.has(run?.status);
   const changing = state.busy || state.selectionPending;
+  $$('[data-delete-project]').forEach(button => { button.disabled = changing; });
   $('#start-run').disabled = !state.project || changing || active || ($('#mode-select').value === 'model' && (!knownSpecBudget || !knownBudget));
   $('#start-run span').textContent = run ? '再次编排' : '开始编排';
   $('#mode-select').disabled = changing || active;
@@ -395,6 +396,28 @@ async function pollRun() {
   catch (error) { if (epoch !== state.epoch) return; showError(error); state.pollTimer = setTimeout(pollRun, 2500); }
 }
 async function refreshProjects() { const { projects } = await api('/api/projects'); state.projects = projects; renderProjects(); }
+async function deleteProject(id) {
+  if (state.busy || state.selectionPending) return;
+  const project=state.projects.find(p=>p.id===id); if(!project) return;
+  if(!window.confirm(`确认删除项目“${project.name}”？项目将从工作区移除，运行记录不再可访问。本机保留恢复记录；正在运行或预览的项目不能删除。`)) return;
+  setBusy(true);clearError();clearTimeout(state.pollTimer);const epoch=++state.epoch;
+  try {
+    const result=await api(`/api/projects/${encodeURIComponent(id)}`,{method:'DELETE',body:JSON.stringify({confirmationName:project.name})});
+    if(epoch!==state.epoch)return;
+    try {
+      for(const runId of result.runIds || []) {
+        for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(key?.startsWith(`taskflow-review:${runId}:`))sessionStorage.removeItem(key);}
+      }
+    } catch { /* Server deletion succeeds even if browser storage is unavailable. */ }
+    state.projects=state.projects.filter(p=>p.id!==id);
+    if(state.project?.id===id){state.project=null;state.run=null;state.taskId=null;try{sessionStorage.removeItem('taskflow-selection');}catch{}renderAll();if(state.projects.length)await selectProject(state.projects[0].id);}
+    else renderProjects();
+    $('#project-title').setAttribute('tabindex','-1');$('#project-title').focus();
+    toast('项目已删除，本机恢复记录已保留');
+  } catch(error) {showError(error);}
+  finally {setBusy(false);schedulePoll();}
+}
+
 async function selectProject(id, { runId } = {}) {
   clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   state.selectionPending = true; renderControls(); syncExecutionPanel();
@@ -520,6 +543,7 @@ document.addEventListener('click', (event) => {
   const task = event.target.closest('[data-task]'); if (task) { state.taskId = task.dataset.task; renderRecords(); }
   const artifact = event.target.closest('[data-artifact]'); if (artifact) showArtifact(artifact.dataset.artifact);
   const tab = event.target.closest('[data-tab]'); if (tab) { state.tab = tab.dataset.tab; renderRecords(); }
+  const remove = event.target.closest('[data-delete-project]'); if(remove){ if(!remove.disabled) deleteProject(remove.dataset.deleteProject); return; }
   const recover = event.target.closest('[data-revalidate-spec]'); if (recover && !recover.disabled) { reviewAction('revalidate_spec', { attemptId: recover.dataset.revalidateSpec }).then(() => toast('已免费重新校验，请核对并确认规格')).catch(error => showError(error.message)); return; }
   const retry = event.target.closest('[data-retry]'); if (retry && !retry.disabled) runAction('retry', retry.dataset.retry);
   if (event.target.closest('#toggle-raw')) { state.raw = !state.raw; renderRecords(); }

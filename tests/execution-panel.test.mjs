@@ -277,6 +277,7 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
     await previewButton.click(); await page.getByRole('alert').waitFor({ state: 'visible' }); assert.equal(await previewLink.count(), 0);
     for (const url of ['http://127.0.0.1:1234/app', 'http://localhost:1234/app']) {
       previewResponse = { url, expiresAt: '2099-01-01T00:00:00Z' }; await previewButton.click(); await previewLink.waitFor({ state: 'visible' });
+      await page.waitForFunction(expected => [...document.querySelectorAll('a')].some(link => link.textContent === '打开本地预览' && link.getAttribute('href') === expected), url);
       assert.equal(await previewLink.getAttribute('href'), url); assert.equal(await previewLink.getAttribute('target'), '_blank');
       assert.equal(await previewLink.getAttribute('rel'), 'noopener noreferrer');
     }

@@ -1,5 +1,18 @@
 # 本地原型接口约定
 
+## 平台默认方案与项目删除
+
+用户2026-11-16明确选择当前只使用平台统一Web方案。新版workflowVersion=2的本地规则、模型规格、修订和免费响应恢复，均由控制器设置stack={frontend:"HTML/CSS/JS",backend:"Node.js",storage:"SQLite"}及platformDefaults/web-v1，参与specRevision。模型技术栈缺失或客户端技术配置不能覆盖默认值；旧适配器默认行为与v1记录不补造新方案。纯粹技术选型问题不要求用户回答，审计、加密、数据保存及未知问题保留。页面和spec.md明确Web交付边界，不声称原生Windows安装包已实现。
+
+`GET /api/health`增加platformDefaults说明和stack。规格确认前本地inspectEngineeringContext预检，失败返回具体字段/配置提示，不创建工程请求或新工程尝试。
+
+运行action增加`{action:"use_platform_defaults",revision,spec?,answers?}`：仅当前来源、规格阶段成功且处于awaiting_spec/awaiting_review/failed的新版运行可用，无其他活动运行、在途模型/阶段或活动模拟；可一并保存当前业务修订/回答。免费产生新规格版本，保留旧规格/审批/失败和用量，清除旧审批及下游计划，回到awaiting_spec。需再次确认规格后才发起工程请求，不能靠更换方案自动继承审批。
+
+`DELETE /api/projects/:id`需要本机请求及JSON `{confirmationName:"项目当前名称"}`。规划、模拟及固定执行服务共同检查点确认无实际在途工作；仍为running的规划、编码、预览、下载/停止/进程待核对等均409。返回`{deleted:true,projectId,runIds}`。名称不匹配409、重复删除404；失败不从内存隐藏项目。浏览器先确认项目名称，成功后切换到剩余项目或空工作台。
+
+删除使用现有JSON的deletedAt标记保留完整本机恢复记录，不物理清理需求、回执、SQLite或源码；list/get及重启加载隐藏该项目，所有后续项目API失去入口，旧保存和旧输入发布不能将它复活。删除先阻止新保存，等已有队列，再以原子替换发布标记；写入失败保留原项目。单机存储事实不等于跨服务事务或完整账户级数据清除。用户项目未作为破坏性测试数据。
+
+
 ## 规格失败说明与保存响应重新校验
 
 失败的model规格GET（项目详情和单运行）可附加派生的`specificationFailure`：固定reason/message、可选requirementIndex、remaining、canRetry/canRevalidate、attemptId及nextStep。不公开原始响应/异常/私有路径，不为诊断写入用户数据。历史invalid_model_response可读取同源回执离线诊断，原历史不改写。
