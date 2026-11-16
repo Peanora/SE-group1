@@ -220,6 +220,6 @@ QA平台PTY正常STOP退出0；63820/57843/51033已无监听，4317仍原PID8473
 
 ## 2026-11-17 工程草案自动修正与本地兜底
 
-生产代码`92efd53`。`npm run check`为117脚本语法通过；`npm test`为703项，673通过、30跳过、0失败、0取消，99,368.0102ms。30项跳过为未启用真实MXC或显式真实Edge的既有集成项。
+生产代码`a08319a`。`npm run check`为117脚本语法通过；`npm test`为705项，675通过、30跳过、0失败、0取消，98,501.7928ms。30项跳过为未启用真实MXC或显式真实Edge的既有集成项。
 
-新增回归：无效工程JSON首次失败后自动带具体校验反馈重试一次，第二次成功，engineeringCalls=2且两条私有回执保留；模型连续失败后显式`use_local_engineering`不新增模型调用，本地架构/任务/检查成功并停在计划确认，plan.json含engineeringFallback；`{resourceId}`路径和`text/image/textarea`等ARIA别名规范化并写回；原免费重校验、预算耗尽、凭据/传输/取消边界保持通过。未调用真实付费模型，未修改用户运行。证据见`docs/tasks/engineering-auto-repair.md`。
+新增回归：不同工程校验错误会持续自动带具体反馈重试直到成功，不设次数上限（测试第4次调用成功）；完全相同校验错误连续出现时停止；无效工程JSON自动修正后成功，engineeringCalls=2且两条私有回执保留；模型连续失败后显式`use_local_engineering`不新增模型调用，本地架构/任务/检查成功并停在计划确认，plan.json含engineeringFallback；`{resourceId}`路径和`text/image/textarea`等ARIA别名规范化并写回；原免费重校验、凭据/传输/取消边界保持通过。未调用真实付费模型，未修改用户运行。证据见`docs/tasks/engineering-auto-repair.md`。

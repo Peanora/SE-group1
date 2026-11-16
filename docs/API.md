@@ -98,7 +98,7 @@ sourceSnapshot为本次运行不可变原文，导出requirements.md也使用该
 
 ## 接口
 
-- GET `/api/health` → `{ok:true, model:{configured:boolean,model:string}, modelPlanning:{engineeringMaxCalls,engineeringTimeoutMs}, supportedFormats:['.md','.txt','.docx']}`。工程规划预算来自当前编排器，不包含凭据。
+- GET `/api/health` → `{ok:true, model:{configured:boolean,model:string}, modelPlanning:{engineeringMaxCalls:null,engineeringCallLimit:false,engineeringTimeoutMs,engineeringTotalTimeoutMs}, supportedFormats:['.md','.txt','.docx']}`。工程规划不设调用次数上限，由单次时长和运行总时长约束；预算来自当前编排器，不包含凭据。
 - GET `/api/projects` → `{projects:[{id,name,createdAt,updatedAt,filename,lastRunStatus,runCount}]}`
 - POST `/api/projects`，JSON `{name?,filename,content? ,fileBase64?}` → 201 `{project}`。文本使用 content，DOCX 使用 fileBase64。
 - GET `/api/projects/:pid` → `{project}`
@@ -129,11 +129,11 @@ approvals为`{spec:null|{revision,at,feedback},plan:null|{revision,specRevision,
 
 新版model运行在规格确认后，由architecture/tasks共享一次工程模型请求，生成经校验的实体、角色/接口、页面选择器和任务。DevTask增加writePaths/inputs/outputs，suggestedFiles与writePaths保持一致；计划版本另外绑定完整engineeringPlan，人工改任务同步更新草案/hash及架构。原接口、实体、页面及全图可写文件集合不能通过任务编辑改变；规格回修后重新规划。local/v1仍使用旧规则，无engineeringPlan时旧计划hash公式保持不变。
 
-每运行默认最多3次工程适配器尝试，单次60秒；失败不静默回退规则。engineeringCalls记录尝试预留，不等于已证实收费请求数。engineeringHistory只公开版本、状态、模型/用量、结束枚举及回执摘要；原四字段回执仅保存在data/.private，不能进入导出包。用量未知为null；回执IO超时/取消后未确认标unconfirmed，迟到结果不能发布。最终保存失败撤回草案及成功状态，公开固定persistence_failed，不传播底层路径/异常。工程草案仍为structural_only、待开发且须计划确认，不授予执行权限。
+工程适配器不设调用次数上限；单次最多60秒，每运行总时长最多10分钟。自动修正只在首次或连续结构失败时继续，遇到传输/配置/凭据/取消等非结构错误立即停止，遇到完全相同的校验说明视为无进展停止；总时长用尽或页面停止也停止。失败不静默回退规则。engineeringCalls记录实际预留尝试，不等于已证实收费请求数；因为无次数上限，页面不再显示“剩余次数”，改显示总时长预算。engineeringHistory只公开版本、状态、模型/用量、结束枚举、错误码/控制器校验说明及回执摘要；原四字段回执仅保存在data/.private，不能进入导出包。用量未知为null；回执IO超时/取消后未确认标unconfirmed，迟到结果不能发布。最终保存失败撤回草案及成功状态，公开固定persistence_failed，不传播底层路径/异常。工程草案仍为structural_only、待开发且须计划确认，不授予执行权限。
 
 模型常把路由参数写成OpenAPI风格的`{recordId}`、把纯文本选择器角色写成`text`；控制器在校验前把前者规范化为`:recordId`，把`text/image/textarea/select/dropdown/anchor/listbox`等常见别名映射到有效ARIA角色，并把规范化结果写回草案参与hash和文档渲染。路径仍必须是应用内相对路径，空段、点段、编码、重复参数和不安全字符继续拒绝。
 
-模型草案首次未通过`invalid_model_response`（JSON不合法或结构校验失败）时，控制器自动带**控制器自己的校验说明**再请求一次；该说明包含具体路由/页面/任务/文件位置，例如“共享文件src/app.mjs的任务A与任务B必须处于同一串行依赖链”或“页面VIEW的选择器X角色无效”。自动修正消耗下一次engineeringCalls和私有回执，只尝试一次；若第二次仍失败才进入失败停点。反馈只含固定校验文本，不含整个模型正文或私有路径。
+模型草案未通过`invalid_model_response`（JSON不合法或结构校验失败）时，控制器自动带**控制器自己的校验说明**继续请求；该说明包含具体路由/页面/任务/文件位置，例如“共享文件src/app.mjs的任务A与任务B必须处于同一串行依赖链”或“页面VIEW的选择器X角色无效”。自动修正**不设调用次数上限**，每次消耗一次engineeringCalls和私有回执，直到通过、遇到非结构错误、总时长用尽、页面停止，或同一校验说明连续出现（无进展）才进入失败停点。反馈只含固定校验文本，不含整个模型正文或私有路径。
 
 失败的architecture/tasks GET可附加`engineeringFailure`：固定code/attemptId、remaining、canRetry、canRevalidate、canUseLocal、message、可选detail及nextStep。`{action:"revalidate_engineering"}`仅用于新版model运行、规格已确认且architecture/tasks失败、无其他活动阶段/运行/规格请求；服务器按attempt从新到旧读取同当前specRevision/sourceRevision的私有工程回执，核对普通文件、字节数和SHA256，解析并重新执行当前结构校验。任一保存草案通过后发布其规范化engineeringPlan；只追加engineeringRevalidations（attemptId、hash、policyHash、时间），不改写原失败、用量或engineeringCalls，不调用模型。新草案不能引入规格外实体/接口/页面/可写文件；不授予计划确认或执行许可。若所有保存草案仍不符合规则，409返回当前校验说明；JSON、回执、运行版本或活动状态不匹配均拒绝。公开接口不返回私有回执正文、路径或异常。
 
@@ -161,7 +161,7 @@ approvals为`{spec:null|{revision,at,feedback},plan:null|{revision,specRevision,
 
 ### 规格模型预算与回执
 
-`GET /api/health`的modelPlanning增加specificationMaxCalls和specificationTimeoutMs，默认新运行最多3次规格尝试、每次90秒，工程设计预算独立披露。只由可信服务构造选项配置，客户端运行请求不能扩大。网页模型模式启动前显示预算；旧服务缺少字段时拒绝启动新模型运行，保留本地规则模式。
+`GET /api/health`的modelPlanning增加specificationMaxCalls和specificationTimeoutMs，默认新运行最多3次规格尝试、每次90秒；工程设计不设调用次数上限，披露单次/总时长和`engineeringCallLimit:false`。只由可信服务构造选项配置，客户端运行请求不能扩大。网页模型模式启动前显示预算；旧服务缺少字段时拒绝启动新模型运行，保留本地规则模式。
 
 首次新model规格调用冻结Run.specificationBudget，specificationCalls按预留尝试计数，失败不退回；重启后的有效上限取原冻结预算与当前控制器限制的较小值。specificationHistory保存attempt/sourceRevision/status/times/model/usage/finishReason/code、receiptState/requestState和receipt的id/sha256/bytes；未知token为null，不能当0。旧已存记录不伪造回执、用量或预算。尝试次数并不等于已证实的收费API请求次数。
 
