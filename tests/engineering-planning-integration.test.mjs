@@ -87,6 +87,29 @@ test('无效草案自动带校验原因重试一次，成功后两阶段继续�
   assert.match(feedbacks[1], /JSON/u); assert.equal(x.run.engineeringPlan.binding.specRevision, x.run.specRevision);
 });
 
+test('自动修正不设调用次数上限：不同校验错误会持续带反馈重试直到成功', async t => {
+  let attempts = 0; const real = createEngineeringModel({ config, fetchImpl: async () => reply() });
+  const x = await setup(t, { override: { createEngineeringModel: () => async input => {
+    attempts++;
+    if (attempts <= 3) throw Object.assign(new Error('invalid draft'), { code: 'invalid_model_response', publicDetail: `第${attempts}类不同校验错误` });
+    return real(input);
+  } } });
+  await x.approve(); await waitFor(() => x.run.status === 'awaiting_review');
+  assert.equal(attempts, 4); assert.equal(x.run.engineeringCalls, 4); assert.equal(x.run.engineeringHistory.length, 4);
+  assert.equal(x.run.engineeringHistory.at(-1).status, 'succeeded'); assert.equal(x.run.engineeringPlan.binding.specRevision, x.run.specRevision);
+});
+
+test('自动修正遇到完全相同的校验错误会停止，避免无进展地反复调用', async t => {
+  let attempts = 0;
+  const x = await setup(t, { override: { createEngineeringModel: () => async () => {
+    attempts++;
+    throw Object.assign(new Error('invalid draft'), { code: 'invalid_model_response', publicDetail: '相同的校验错误' });
+  } } });
+  await x.approve(); await waitFor(() => x.run.status === 'failed');
+  assert.equal(attempts, 2); assert.equal(x.run.engineeringCalls, 2); assert.equal(x.run.engineeringHistory.length, 2);
+  assert.match(x.run.stages.find(stage => stage.id === 'architecture').error, /连续返回相同校验错误/u);
+});
+
 test('模型草案连续失败后可显式改用本地规则，不调用模型并进入计划确认', async t => {
   const x = await setup(t, { fetchImpl: async () => reply('{"version":1') });
   await x.approve(); await waitFor(() => x.run.status === 'failed');
@@ -148,14 +171,14 @@ test('凭据正文先遮蔽私有回执再拒绝，不成为可重试格式错�
   assert.notEqual(receipt.content, content); assert.equal(JSON.stringify(x.run).includes(config.apiKey), false);
 });
 
-test('异常finish有回执且不回退；耗尽预算的重试不发送新请求', async t => {
-  const x = await setup(t, { fetchImpl: async () => reply(proposal(), 'length'), options: { engineeringMaxCalls: 1 } });
+test('异常finish有回执且不回退；手动重试仍会请求模型而不是按调用次数拒绝', async t => {
+  const x = await setup(t, { fetchImpl: async () => reply(proposal(), 'length') });
   await x.approve(); await waitFor(() => x.run.status === 'failed');
   assert.equal(x.run.engineeringHistory[0].code, 'abnormal_finish'); assert.equal(x.run.engineeringHistory[0].finishReason, 'length');
   await x.orchestrator.action(x.project.id, x.run.id, { action: 'retry', stageId: 'architecture' });
   await waitFor(() => x.run.status === 'failed' && x.run.stages.find(s => s.id === 'architecture').attempt === 2);
-  assert.equal(x.calls(), 1); assert.equal(x.run.engineeringHistory.length, 1); assert.equal(x.run.engineeringCalls, 1);
-  assert.match(x.run.stages.find(s => s.id === 'tasks').error, /预算/u);
+  assert.equal(x.calls(), 2); assert.equal(x.run.engineeringHistory.length, 2); assert.equal(x.run.engineeringCalls, 2);
+  assert.equal(x.run.engineeringHistory[1].code, 'abnormal_finish');
 });
 
 test('边界暂停允许当前共享请求完成，恢复才开始review', async t => {

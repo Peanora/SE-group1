@@ -127,7 +127,8 @@ export async function createApp(options = {}) {
         if (method === 'GET' && segments.length === 2 && segments[1] === 'health') {
           const config = planner.getModelConfig();
           return respond(response, 200, { ok: true, platformDefaults: { ...PLATFORM_DEFAULTS, stack: { ...DEFAULT_STACK } }, model: { configured: config.configured, model: config.model ?? '' },
-            modelPlanning: { engineeringMaxCalls: orchestrator.engineeringMaxCalls, engineeringTimeoutMs: orchestrator.engineeringTimeoutMs,
+            modelPlanning: { engineeringMaxCalls: null, engineeringCallLimit: false, engineeringTimeoutMs: orchestrator.engineeringTimeoutMs,
+              engineeringTotalTimeoutMs: orchestrator.engineeringTotalTimeoutMs,
               specificationMaxCalls: orchestrator.specificationMaxCalls, specificationTimeoutMs: orchestrator.specificationTimeoutMs },
             supportedFormats: ['.md', '.txt', '.docx'] });
         }

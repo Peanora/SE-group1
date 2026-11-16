@@ -41,7 +41,7 @@ test('actual model-planning UI discloses its budget, preserves engineering task 
   await page.goto(url); await page.waitForFunction(() => !document.querySelector('#start-run').disabled);
   assert.equal(await page.locator('#planning-model-notice').isVisible(), false);
   await page.locator('#mode-select').selectOption('model');
-  assert.match(await page.locator('#planning-model-notice').textContent(), /最多尝试 3 次，单次最多 60 秒/u);
+  assert.match(await page.locator('#planning-model-notice').textContent(), /不设调用次数上限，单次最多 60 秒，本次总时长最多 10 分钟/u);
   assert.match(await page.locator('#planning-model-notice').textContent(), /确认规格后.*工程设计.*产生用量/u);
   await page.locator('#start-run').click();
   await page.getByRole('button', { name: '确认规格并继续', exact: true }).waitFor();
