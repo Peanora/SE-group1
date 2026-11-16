@@ -72,17 +72,34 @@ test('规格批准后双分支共用一次模型设计，真实架构/任务/哈
   assert.equal(exported.engineeringHistory, undefined);
 });
 
-test('共享无效草案同时失败，重试共享新尝试并保留旧回执用量', async t => {
-  let attempts = 0; const x = await setup(t, { fetchImpl: async () => ++attempts === 1 ? reply('{"version":1') : reply() });
+test('无效草案自动带校验原因重试一次，成功后两阶段继续且保留两次回执', async t => {
+  let attempts = 0; const feedbacks = [];
+  const x = await setup(t, { fetchImpl: async (_url, options) => {
+    attempts++;
+    const last = JSON.parse(options.body).messages.at(-1).content;
+    feedbacks.push(typeof last === 'string' ? last : '');
+    return attempts === 1 ? reply('{"version":1') : reply();
+  } });
+  await x.approve(); await waitFor(() => x.run.status === 'awaiting_review');
+  assert.equal(x.calls(), 2); assert.equal(x.run.engineeringCalls, 2); assert.equal(x.run.engineeringHistory.length, 2);
+  assert.equal(x.run.engineeringHistory[0].code, 'invalid_model_response'); assert.equal(x.run.engineeringHistory[0].status, 'failed');
+  assert.equal(x.run.engineeringHistory[1].status, 'succeeded'); assert.notEqual(x.run.engineeringHistory[1].receipt.id, x.run.engineeringHistory[0].receipt.id);
+  assert.match(feedbacks[1], /JSON/u); assert.equal(x.run.engineeringPlan.binding.specRevision, x.run.specRevision);
+});
+
+test('模型草案连续失败后可显式改用本地规则，不调用模型并进入计划确认', async t => {
+  const x = await setup(t, { fetchImpl: async () => reply('{"version":1') });
   await x.approve(); await waitFor(() => x.run.status === 'failed');
-  assert.equal(x.calls(), 1); assert.equal(x.run.engineeringPlan, undefined);
-  for (const id of ['architecture', 'tasks']) assert.equal(x.run.stages.find(stage => stage.id === id).status, 'failed');
-  assert.equal(x.run.artifacts.some(a => ['architecture.md', 'task.md'].includes(a.name)), false);
-  const old = structuredClone(x.run.engineeringHistory[0]); assert.equal(old.code, 'invalid_model_response'); assert.ok(old.receipt);
-  await x.orchestrator.action(x.project.id, x.run.id, { action: 'retry', stageId: 'tasks' });
+  assert.equal(x.calls(), 2); const calls = x.calls(), engineeringCalls = x.run.engineeringCalls;
+  await x.orchestrator.action(x.project.id, x.run.id, { action: 'use_local_engineering' });
   await waitFor(() => x.run.status === 'awaiting_review');
-  assert.equal(x.calls(), 2); assert.equal(x.run.engineeringHistory.length, 2); assert.deepEqual(x.run.engineeringHistory[0], old);
-  assert.notEqual(x.run.engineeringHistory[1].receipt.id, old.receipt.id);
+  assert.equal(x.calls(), calls); assert.equal(x.run.engineeringCalls, engineeringCalls);
+  assert.equal(x.run.engineeringPlan, undefined); assert.ok(x.run.engineeringFallback);
+  assert.ok(x.run.tasks.length > 0); assert.equal(x.run.review.passed, true); assert.equal(x.run.approvals.plan, null);
+  assert.match(x.run.artifacts.find(item => item.name === 'task.md').content, /本地规则生成/u);
+  assert.match(x.run.artifacts.find(item => item.name === 'architecture.md').content, /本地规则生成/u);
+  await approvePlan(x); await waitFor(() => x.run.status === 'succeeded');
+  assert.ok(JSON.parse(x.run.artifacts.find(item => item.name === 'plan.json').content).engineeringFallback);
 });
 
 test('失败后可免费重新校验更早的已保存工程草案并继续，不新增模型调用', async t => {
@@ -100,7 +117,7 @@ test('失败后可免费重新校验更早的已保存工程草案并继续，�
     finishReason: 'stop', receipt: { id, sha256: createHash('sha256').update(receiptText).digest('hex'), bytes: Buffer.byteLength(receiptText) }, receiptState: 'saved', code: 'invalid_model_response' });
   await x.orchestrator.action(project.id, run.id, { action: 'revalidate_engineering' });
   await waitFor(() => run.status === 'awaiting_review');
-  assert.equal(x.calls(), calls); assert.equal(run.engineeringCalls, 1); assert.equal(run.engineeringHistory.length, 2);
+  assert.equal(x.calls(), calls); assert.equal(run.engineeringCalls, 2); assert.equal(run.engineeringHistory.length, 3);
   assert.equal(run.tasks.length, 1); assert.equal(run.engineeringPlan.proposal.routes[0].path, '/api/resources/:parameter');
   assert.equal(run.engineeringRevalidations.length, 1); assert.equal(run.engineeringRevalidations[0].attemptId, id);
   assert.equal(run.approvals.plan, null);

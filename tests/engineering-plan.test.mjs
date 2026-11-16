@@ -145,6 +145,12 @@ test('OpenAPI-style route parameters are normalized to the platform colon form',
   assert.equal(result.proposal.routes[1].path, '/api/issues/:parameter/assignee');
 });
 
+test('common plain-text ARIA aliases are normalized before validation', () => {
+  const raw = proposal(); raw.views[0].selectors.push({ testId: 'issue-due', role: 'text' }, { testId: 'issue-image', role: 'image' }, { testId: 'issue-area', role: 'textarea' });
+  const result = draft(raw);
+  assert.deepEqual(result.proposal.views[0].selectors.slice(-3).map(item => item.role), ['status', 'img', 'textbox']);
+});
+
 test('REST and view paths reject URLs/encoding/traversal, and parameter-renaming cannot duplicate endpoints', () => {
   for (const path of ['https://external.invalid/', '//external.invalid/a', '/api/%2e%2e/secret', '/api/../secret', '/api//x', '/api\\x', '/api#fragment', '/api?x=1', '/api/:id/:id', '/api/:id.json', '/api/']) {
     rejects(raw => { raw.routes[0].path = path; }); rejects(raw => { raw.views[0].path = path; });
