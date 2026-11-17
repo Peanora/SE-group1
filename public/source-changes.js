@@ -31,6 +31,13 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
   const changes = () => Array.isArray(data?.changes) ? data.changes.filter(item => item && typeof item.id === 'string') : [];
   const selected = () => changes().find(item => item.id === draft.selectedId);
   const stale = () => !validCurrent(current()) || draft.baseRevision !== current().revision || draft.baseGeneration !== current().generation;
+  // Older browser drafts may predate baseGeneration. If they are still based on
+  // the current revision, reconcile the generation instead of disabling Save.
+  function reconcileDraft() {
+    const value = current();
+    if (!validCurrent(value) || !draft.baseRevision || draft.baseRevision !== value.revision) return;
+    if (draft.baseGeneration !== value.generation) { draft.baseGeneration = value.generation; persist(); }
+  }
   const basePath = () => `/api/projects/${encodeURIComponent(projectId)}/changes`;
   function isCurrent(token) { return !destroyed && projectId === token.projectId && epoch === token.epoch && contextId() === token.projectId; }
   function report(value) { error = value instanceof Error ? value.message : String(value); try { onError(value instanceof Error ? value : new Error(error)); } catch { /* Notices do not alter state. */ } }
@@ -80,14 +87,14 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
     form.append(field('需求文件名', filename), field('需求正文', content), field('变更原因', reason), field('变更分类（仅标签）', kind));
     const file = node('input'); file.type = 'file'; file.accept = '.md,.txt,.docx';
     const importButton = button('导入文件到草稿', () => { void perform('parse'); }); form.append(field('导入 MD / TXT / DOCX（最大 3 MiB）', file), importButton);
-    const save = button('保存为待应用变更', () => { void perform('save'); }, true); form.append(save); form.addEventListener('submit', event => event.preventDefault()); body.append(form);
+    const save = button('保存为待应用变更', () => { void perform('save'); }, true), saveHint = node('p', '', 'sc-note'); form.append(save, saveHint); form.addEventListener('submit', event => event.preventDefault()); body.append(form);
     for (const name of ['filename', 'content', 'reason', 'kind']) refsInput(name, { filename, content, reason, kind }[name]);
     function refsInput(name, control) { control.addEventListener('input', () => { if (syncContext()) { render(); void refresh(); return; } if (draft[name] === control.value) return; draft[name] = control.value; draft.requestKey = null; draft.requestBody = null; draft.uncertain = false; edits++; notice = '草稿已修改，尚未保存或应用。'; persist(); render(); }); }
     const history = node('select'), detail = node('details'), detailBody = node('div'), apply = button('应用为新需求版本', () => { void perform('apply'); }, true);
     detail.open = true; detail.append(node('summary', '变更原文与影响'), detailBody); history.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } draft.selectedId = history.value; persist(); render(); });
     body.append(node('h3', '变更记录'), field('选择变更记录', history), detail, apply);
     const versions = node('details'), versionsBody = node('div'); versions.append(node('summary', '输入版本历史'), versionsBody); body.append(versions); root.append(body); element.append(root);
-    refs = { refreshButton, status, errorBox, noticeBox, body, version, staleBox, load, filename, content, reason, kind, file, importButton, save, history, detail, detailBody, apply, versionsBody };
+    refs = { refreshButton, status, errorBox, noticeBox, body, version, staleBox, load, filename, content, reason, kind, file, importButton, save, saveHint, history, detail, detailBody, apply, versionsBody };
   }
   function renderDetail(item) {
     const signature = JSON.stringify(item ?? null); if (signature === detailSignature) return; detailSignature = signature;
@@ -121,6 +128,7 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
   }
   function render() {
     if (!refs || destroyed) return;
+    reconcileDraft();
     refs.body.hidden = !projectId; refs.status.textContent = !projectId ? '请先选择项目，再查看或提出需求变更。' : loading && !data ? '正在读取需求输入版本…' : data ? (data.capabilities?.reason || '待应用请求仅在安全检查点发布。') : '尚未取得当前输入版本，请刷新核对。';
     refs.errorBox.hidden = !error; refs.errorBox.textContent = error; refs.noticeBox.hidden = !notice && !draft.uncertain;
     refs.noticeBox.textContent = notice || (draft.uncertain ? '上次保存结果尚不确定，请先刷新核对。若重试相同正文，将复用同一请求编号。' : '');
@@ -129,6 +137,9 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
     for (const key of ['filename', 'content', 'reason', 'kind']) refs[key].disabled = !projectId || !draft.baseRevision;
     refs.load.disabled = !!action || !validCurrent(current()); refs.save.disabled = !!action || stale(); refs.importButton.disabled = !!action || stale(); refs.apply.disabled = !canApply();
     refs.save.textContent = action?.kind === 'save' ? '正在保存，等待后端确认…' : '保存为待应用变更';
+    refs.save.title = action ? '正在处理上一步操作，请稍候。' : !validCurrent(current()) ? '尚未取得当前输入版本，请刷新或稍候。' : !draft.baseRevision ? '请先点击“基于当前版本重新编辑”载入当前输入。' : stale() ? '草稿基于旧输入版本，不能保存；请先点击“基于当前版本重新编辑”。' : '';
+    refs.saveHint.hidden = !refs.save.disabled || !refs.save.title;
+    refs.saveHint.textContent = refs.save.disabled ? refs.save.title : '';
     const list = changes(), listSignature = JSON.stringify(list.map(item => [item.id, item.status, item.createdAt]));
     if (refs.history.dataset.signature !== listSignature) { refs.history.replaceChildren(); for (const item of list) { const option = node('option', `${STATUSES[item.status] ?? '未知'} · ${item.createdAt ?? ''} · ${item.id}`); option.value = item.id; refs.history.append(option); } refs.history.dataset.signature = listSignature; }
     if (!list.some(item => item.id === draft.selectedId)) draft.selectedId = list.at(-1)?.id ?? '';
@@ -145,6 +156,7 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
       if (!response || typeof response !== 'object' || !Array.isArray(response.changes)) throw new Error('变更状态格式不完整，请刷新核对。');
       data = response; dataRead = token.read;
       if (!draft.baseRevision && validCurrent(current())) { draft.baseRevision = current().revision; draft.baseGeneration = current().generation; draft.filename = current().source.filename; draft.content = current().source.content; fillForm(); }
+      reconcileDraft();
       persist(); render(); await confirmApplications(); return true;
     } catch (failure) { if (isCurrent(token) && token.read === readId) { if (data) data = { ...data, capabilities: null }; report(failure); render(); } return false; }
     finally { if (isCurrent(token) && token.read === readId) { loading = false; render(); schedule(); } else if (!destroyed && syncContext()) { render(); void refresh(); } }

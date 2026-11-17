@@ -75,6 +75,16 @@ test('save has an exact idempotent body, pending history and text-only conservat
   assert.equal(await body(page).inputValue(), marker); assert.equal(await apply(page).isEnabled(), true);
 });
 
+test('旧浏览器草稿缺少baseGeneration时按当前revision补齐，不再禁用保存', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => sessionStorage.setItem('taskflow.sourceChanges.a', JSON.stringify({ filename: 'original.md', content: 'edited body', reason: '补充说明', kind: 'other',
+    baseRevision: 'a'.repeat(64), selectedId: '' })));
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector('.source-changes button.sc-primary')?.textContent === '保存为待应用变更');
+  assert.equal(await save(page).isEnabled(), true);
+  assert.doesNotMatch(await page.locator('.source-changes').innerText(), /草稿基于旧输入版本/u);
+});
+
 test('400, 409 and 503 preserve input and the same-body request key; edits create a new key', async t => {
   const page = await pageFor(t); await edit(page); let key;
   for (const status of [400, 409, 503]) {
