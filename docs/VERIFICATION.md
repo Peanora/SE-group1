@@ -227,3 +227,9 @@ QA平台PTY正常STOP退出0；63820/57843/51033已无监听，4317仍原PID8473
 ## 2026-11-17 澄清停点阶段展示
 
 生产代码`f20b458`。`npm run check`为117脚本语法通过；`npm test`为705项，675通过、30跳过、0失败、0取消，101,728.6256ms。`tests/requirement-clarification-browser.test.mjs`在1440px/390px均通过：等待补充时`spec`节点无`succeeded`样式/勾选，显示“等待补充需求”，阶段详情状态和输出文案正确，进度不把占位规格算完成；重新整理出正式规格后恢复已完成。只改前端展示和浏览器回归，未调用模型、未改存储或审批。当前4317服务PID 2772，静态文件刷新即可生效。
+
+## 2026-11-17 需求变更继承已确认回答
+
+生产代码`01e301e`。`npm run check`为117脚本语法通过；`npm test`为707项，677通过、30跳过、0失败、0取消，114,761.8115ms。30项跳过为未启用真实MXC/显式真实Edge的既有集成项。
+
+新增回归：需求输入应用后创建新运行，自动继承上一版2条已保存回答，`inheritedFrom.runId`/`answerCount`正确，`clarificationHistory`全部为`kind:"inherited"`，旧审批不继承，sourceSnapshot为新正文；新版规格重复旧问题时预填答案并标记`inherited`，`spec.clarifications`同步、`specRevision`重新计算。既有澄清、工程自动修正、输入变更、导出和可复现验收回归全部通过。未调用真实付费模型，未修改用户现有运行数据。证据见`docs/tasks/requirement-answer-inheritance.md`。

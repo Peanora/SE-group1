@@ -184,6 +184,8 @@ Change含`id/projectId/status/baseRevision/generation/sourceRevision/source/reas
 
 应用后历史run保留原sourceSnapshot与审批，标记sourceSuperseded并拒绝继续、修改和确认；新run绑定新sourceGeneration与sourceRevision，重新生成和确认规格/计划。旧源执行的完成权限、复试/复验、预览和下载同时失效；实际停止操作仍允许。旧版本归档文档可作为历史下载，不能当作新需求已交付。
 
+创建新run时可省略或传`inheritFromRunId`。省略时，若项目有多代输入且上一代存在带已回答问题/答复的运行，自动继承该运行；显式编号必须是本项目、上一输入版本的运行，未知或非上一版返回404/409。控制器把先前`specQuestions`答复和`clarificationHistory`答复去重后写成`kind:"inherited"`轮次，附带`inheritedFrom{runId,sourceRevision,specRevision,at,answerCount}`；这些回答参与新run的模型输入、引用白名单和规格来源，但不携带旧审批、任务、计划或验收。若新规格重复同一问题文本，`prepareSpec`会预填继承答案并标记`inherited`，同时更新`spec.clarifications`和`specRevision`；模板措辞不同的问题仍按新问题处理。新版正文优先，冲突须用户修改。`plan.json`包含`inheritedFrom`。旧`sourceSuperseded`运行仍只读。此机制只复用用户已提供的答案，不代表旧规格/代码可复用，保守影响分析不变。
+
 网页保存草稿与幂等键；应用必须由后端GET确认同change、当前revision和代次后才显示完成。页面观察到其他请求应用新输入时，重新读取项目及历史run权限。需求正文、差异与模型文本只作为文本展示。
 
 ### 独立编码试验的内部接口
