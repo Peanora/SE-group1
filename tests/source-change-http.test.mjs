@@ -35,6 +35,25 @@ async function fixture(t, options = {}) {
 }
 const proposal = (current, requestKey = 'change-one') => ({ baseRevision: current.revision, source: { filename: 'r.md', content: '# 功能\n用户可以查看资源并查看说明字段。' }, reason: '新增资源说明字段', kind: 'field', requestKey });
 
+test('新输入版本的新运行继承上一版已保存回答，不重复询问已经明确的问题', async t => {
+  const { app, project, request } = await fixture(t);
+  const run = await app.orchestrator.createRun(project.id, { mode: 'local' });
+  await waitFor(() => run.status === 'awaiting_spec' && !app.orchestrator.state(run).driving);
+  run.specQuestions = [{ id: 'Q-001', question: '目标用户是谁？', answer: '访客', blocking: true }];
+  run.clarificationHistory = [{ kind: 'clarification', revision: run.sourceRevision, at: new Date().toISOString(),
+    answers: [{ id: 'Q-002', question: '首版需要哪些功能？', answer: '查看资源', blocking: true }] }];
+  await app.store.save(project);
+  const before = (await request()).body.current, saved = await request('', proposal(before));
+  const change = saved.body.change, applied = await request(`/${change.id}/apply`, { baseRevision: change.baseRevision, generation: change.generation });
+  assert.equal(applied.status, 200);
+  const next = await app.orchestrator.createRun(project.id, { mode: 'local' });
+  assert.equal(next.inheritedFrom.runId, run.id); assert.equal(next.inheritedFrom.answerCount, 2);
+  assert.equal(next.clarificationHistory.length, 2); assert.ok(next.clarificationHistory.every(round => round.kind === 'inherited'));
+  assert.deepEqual(next.clarificationHistory.flatMap(round => round.answers.map(answer => answer.answer)), ['访客', '查看资源']);
+  assert.equal(next.approvals.spec, null); assert.equal(next.approvals.plan, null);
+  assert.deepEqual(next.sourceSnapshot, change.draft.source);
+});
+
 test('HTTP pending/apply uses both real project checkpoints and keeps old runs read-only with a new source snapshot', async t => {
   const { app, project, request } = await fixture(t);
   const run = await app.orchestrator.createRun(project.id, { mode: 'local' });

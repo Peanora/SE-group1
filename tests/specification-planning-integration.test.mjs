@@ -386,6 +386,17 @@ test('没有需求也没有可回答问题失败后列出补充字段，预算�
   assert.equal(x.calls(),1);
 });
 
+test('新版规格重复上一版问题时预填继承回答，不再要求用户重填', async t => {
+  const x = await setup(t, { fetchImpl: async () => reply(JSON.stringify(raw())) }); await terminal(x, 'awaiting_spec');
+  x.run.specificationHistory = [];
+  x.run.clarificationHistory = [{ kind: 'inherited', fromRunId: 'previous-run', revision: x.run.sourceRevision, at: new Date().toISOString(),
+    answers: [{ question: '目标用户是谁？', answer: '访客', inherited: true }] }];
+  const result = x.orchestrator.prepareSpec(x.project, x.run, { ...raw(), requirements: [], questions: ['目标用户是谁？'], clarificationRequired: true });
+  assert.equal(result.specQuestions.length, 1); assert.equal(result.specQuestions[0].answer, '访客'); assert.equal(result.specQuestions[0].inherited, true);
+  assert.equal(result.spec.clarifications[0].answer, '访客'); assert.equal(result.spec.clarifications[0].inherited, true);
+  assert.equal(result.specRevision, contentRevision(result.spec));
+});
+
 test('模型响应已保存但后置规格校验失败时记录为规格校验失败，而不是版本失效', async t => {
   const duplicate=raw();duplicate.questions=['是否需要审核？','是否需要审核？'];
   const x=await setup(t,{fetchImpl:async()=>reply(JSON.stringify(duplicate))});await terminal(x);

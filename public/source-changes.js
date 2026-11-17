@@ -70,7 +70,7 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
   function schedule() { clearTimeout(timer); if (mounted && !destroyed && projectId) timer = setTimeout(() => { void refresh(); }, 3000); }
   function build(element) {
     root = node('section', null, 'source-changes'); root.setAttribute('aria-label', '需求输入变更'); root.append(node('style', STYLE));
-    root.append(node('h2', '需求输入变更'), node('p', '保存待应用请求不会修改当前输入，也不调用模型。应用只更新需求输入并使旧运行只读；新规格和计划需重新确认，代码和数据库迁移尚未执行。', 'sc-note'));
+    root.append(node('h2', '需求输入变更'), node('p', '保存待应用请求不会修改当前输入，也不调用模型。应用只更新需求输入并使旧运行只读；再次编排会继承上一版运行已保存的回答，新版需求正文优先，只需补充新增或变化的问题。新规格和计划需重新确认，代码和数据库迁移尚未执行。', 'sc-note'));
     const refreshButton = button('刷新变更状态', () => { void refresh(); }), status = node('p'), errorBox = node('p', '', 'sc-note sc-error'), noticeBox = node('p', '', 'sc-note');
     status.setAttribute('role', 'status'); errorBox.setAttribute('role', 'alert'); noticeBox.setAttribute('role', 'status'); root.append(refreshButton, status, errorBox, noticeBox);
     const body = node('div'), version = node('p'), staleBox = node('p', '', 'sc-note'), load = button('基于当前版本重新编辑', loadCurrent); body.append(version, staleBox, load);
