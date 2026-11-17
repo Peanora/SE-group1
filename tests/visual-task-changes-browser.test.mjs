@@ -101,13 +101,14 @@ for (const width of [1440, 390]) test(`真实Edge ${width}px：从任务图编�
   for (const id of ['B', 'D', 'E']) assert.equal(await prerequisite(id).isDisabled(), true, `禁用${id}以避免依赖环`);
   assert.equal(await prerequisite('A').isChecked(), true);
   assert.equal(await prerequisite('C').isEnabled(), true);
+  await preview.locator('.review-change > summary').click();
   await prerequisite('C').check();
   await page.locator('[data-review-choice="requirementIds"][data-task-index="1"][value="R-002"]').check();
   assert.match(await preview.textContent(), /前置任务/);
   assert.match(await preview.textContent(), /需求来源/);
   assert.equal(await page.locator('#approve-button').isDisabled(), true, '未保存草稿不能确认');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
-  await preview.locator('.review-change > summary').click();
+  assert.equal(await preview.locator('[data-change-task="B"]').evaluate(element => element.open), true, '输入与状态更新应保留已展开的修改对照');
   assert.equal(await preview.locator('pre').first().isVisible(), true);
   const evidence = path.resolve('output', 'visual-task-changes'); await mkdir(evidence, { recursive: true });
   await page.screenshot({ path: path.join(evidence, `task-editor-${width}.png`), fullPage: true });

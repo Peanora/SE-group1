@@ -161,11 +161,12 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
     feature.append(node('h4', '加入后的需求正文预览'), featurePreview, featureHint, featureActions); body.append(feature);
     const history = node('select'), detail = node('details'), detailBody = node('div'), apply = button('应用为新需求版本', () => { void perform('apply'); }, true);
     detail.open = true; detail.append(node('summary', '变更原文与影响'), detailBody); history.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } draft.selectedId = history.value; persist(); render(); });
-    const replanButton = button('重新规划', () => { void replan(); }), replanHint = node('p', '', 'sc-feature-help'), replanArea = node('div', null, 'sc-feature-replan');
-    replanArea.append(replanButton, replanHint); body.append(node('h3', '变更记录'), field('选择变更记录', history), detail, apply, replanArea);
+    const applyHint = node('p', '', 'sc-note'), replanButton = button('重新规划', () => { void replan(); }), replanHint = node('p', '', 'sc-feature-help'), replanArea = node('div', null, 'sc-feature-replan');
+    applyHint.setAttribute('role', 'status'); applyHint.classList.add('sc-feature-apply-hint');
+    replanArea.append(replanButton, replanHint); body.append(node('h3', '变更记录'), field('选择变更记录', history), detail, apply, applyHint, replanArea);
     const versions = node('details'), versionsBody = node('div'); versions.append(node('summary', '输入版本历史'), versionsBody); body.append(versions); root.append(body); element.append(root);
     refs = { refreshButton, status, errorBox, noticeBox, body, version, staleBox, load, filename, content, reason, kind, file, importButton, save, saveHint, history, detail, detailBody, apply, versionsBody,
-      featureToggle, feature, featureName, featureDescription, featureAcceptance, featurePreview, featureHint, featureAdd, featureNext, stepStates, replanArea, replanButton, replanHint };
+      featureToggle, feature, featureName, featureDescription, featureAcceptance, featurePreview, featureHint, featureAdd, featureNext, stepStates, applyHint, replanArea, replanButton, replanHint };
   }
   function renderDetail(item) {
     const signature = JSON.stringify(item ?? null); if (signature === detailSignature) return; detailSignature = signature;
@@ -182,7 +183,8 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
     refs.detailBody.append(node('p', '影响范围采用保守的全部重验：旧 passed 结果不复用；所有下游需新版本审阅和回归。分类与文本差异不证明业务语义正确。', 'sc-note'),
       node('p', proposal?.impact?.requiresMigrationReview === true ? '需要单独审阅数据迁移；此操作不会执行迁移。' : '数据迁移尚未执行；持久化影响可能未知，后续仍需审阅。'));
   }
-  function canApply() { const item = selected(); return !action && !stale() && data?.capabilities?.canApply === true && item?.status === 'pending' && item.baseRevision === current().revision && item.generation === current().generation; }
+  function canApply() { const item = selected(); return !action && !stale() && data?.capabilities?.canApply === true && item?.status === 'pending' && item.baseRevision === current().revision && item.generation === current().generation
+    && (!draft.featureOpen || savedDraft() === item); }
   async function confirmApplications() {
     for (const intent of applications.values()) {
       if (!isCurrent(intent) || intent.notified || dataRead <= intent.readFloor || !validCurrent(current())) continue;
@@ -216,6 +218,8 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
     if (!list.some(item => item.id === draft.selectedId)) draft.selectedId = list.at(-1)?.id ?? '';
     refs.history.value = draft.selectedId; refs.history.disabled = !list.length; renderDetail(selected());
     const added = featureAdded(), applied = appliedCurrent(), saved = savedDraft();
+    refs.applyHint.hidden = !draft.featureOpen || !!saved;
+    refs.applyHint.textContent = '当前功能尚未保存到所选变更，请先加入草稿并保存，再核对差异后应用。';
     refs.feature.hidden = !draft.featureOpen; refs.featureToggle.disabled = !projectId;
     for (const name of ['featureName', 'featureDescription', 'featureAcceptance']) refs[name].disabled = !projectId || !!action || added;
     refs.featureAdd.disabled = !!featureProblem(); refs.featureAdd.textContent = added ? '已加入需求草稿' : '加入需求草稿'; refs.featureNext.hidden = !added; refs.featureNext.disabled = !!action;

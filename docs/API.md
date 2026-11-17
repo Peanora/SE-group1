@@ -102,7 +102,7 @@ sourceSnapshot为本次运行不可变原文，导出requirements.md也使用该
 - GET `/api/projects` → `{projects:[{id,name,createdAt,updatedAt,filename,lastRunStatus,runCount}]}`
 - POST `/api/projects`，JSON `{name?,filename,content? ,fileBase64?}` → 201 `{project}`。文本使用 content，DOCX 使用 fileBase64。
 - GET `/api/projects/:pid` → `{project}`
-- POST `/api/projects/:pid/runs`，JSON `{mode:'local'|'model',failOnceStage?:'tasks'|'architecture'|'review'}` → 201 `{run}`，后台异步启动。单个项目同一时间只允许一个活动运行。
+- POST `/api/projects/:pid/runs`，JSON `{mode:'local'|'model',failOnceStage?:'tasks'|'architecture'|'review',expectedSourceRevision?,expectedSourceGeneration?}` → 201 `{run}`，后台异步启动。单个项目同一时间只允许一个活动运行；可选预期需求双版本成对提供，格式错误400、过期409且不创建运行或调用模型，详见同项目需求输入版本。
 - GET `/api/projects/:pid/runs/:rid` → `{run}`
 - POST `/api/projects/:pid/runs/:rid/action`，JSON `{action:'pause'|'resume'|'retry'|'approve',stageId?,feedback?}` → `{run}`。暂停为阶段边界暂停，运行中任务完成后不启动后继；失败运行结束后重试 failed 节点，保留成功分支。approve 仅在 awaiting_review 接受，可附审阅意见。
 - GET `/api/projects/:pid/runs/:rid/artifacts/:name` → 文本文件，`?download=1` 添加下载头。
@@ -188,7 +188,9 @@ Change含`id/projectId/status/baseRevision/generation/sourceRevision/source/reas
 
 网页保存草稿与幂等键；应用必须由后端GET确认同change、当前revision和代次后才显示完成。页面观察到其他请求应用新输入时，重新读取项目及历史run权限。需求正文、差异与模型文本只作为文本展示。
 
-网页“新增功能”表单将名称、说明和验收条件追加到本地需求草稿，复用上述创建变更与应用接口，不新增直接执行模型的端点。步骤及“重新规划”入口绑定本次所选变更与完整草稿，其他历史已应用变更不能替代本次确认。后端确认当前版本后，用户点击“重新规划”才通过已有创建run接口启动；前端再次核对项目、sourceRevision与generation，规划仍执行原预算和双确认。任务图编辑同样沿用`revise_plan`，本地差异预览不授予保存或执行权限。
+网页“新增功能”表单将名称、说明和验收条件追加到本地需求草稿，复用上述创建变更与应用接口，不新增直接执行模型的端点。步骤、应用和“重新规划”入口绑定本次所选变更与完整草稿，未保存功能及其他历史记录不能替代本次确认。后端确认当前版本后，用户点击“重新规划”才通过已有创建run接口启动；前端再次核对项目、sourceRevision与generation，规划仍执行原预算和双确认。任务图编辑同样沿用`revise_plan`，本地差异预览不授予保存或执行权限。
+
+创建run可选提交`expectedSourceRevision`（64位小写十六进制）和`expectedSourceGeneration`（非负安全整数），必须成对提供，缺失或非法返回400。控制器在项目准入互斥的同步区内比较当前需求双版本；任一不符返回409，尚未创建运行、保存或调用模型。同正文hash但generation已改变也拒绝。网页创建和重新规划均附带用户所见双版本，消除按钮核对与请求处理之间的发布竞争；旧API调用不传两字段时维持原兼容行为。
 
 ### 独立编码试验的内部接口
 

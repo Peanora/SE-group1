@@ -44,7 +44,7 @@ const sourceChanges = createSourceChanges({ api: sourceApi, getContext: () => ({
     if (state.selectionPending || projectId !== state.project?.id || revision !== state.project.currentSourceRevision || generation !== state.project.sourceGeneration) throw new Error('需求版本已变化，请刷新核对后再重新规划。');
     if ($('#start-run').disabled) throw new Error('当前不能启动规划，请先核对已有运行状态、规划模式和预算提示。');
     $('.flow-panel').scrollIntoView({ block: 'start' });
-    $('#start-run').click();
+    return startRun({ revision, generation });
   },
   onError: error => showError(error) });
 void sourceChanges.mount(document.querySelector('#source-changes-host'));
@@ -489,13 +489,14 @@ async function selectRun(id) {
   catch (error) { if (epoch === state.epoch) showError(error); }
   finally { if (epoch === state.epoch) { state.selectionPending = false; renderHeader(); renderControls(); syncExecutionPanel(); } }
 }
-async function startRun() {
+async function startRun(expectedSource) {
   if (!state.project || state.busy || state.selectionPending || (!historicalRun() && ACTIVE.has(state.run?.status))) return;
   if ($('#start-run').disabled) return;
   clearError(); setBusy(true); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   state.selectionPending = true; syncExecutionPanel();
   try {
-    const options = { mode: $('#mode-select').value }; if ($('#failure-select').value) options.failOnceStage = $('#failure-select').value;
+    const source = expectedSource || { revision: state.project.currentSourceRevision, generation: state.project.sourceGeneration };
+    const options = { mode: $('#mode-select').value, expectedSourceRevision: source.revision, expectedSourceGeneration: source.generation }; if ($('#failure-select').value) options.failOnceStage = $('#failure-select').value;
     const { run } = await api(`/api/projects/${encodeURIComponent(state.project.id)}/runs`, { method: 'POST', body: JSON.stringify(options) });
     if (epoch !== state.epoch) return;
     state.selectionPending = false;
@@ -578,7 +579,7 @@ $('#load-sample').addEventListener('click', loadSample);
 $('#project-form').addEventListener('submit', createProject);
 $('#file-input').addEventListener('change', (event) => importFile(event.target.files[0]));
 $('#clear-file').addEventListener('click', resetFile);
-$('#start-run').addEventListener('click', startRun);
+$('#start-run').addEventListener('click', () => { void startRun(); });
 $('#pause-button').addEventListener('click', () => runAction(state.run?.status === 'paused' ? 'resume' : 'pause'));
 $('#run-select').addEventListener('change', (event) => selectRun(event.target.value));
 $('#dismiss-error').addEventListener('click', clearError);

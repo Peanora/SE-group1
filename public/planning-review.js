@@ -91,11 +91,12 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
   function syncPlanPreview(run, draft) {
     const preview = $('#review-plan-preview');
     if (!preview || draft.kind !== 'plan') return;
+    const expanded = new Set([...preview.querySelectorAll('[data-change-task]')].filter(element => element.open).map(element => element.dataset.changeTask));
     const summary = planSummary(run, draft);
     const display = value => escape(Array.isArray(value) ? value.join('\n') || '无' : value || '无');
     preview.innerHTML = `<h4>任务修改预览</h4><p>${summary.changed.length ? `${summary.changed.length} 项任务有改动，${summary.downstreamIds.length} 项下游任务需一起核对。草稿尚未保存。` : '还没有任务改动。可从上方选择任务，或在开发任务图中点击“修改此任务”。'}</p>
       ${summary.errors.length ? `<div class="inline-error"><strong>保存前请处理</strong><ul>${summary.errors.map(message => `<li>${escape(message)}</li>`).join('')}</ul></div>` : ''}
-      ${summary.changed.map(task => `<details class="review-change"><summary>${escape(task.id)} ${escape(task.title)}：${task.fields.map(field => escape(field.label)).join('、')}</summary>${task.fields.map(field => `<div class="review-change-row"><strong>${escape(field.label)}</strong><div><span>修改前</span><pre>${display(field.before)}</pre></div><div><span>修改后</span><pre>${display(field.after)}</pre></div></div>`).join('')}</details>`).join('')}
+      ${summary.changed.map(task => `<details class="review-change" data-change-task="${escape(task.id)}" ${expanded.has(task.id) ? 'open' : ''}><summary>${escape(task.id)} ${escape(task.title)}：${task.fields.map(field => escape(field.label)).join('、')}</summary>${task.fields.map(field => `<div class="review-change-row"><strong>${escape(field.label)}</strong><div><span>修改前</span><pre>${display(field.before)}</pre></div><div><span>修改后</span><pre>${display(field.after)}</pre></div></div>`).join('')}</details>`).join('')}
       ${summary.downstreamIds.length ? `<p>依赖关系中的下游：${summary.downstreamIds.map(id => escape(id)).join('、')}。这是计划依赖提示，代码与数据的影响仍需检查。</p>` : ''}`;
     const changed = new Set(summary.changed.map(task => task.id));
     $$('[data-task-change]').forEach(element => {

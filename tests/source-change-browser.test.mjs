@@ -15,7 +15,7 @@ const spec = content => ({ title: '资源目录', summary: content, goals: [], r
   stack: { frontend: 'HTML/CSS/JavaScript', backend: 'Node.js', storage: 'SQLite' }, sourceMode: 'local',
   requirements: [{ id: 'R1', title: '读取资源', description: content, sourceQuote: content, acceptance: ['按当前需求展示资源'] }] });
 async function waitFor(check) { const end = Date.now() + 10000; while (!check()) { if (Date.now() >= end) throw new Error('规划停点等待超时'); await delay(5); } }
-async function fixture(t) {
+async function fixture(t, { allowRunConflict = false } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'source-change-browser-'));
   const app = await createApp({ dataDir: directory, stepDelayMs: 0, planner: { ...planner, analyzeRequirements: spec, getModelConfig: () => ({ configured: false }), analyzeWithModel: () => assert.fail('本轮需求版本检查不允许模型调用') } });
   const project = await app.store.create({ name: '同项目需求版本', source: { filename: 'original.md', content: original } });
@@ -24,7 +24,9 @@ async function fixture(t) {
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } }), errors = [];
-  page.on('pageerror', error => errors.push(error.message)); page.on('console', item => { if (item.type() === 'error') errors.push(item.text()); });
+  page.on('pageerror', error => errors.push(error.message)); page.on('console', item => {
+    if (item.type() === 'error' && !(allowRunConflict && item.location().url.endsWith(`/api/projects/${project.id}/runs`) && /409/.test(item.text()))) errors.push(item.text());
+  });
   t.after(async () => { await browser.close(); await app.close(); assert.deepEqual(errors, []); assert.equal(path.dirname(directory), path.resolve(os.tmpdir())); assert.ok(path.basename(directory).startsWith('source-change-browser-')); await rm(directory, { recursive: true, force: true }); });
   const url = `http://127.0.0.1:${app.server.address().port}`;
   await page.goto(url); await page.getByRole('button', { name: '确认规格并继续', exact: true }).waitFor();
@@ -152,4 +154,34 @@ test('新增功能在真实工作台经草稿、保存、应用和单独重新�
     assert.notEqual(next.id, run.id); assert.equal(next.sourceGeneration, 1); assert.equal(next.sourceSnapshot.content, merged); assert.equal(next.status, 'awaiting_spec');
     assert.deepEqual(next.approvals, { spec: null, plan: null }); assert.equal(run.sourceSuperseded, true);
   }
+});
+
+test('重新规划请求在途时另一窗口发布新版，拒绝过期请求且不创建运行', { timeout: 60000 }, async t => {
+  const { app, project, run, page } = await fixture(t, { allowRunConflict: true });
+  const panel = page.locator('.source-changes');
+  await panel.getByLabel('需求正文', { exact: true }).fill(changed);
+  await panel.getByLabel('变更原因', { exact: true }).fill('先确认功能A');
+  await panel.getByRole('button', { name: '保存为待应用变更', exact: true }).click();
+  await page.waitForFunction(() => ![...document.querySelectorAll('.source-changes button')].find(button => button.textContent === '应用为新需求版本')?.disabled);
+  await panel.getByRole('button', { name: '应用为新需求版本', exact: true }).click();
+  await page.waitForFunction(() => ![...document.querySelectorAll('.source-changes button')].find(button => button.textContent === '重新规划')?.disabled);
+  const revision = project.currentSourceRevision, generation = project.sourceGeneration;
+  let release, entered, requestBody;
+  const hold = new Promise(resolve => { release = resolve; }), intercepted = new Promise(resolve => { entered = resolve; });
+  await page.route(`**/api/projects/${project.id}/runs`, async route => {
+    if (route.request().method() === 'POST') { requestBody = route.request().postDataJSON(); entered(); await hold; }
+    await route.continue();
+  });
+  try {
+    const rejected = page.waitForResponse(response => response.url().endsWith(`/api/projects/${project.id}/runs`) && response.request().method() === 'POST');
+    await panel.getByRole('button', { name: '重新规划', exact: true }).click(); await intercepted;
+    assert.equal(requestBody.expectedSourceRevision, revision); assert.equal(requestBody.expectedSourceGeneration, generation);
+    const external = app.sourceChangeService.request({ projectId: project.id, baseRevision: revision, source: { filename: project.source.filename, content: `${changed}\n其他窗口增加资源筛选。` }, reason: '其他窗口提交功能B', kind: 'other', requestKey: 'source-binding-browser-race' });
+    await app.sourceChangeService.apply({ projectId: project.id, changeId: external.id, baseRevision: external.baseRevision, generation: external.generation });
+    release(); assert.equal((await rejected).status(), 409);
+    await page.waitForFunction(() => !document.querySelector('#error-banner').hidden);
+    assert.match(await page.locator('#error-text').textContent(), /版本/);
+    assert.equal(project.runs.length, 1); assert.equal(project.runs[0].id, run.id);
+    assert.equal(project.sourceGeneration, generation + 1); assert.equal(project.currentSourceRevision, external.sourceRevision);
+  } finally { release(); }
 });
