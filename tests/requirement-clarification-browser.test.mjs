@@ -30,6 +30,14 @@ for (const width of [1440, 390]) test(`Edge ${width}px：一句话需求可澄�
   await page.goto(url); await page.locator('#mode-select').selectOption('model'); await page.locator('#start-run').click();
   await page.getByRole('heading', { name: '需要补充需求信息', exact: true }).waitFor();
   assert.match(await page.locator('#run-status').innerText(), /等待补充需求/);
+  const specNode = page.locator('[data-stage="spec"]');
+  assert.match(await specNode.getAttribute('class'), /awaiting-confirmation/u);
+  assert.doesNotMatch(await specNode.getAttribute('class'), /(?:^|\s)succeeded(?:\s|$)/u);
+  assert.match(await specNode.innerText(), /等待补充需求/u);
+  assert.match(await page.locator('#run-progress').innerText(), /整理设计规格等待补充/u);
+  await specNode.click();
+  assert.match(await page.locator('#stage-inspector .status-tag').innerText(), /等待补充需求/u);
+  assert.match(await page.locator('#stage-inspector').innerText(), /等待补充后生成最终规格/u);
   assert.equal(await page.getByRole('button', { name: '根据回答整理规格', exact: true }).isDisabled(), true);
   await page.getByLabel(/Q-001/).fill('Web网页'); await page.getByLabel(/Q-002/).fill('首版只做文字聊天');
   await page.getByRole('button', { name: '保存修订', exact: true }).click();
@@ -40,6 +48,9 @@ for (const width of [1440, 390]) test(`Edge ${width}px：一句话需求可澄�
   assert.match(await page.locator('#review-banner').innerText(), /新增一次模型请求/);
   await page.getByRole('button', { name: '根据回答整理规格', exact: true }).click();
   await page.getByRole('heading', { name: '先确认规格，再生成开发计划', exact: true }).waitFor();
+  assert.match(await page.locator('[data-stage="spec"]').getAttribute('class'), /(?:^|\s)succeeded(?:\s|$)/u);
+  await page.locator('[data-stage="spec"]').click();
+  assert.match(await page.locator('#stage-inspector .status-tag').innerText(), /已完成/u);
   assert.equal(calls, 2); assert.ok(received.includes('首版只做文字聊天'));
   const run = app.store.get(project.id).runs[0];
   assert.equal(run.status, 'awaiting_spec'); assert.equal(run.approvals.spec, null); assert.equal(run.sourceSnapshot.content, source);

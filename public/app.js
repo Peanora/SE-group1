@@ -174,6 +174,8 @@ function replacePreservingFocus(container, html) {
 function sortedRuns(project = state.project) { return [...(project?.runs || [])].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)); }
 function stageOf(id) { return state.run?.stages?.find((stage) => stage.id === id); }
 function stageTitle(id) { return stageOf(id)?.title || STAGES.find((stage) => stage.id === id)?.title || '运行'; }
+function specClarificationPending(run = state.run) { return Boolean(run?.workflowVersion === 2 && run.status === 'awaiting_spec' && run.spec?.clarificationRequired); }
+function runStatusLabel(run = state.run) { return !run ? '' : specClarificationPending(run) ? '等待补充需求' : STATUS[run.status] || run.status; }
 const planningReview = createPlanningReview({
   container: $('#review-banner'), getState: () => ({ ...state, run: historicalRun() ? { ...state.run, sourceSuperseded: true } : state.run, busy: state.busy || state.selectionPending }), submit: reviewAction,
   refresh: async () => {
@@ -211,7 +213,7 @@ function renderHeader() {
   $('#onboarding').hidden = !!state.project;
   const runs = sortedRuns();
   const select = $('#run-select');
-  select.innerHTML = runs.length ? runs.map((run, i) => `<option value="${escape(run.id)}" ${run.id === state.run?.id ? 'selected' : ''}>运行 ${String(runs.length - i).padStart(2, '0')}　${escape(formatTime(run.createdAt, true))}　${escape(STATUS[run.status] || run.status)}${run.workflowVersion === 2 ? '' : '（旧版记录）'}</option>`).join('') : '<option>尚无运行记录</option>';
+  select.innerHTML = runs.length ? runs.map((run, i) => `<option value="${escape(run.id)}" ${run.id === state.run?.id ? 'selected' : ''}>运行 ${String(runs.length - i).padStart(2, '0')}　${escape(formatTime(run.createdAt, true))}　${escape(runStatusLabel(run))}${run.workflowVersion === 2 ? '' : '（旧版记录）'}</option>`).join('') : '<option>尚无运行记录</option>';
   select.disabled = !runs.length || state.busy;
 }
 function renderControls() {
@@ -250,10 +252,11 @@ function renderControls() {
   $('#download-bundle').hidden = run?.status !== 'succeeded';
   if (run?.status === 'succeeded') $('#download-bundle').href = `${basePath()}/download`;
   const status = run?.status || 'idle';
-  $('#run-status').textContent = `${run?.status === 'awaiting_spec' && run.spec?.clarificationRequired ? '等待补充需求' : STATUS[status] || status}${historical ? ' / 历史输入，只读' : run && run.workflowVersion !== 2 ? ' / 旧版记录' : ''}`;
+  $('#run-status').textContent = `${runStatusLabel(run)}${historical ? ' / 历史输入，只读' : run && run.workflowVersion !== 2 ? ' / 旧版记录' : ''}`;
   $('#run-status').className = `status-tag status-${status}`;
-  const count = run?.stages?.filter((stage) => stage.status === 'succeeded').length || 0;
-  $('#run-progress').textContent = run ? `${count} / ${run.stages.length} 个阶段已完成${run.status === 'paused' ? '，当前任务完成后暂停' : ''}` : '导入需求后开始';
+  const clarificationPending = specClarificationPending(run);
+  const count = run?.stages?.filter((stage) => stage.status === 'succeeded' && !(clarificationPending && stage.id === 'spec')).length || 0;
+  $('#run-progress').textContent = run ? `${count} / ${run.stages.length} 个阶段已完成${clarificationPending ? '，整理设计规格等待补充' : run.status === 'paused' ? '，当前任务完成后暂停' : ''}` : '导入需求后开始';
   $('#workflow-subtitle').textContent = run ? `${run.mode === 'model' ? '模型规划' : '本地规则规划'}　运行 ${run.id.slice(-8)}${run.workflowVersion === 2 ? '　两次人工确认' : '　旧版流程'}` : '六个阶段，两次确认，保留每版依据';
   $('#workflow-confirmation-legend').textContent = run && run.workflowVersion !== 2 ? '旧版流程：导出前确认' : '先确认规格，再确认计划';
   $('#source-history-notice').hidden = !historical;
@@ -267,8 +270,11 @@ function renderWorkflow() {
   const markers = ['pending', 'running', 'succeeded', 'failed', 'blocked'].map((status) => `<marker id="arrow-${status}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L8 4L0 8Z" fill="${({ running: '#6480e5', succeeded: '#7aaea1', failed: '#d4a4ac', blocked: '#d4a4ac' })[status] || '#c4cfdf'}"/></marker>`).join('');
   const html = `<svg class="flow-edges" viewBox="0 0 1000 292" preserveAspectRatio="none" aria-hidden="true"><defs>${markers}</defs>${edge('intake', 'spec', 'M165 149H200')}${edge('spec', 'architecture', 'M350 149H375V69H400')}${edge('spec', 'tasks', 'M350 149H375V229H400')}${edge('architecture', 'review', 'M550 69H590V149H620')}${edge('tasks', 'review', 'M550 229H590V149')}${edge('review', 'export', 'M770 149H820')}</svg>${STAGES.map((fallback, i) => {
     const stage = stageOf(fallback.id) || { ...fallback, status: 'pending', attempt: 0 };
-    const waiting = fallback.id === 'export' && state.run?.status === 'awaiting_review' ? '等待计划确认' : ['architecture', 'tasks'].includes(fallback.id) && state.run?.status === 'awaiting_spec' ? state.run.spec?.clarificationRequired ? '等待补充需求' : '等待规格确认' : '';
-    return `<button class="flow-node ${escape(stage.status)} ${waiting ? 'awaiting-confirmation' : ''} ${state.stageId === stage.id ? 'selected' : ''}" style="--x:${fallback.x}%;--y:${fallback.y}px" data-stage="${escape(stage.id)}" data-focus-key="stage-${escape(stage.id)}" aria-pressed="${state.stageId === stage.id}" aria-label="${escape(stage.title)}，${escape(waiting || STATUS[stage.status] || stage.status)}"><span class="node-top"><span class="node-number">${String(i + 1).padStart(2, '0')}</span><span class="node-status-dot">${stage.status === 'succeeded' ? '✓' : ''}</span></span><h3>${escape(stage.title)}</h3><span class="node-meta">${escape(waiting || STATUS[stage.status] || stage.status)}${stage.attempt > 1 ? ` / 第 ${stage.attempt} 次` : ''}</span></button>`;
+    const specWaiting = fallback.id === 'spec' && specClarificationPending();
+    const waiting = specWaiting ? '等待补充需求' : fallback.id === 'export' && state.run?.status === 'awaiting_review' ? '等待计划确认' : ['architecture', 'tasks'].includes(fallback.id) && state.run?.status === 'awaiting_spec' ? state.run.spec?.clarificationRequired ? '等待补充需求' : '等待规格确认' : '';
+    const visualStatus = specWaiting ? 'awaiting_spec' : stage.status;
+    const completed = stage.status === 'succeeded' && !specWaiting;
+    return `<button class="flow-node ${escape(visualStatus)} ${waiting ? 'awaiting-confirmation' : ''} ${state.stageId === stage.id ? 'selected' : ''}" style="--x:${fallback.x}%;--y:${fallback.y}px" data-stage="${escape(stage.id)}" data-focus-key="stage-${escape(stage.id)}" aria-pressed="${state.stageId === stage.id}" aria-label="${escape(stage.title)}，${escape(waiting || STATUS[stage.status] || stage.status)}"><span class="node-top"><span class="node-number">${String(i + 1).padStart(2, '0')}</span><span class="node-status-dot">${completed ? '✓' : ''}</span></span><h3>${escape(stage.title)}</h3><span class="node-meta">${escape(waiting || STATUS[stage.status] || stage.status)}${stage.attempt > 1 ? ` / 第 ${stage.attempt} 次` : ''}</span></button>`;
   }).join('')}`;
   replacePreservingFocus($('#workflow-graph'), html);
 }
@@ -276,6 +282,10 @@ function renderInspector() {
   const fallback = STAGES.find((stage) => stage.id === state.stageId) || STAGES[0];
   const stage = stageOf(fallback.id) || { ...fallback, status: 'pending', attempt: 0 };
   const artifacts = state.run?.artifacts?.filter((artifact) => artifact.stageId === stage.id) || [];
+  const specWaiting = stage.id === 'spec' && specClarificationPending();
+  const visualStatus = specWaiting ? 'awaiting_spec' : stage.status;
+  const visualLabel = specWaiting ? '等待补充需求' : STATUS[stage.status] || stage.status;
+  const outputHtml = specWaiting ? '等待补充后生成最终规格' : artifacts.length ? artifacts.map((artifact) => `<button class="inspector-artifact-link" data-artifact="${escape(artifact.name)}" data-focus-key="inspector-${escape(artifact.name)}">${escape(artifact.name)}</button>`).join('') : escape(fallback.output);
   const note = state.run?.status === 'awaiting_spec' && ['spec', 'architecture', 'tasks'].includes(stage.id) ? state.run.spec?.clarificationRequired ? '需求范围尚不明确。请在下方回答问题，再点击“根据回答整理规格”。' : '请在下方答复待确认问题并保存修订；确认规格后才会生成架构和任务。' : stage.id === 'export' && state.run?.status === 'awaiting_review' ? `检查下方计划后，点击“${state.run?.workflowVersion === 2 ? '确认计划并导出' : '确认并导出'}”继续。` : stage.status === 'blocked' ? '前置阶段尚未成功。解决失败并重试后，编排器会重新检查依赖。' : stage.status === 'succeeded' ? '本阶段结果已保存。后续重试会保留成功分支。' : '每个阶段成功后发布产物；下游只读取已成功的结果。';
   const failure = stage.id === 'spec' ? state.run?.specificationFailure : ['architecture', 'tasks'].includes(stage.id) ? state.run?.engineeringFailure : null;
   const failureDetail = failure?.detail && failure.detail !== failure.message ? ` ${failure.detail}` : '';
@@ -283,7 +293,7 @@ function renderInspector() {
   const retryDisabled = state.busy || failure?.canRetry === false;
   const recovery = failure?.canRevalidate ? `<button class="button button-primary" ${stage.id === 'spec' ? `data-revalidate-spec="${escape(failure.attemptId)}"` : 'data-revalidate-engineering'} ${state.busy ? 'disabled' : ''}>${stage.id === 'spec' ? '重新校验已保存响应（不调用模型）' : '重新校验保存的工程草案（不调用模型）'}</button>` : '';
   const localRecovery = failure?.canUseLocal ? `<button class="button button-outline" data-use-local-engineering ${state.busy ? 'disabled' : ''}>改用本地规则生成架构与任务（不调用模型）</button>` : '';
-  const html = `<div class="inspector-eyebrow"><span>阶段详情</span><span class="status-tag status-${escape(stage.status)}">${escape(STATUS[stage.status] || stage.status)}</span></div><h3 class="inspector-title">${escape(stage.title)}</h3><p class="inspector-description">${escape(fallback.description)}</p><dl class="inspector-info"><dt>前置依赖</dt><dd>${stage.dependsOn.length ? stage.dependsOn.map((id) => escape(stageTitle(id))).join('、') : '无，可直接启动'}</dd><dt>尝试次数</dt><dd>${stage.attempt || '尚未执行'}</dd><dt>执行用时</dt><dd>${duration(stage)}</dd><dt>输出产物</dt><dd>${artifacts.length ? artifacts.map((artifact) => `<button class="inspector-artifact-link" data-artifact="${escape(artifact.name)}" data-focus-key="inspector-${escape(artifact.name)}">${escape(artifact.name)}</button>`).join('') : escape(fallback.output)}</dd></dl>${stage.error ? `<div class="stage-error">${escape(failureText)}${recovery}${localRecovery}${state.run?.status === 'failed' && stage.status === 'failed' ? `<button class="button button-outline" data-retry="${escape(stage.id)}" data-focus-key="retry-${escape(stage.id)}" ${retryDisabled ? 'disabled' : ''}>${failure?.canRetry === false ? stage.id === 'spec' ? '调用次数已用尽' : '工程总时长已用尽' : '重试此阶段'}</button>` : ''}</div>` : ''}<p class="inspector-note">${escape(note)}</p>`;
+  const html = `<div class="inspector-eyebrow"><span>阶段详情</span><span class="status-tag status-${escape(visualStatus)}">${escape(visualLabel)}</span></div><h3 class="inspector-title">${escape(stage.title)}</h3><p class="inspector-description">${escape(fallback.description)}</p><dl class="inspector-info"><dt>前置依赖</dt><dd>${stage.dependsOn.length ? stage.dependsOn.map((id) => escape(stageTitle(id))).join('、') : '无，可直接启动'}</dd><dt>尝试次数</dt><dd>${stage.attempt || '尚未执行'}</dd><dt>执行用时</dt><dd>${duration(stage)}</dd><dt>输出产物</dt><dd>${outputHtml}</dd></dl>${stage.error ? `<div class="stage-error">${escape(failureText)}${recovery}${localRecovery}${state.run?.status === 'failed' && stage.status === 'failed' ? `<button class="button button-outline" data-retry="${escape(stage.id)}" data-focus-key="retry-${escape(stage.id)}" ${retryDisabled ? 'disabled' : ''}>${failure?.canRetry === false ? stage.id === 'spec' ? '调用次数已用尽' : '工程总时长已用尽' : '重试此阶段'}</button>` : ''}</div>` : ''}<p class="inspector-note">${escape(note)}</p>`;
   replacePreservingFocus($('#stage-inspector'), html);
   if (historicalRun()) $$('[data-retry], [data-revalidate-spec], [data-revalidate-engineering], [data-use-local-engineering]', $('#stage-inspector')).forEach(button => { button.disabled = true; });
 }
