@@ -233,3 +233,7 @@ QA平台PTY正常STOP退出0；63820/57843/51033已无监听，4317仍原PID8473
 生产代码`01e301e`。`npm run check`为117脚本语法通过；`npm test`为707项，677通过、30跳过、0失败、0取消，114,761.8115ms。30项跳过为未启用真实MXC/显式真实Edge的既有集成项。
 
 新增回归：需求输入应用后创建新运行，自动继承上一版2条已保存回答，`inheritedFrom.runId`/`answerCount`正确，`clarificationHistory`全部为`kind:"inherited"`，旧审批不继承，sourceSnapshot为新正文；新版规格重复旧问题时预填答案并标记`inherited`，`spec.clarifications`同步、`specRevision`重新计算。既有澄清、工程自动修正、输入变更、导出和可复现验收回归全部通过。未调用真实付费模型，未修改用户现有运行数据。证据见`docs/tasks/requirement-answer-inheritance.md`。
+
+## 2026-11-17 需求变更草稿保存按钮
+
+生产代码`73d1bec`。`npm run check`为117脚本语法通过；`npm test`为708项，678通过、30跳过、0失败、0取消，118,349.5895ms。新增面板回归：注入只有baseRevision、缺少baseGeneration的旧草稿并刷新，前端按当前generation补齐后保存按钮可用、不显示旧版本警告；旧版本revision仍进入“基于当前版本重新编辑”分支。按钮下方增加可见禁用原因。未调用模型、未改存储或审批。当前4317服务监听12344，静态文件刷新即可生效。
