@@ -188,6 +188,8 @@ Change含`id/projectId/status/baseRevision/generation/sourceRevision/source/reas
 
 网页保存草稿与幂等键；应用必须由后端GET确认同change、当前revision和代次后才显示完成。页面观察到其他请求应用新输入时，重新读取项目及历史run权限。需求正文、差异与模型文本只作为文本展示。
 
+网页“新增功能”表单将名称、说明和验收条件追加到本地需求草稿，复用上述创建变更与应用接口，不新增直接执行模型的端点。步骤及“重新规划”入口绑定本次所选变更与完整草稿，其他历史已应用变更不能替代本次确认。后端确认当前版本后，用户点击“重新规划”才通过已有创建run接口启动；前端再次核对项目、sourceRevision与generation，规划仍执行原预算和双确认。任务图编辑同样沿用`revise_plan`，本地差异预览不授予保存或执行权限。
+
 ### 独立编码试验的内部接口
 
 本轮不新增 HTTP 路由，规划 Run、DevTask 和现有成功状态含义保持不变。命令入口为 `npm run execution:check -- --fixture|--model`。

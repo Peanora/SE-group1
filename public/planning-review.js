@@ -1,3 +1,5 @@
+import { summarizeTaskChanges, unavailableDependencies } from './task-plan-view.js';
+
 const escape = (value = '') => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const copy = (value) => structuredClone(value);
 const short = (value) => value ? String(value).slice(0, 10) : '尚未生成';
@@ -6,7 +8,7 @@ const date = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12
 const actionNames = { use_platform_defaults: '采用平台默认方案', use_local_engineering: '改用本地工程规则', clarify_spec: '补充需求并整理规格', supplement_spec: '补充规格信息', approve_spec: '确认规格', reject_spec: '退回规格', revise_spec: '修订规格', approve_plan: '确认计划', reject_plan: '退回计划', revise_plan: '修订计划' };
 
 // This editor owns its inputs. Polling updates status without replacing live drafts or focus.
-export function createPlanningReview({ container, getState, submit, refresh, showArtifact, toast }) {
+export function createPlanningReview({ container, getState, submit, refresh, showArtifact, toast, addFeature = () => {}, onPlanDraft = () => {} }) {
   const drafts = new Map();
   const reviewModes = new Map();
   let viewKey = '';
@@ -64,7 +66,42 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
       <section class="review-questions" aria-labelledby="review-questions-title"><div class="review-section-heading"><h4 id="review-questions-title">待确认问题</h4><span id="review-question-count"></span></div><p class="review-help">逐项写明决定，再点击“保存修订”。保存回答后，仍需单独确认规格。</p>${(run.specQuestions || []).length ? run.specQuestions.map((q, index) => `<div class="review-question">${field(questionLabel(q, q.blocking), `answer.${q.id}`, draft.answers[q.id] || '', { multiline: true, rows: 2, max: 4000 })}<button type="button" class="text-button" data-suggest-answer="${index}">填入推荐回答</button></div>`).join('') : '<p class="review-help">本版没有待确认问题。</p>'}<p class="review-help" id="review-suggestion-note" hidden>推荐回答来自本地规则，只是一项建议。请核对并修改，再自行保存和确认。</p></section>`;
   }
   function planEditor(run, draft) {
-    return `<div class="review-plan-basis"><strong>计划依据</strong><span>规格第 ${escape(run.specVersion || 1)} 版 / ${escape(short(run.specRevision))}</span><p>任务仍为待开发。保存修订会重新检查依赖和需求覆盖，通过后再等待你的确认。</p></div><div class="review-item-list">${draft.tasks.map((task, index) => `<details class="review-item" data-review-details="task-${index}" ${index === 0 ? 'open' : ''}><summary><span>${escape(task.id)}</span><strong>${escape(task.title)}</strong><small>${(task.dependsOn || []).length} 项依赖</small></summary><div class="review-item-body">${field('任务标题', `task.${index}.title`, task.title, { max: 300 })}${field('任务描述', `task.${index}.description`, task.description, { multiline: true, rows: 3 })}${field('验收条件', `task.${index}.acceptance`, (task.acceptance || []).join('\n'), { multiline: true, rows: 3, help: '每行一条可检查的条件。' })}<div class="review-form-grid">${field('前置依赖', `task.${index}.dependsOn`, (task.dependsOn || []).join('\n'), { multiline: true, rows: 2, help: '每行一个任务编号；没有依赖可留空。' })}${field('需求来源', `task.${index}.requirementIds`, (task.requirementIds || []).join('\n'), { multiline: true, rows: 2, help: '每行一个需求编号。' })}</div><div class="review-source"><strong>关联需求与原文（按已保存计划）</strong>${(task.requirementIds || []).map((id) => { const requirement = run.spec?.requirements?.find((r) => r.id === id); return `<p>${escape(id)} ${escape(requirement?.title || '')}</p>${requirement ? `<blockquote>${escape(requirement.sourceQuote)}</blockquote>` : ''}`; }).join('') || '<p>无</p>'}</div></div></details>`).join('')}</div>`;
+    const selectedIndex = Math.max(0, draft.tasks.findIndex(task => task.id === draft.selectedTask));
+    draft.selectedTask = draft.tasks[selectedIndex]?.id;
+    const choices = (items, index, property, selected, unavailable = new Set()) => items.map(item => {
+      const blocked = unavailable.has(item.id) && !selected.includes(item.id);
+      return `<label class="review-choice"><input type="checkbox" data-review-choice="${property}" data-task-index="${index}" value="${escape(item.id)}" ${selected.includes(item.id) ? 'checked' : ''} ${blocked ? 'disabled' : ''}><span>${escape(item.id)} ${escape(item.title)}${blocked ? '（自身或下游，不可作为前置）' : ''}</span></label>`;
+    }).join('');
+    return `<div class="review-plan-basis"><strong>修改开发计划</strong><span>依据规格第 ${escape(run.specVersion || 1)} 版 / ${escape(short(run.specRevision))}</span><p>选择任务，修改内容或勾选依赖，再核对改动预览。保存后重新检查，仍需单独确认；新增业务功能请先更新需求。</p><button type="button" class="text-button" data-review-add-feature>新增功能并重新规划</button></div>
+      <nav class="review-task-picker" aria-label="选择要修改的任务">${draft.tasks.map(task => `<button type="button" data-edit-task="${escape(task.id)}" aria-pressed="${task.id === draft.selectedTask}"><span>${escape(task.id)}</span><strong>${escape(task.title)}</strong></button>`).join('')}</nav>
+      <section id="review-plan-preview" class="review-plan-preview" aria-label="任务修改预览" aria-live="polite"></section>
+      <div class="review-item-list">${draft.tasks.map((task, index) => index !== selectedIndex ? '' : `<details class="review-item" data-review-details="task-${index}" open>
+        <summary><span>${escape(task.id)}</span><strong>${escape(task.title)}</strong><small data-task-change="${escape(task.id)}">${(task.dependsOn || []).length} 项依赖</small></summary>
+        <div class="review-item-body">${field('任务标题', `task.${index}.title`, task.title, { max: 300 })}${field('任务描述', `task.${index}.description`, task.description, { multiline: true, rows: 3 })}${field('验收条件', `task.${index}.acceptance`, (task.acceptance || []).join('\n'), { multiline: true, rows: 3, help: '每行一条可检查的条件。' })}
+        <div class="review-form-grid"><fieldset class="review-choices"><legend>前置任务（勾选后才可开始本任务）</legend>${choices(draft.tasks, index, 'dependsOn', task.dependsOn || [], unavailableDependencies(draft.tasks, task.id))}<small>不能选择自身或其下游任务，避免形成循环。</small></fieldset>
+        <fieldset class="review-choices"><legend>关联需求</legend>${choices(run.spec?.requirements || [], index, 'requirementIds', task.requirementIds || [])}<small>每条规格需求至少应关联一项开发任务。</small></fieldset></div>
+        <div class="review-source"><strong>需求原文参考</strong>${(run.spec?.requirements || []).map(requirement => `<details><summary>${escape(requirement.id)} ${escape(requirement.title)}</summary><blockquote>${escape(requirement.sourceQuote)}</blockquote></details>`).join('') || '<p>无</p>'}</div></div></details>`).join('')}</div>`;
+  }
+  function planSummary(run, draft) {
+    const summary = summarizeTaskChanges(run.tasks || [], draft.tasks);
+    const covered = new Set(draft.tasks.flatMap(task => task.requirementIds || []));
+    for (const requirement of run.spec?.requirements || []) if (!covered.has(requirement.id)) summary.errors.push(`需求 ${requirement.id} ${requirement.title} 尚未关联开发任务。`);
+    return summary;
+  }
+  function syncPlanPreview(run, draft) {
+    const preview = $('#review-plan-preview');
+    if (!preview || draft.kind !== 'plan') return;
+    const summary = planSummary(run, draft);
+    const display = value => escape(Array.isArray(value) ? value.join('\n') || '无' : value || '无');
+    preview.innerHTML = `<h4>任务修改预览</h4><p>${summary.changed.length ? `${summary.changed.length} 项任务有改动，${summary.downstreamIds.length} 项下游任务需一起核对。草稿尚未保存。` : '还没有任务改动。可从上方选择任务，或在开发任务图中点击“修改此任务”。'}</p>
+      ${summary.errors.length ? `<div class="inline-error"><strong>保存前请处理</strong><ul>${summary.errors.map(message => `<li>${escape(message)}</li>`).join('')}</ul></div>` : ''}
+      ${summary.changed.map(task => `<details class="review-change"><summary>${escape(task.id)} ${escape(task.title)}：${task.fields.map(field => escape(field.label)).join('、')}</summary>${task.fields.map(field => `<div class="review-change-row"><strong>${escape(field.label)}</strong><div><span>修改前</span><pre>${display(field.before)}</pre></div><div><span>修改后</span><pre>${display(field.after)}</pre></div></div>`).join('')}</details>`).join('')}
+      ${summary.downstreamIds.length ? `<p>依赖关系中的下游：${summary.downstreamIds.map(id => escape(id)).join('、')}。这是计划依赖提示，代码与数据的影响仍需检查。</p>` : ''}`;
+    const changed = new Set(summary.changed.map(task => task.id));
+    $$('[data-task-change]').forEach(element => {
+      const task = draft.tasks.find(task => task.id === element.dataset.taskChange);
+      element.textContent = changed.has(task.id) ? '有未保存改动' : `${task.dependsOn?.length || 0} 项依赖`;
+    });
   }
   function approval(label, record, expected) {
     const valid = record && record.revision === expected;
@@ -91,6 +128,13 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     const blocked = !legacy && rejected(run, draft.kind, revision);
     const lock = busy || pending;
     $$('input, textarea, [data-suggest-answer]').forEach((element) => { element.disabled = lock || !waiting; });
+    const unavailable = new Map();
+    $$('[data-review-choice="dependsOn"]').forEach(element => {
+      const index = Number(element.dataset.taskIndex);
+      if (!unavailable.has(index)) unavailable.set(index, unavailableDependencies(draft.tasks, draft.tasks[index].id));
+      element.disabled ||= !element.checked && unavailable.get(index).has(element.value);
+    });
+    $$('[data-edit-task], [data-review-add-feature]').forEach(button => { button.disabled = lock || !waiting; });
     $$('[data-platform-defaults]').forEach(button => { button.disabled = lock; });
     $$('[data-review-mode]').forEach((button) => { button.disabled = lock; });
     $$('[data-review-action]').forEach((button) => {
@@ -107,6 +151,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     if (error) { error.textContent = draft.error || ''; error.hidden = !draft.error; }
     const approve = $('[data-review-action="approve"]');
     if (approve) approve.textContent = lock ? '正在处理…' : legacy ? '确认并导出' : draft.kind === 'spec' ? run.spec?.clarificationRequired ? '根据回答整理规格' : '确认规格并继续' : '确认计划并导出';
+    syncPlanPreview(run, draft);
   }
   function render() {
     const { run } = getState();
@@ -156,6 +201,13 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     }
   }
   container.addEventListener('input', (event) => {
+    const choice = event.target.dataset.reviewChoice;
+    if (choice && currentDraft?.kind === 'plan' && !event.target.disabled) {
+      const draft = currentDraft, index = Number(event.target.dataset.taskIndex), task = draft.tasks[index];
+      if (!task || !['dependsOn', 'requirementIds'].includes(choice)) return;
+      task[choice] = $$('[data-review-choice]').filter(element => element.dataset.reviewChoice === choice && Number(element.dataset.taskIndex) === index && element.checked).map(element => element.value);
+      draft.dirty = true; draft.error = ''; persist(draft); syncControls(); onPlanDraft(); return;
+    }
     const name = event.target.dataset.reviewField;
     if (!name || !currentDraft) return;
     const draft = currentDraft;
@@ -171,6 +223,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
       if (group === 'answer') draft.answers[key] = value;
     }
     persist(draft); syncControls();
+    if (draft.kind === 'plan') onPlanDraft();
   });
   function suggestion(question, draft) {
     if (/负责人|交付时间|排期|工期/.test(question)) return null;
@@ -215,6 +268,10 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     if (action === 'save' && draft.kind === 'plan' && draft.tasks.some((task) => !task.title.trim() || !task.description.trim() || !task.acceptance.length)) {
       draft.error = '请填写每项任务的标题、描述和至少一条验收条件。'; persist(draft); syncControls(); return;
     }
+    if (action === 'save' && draft.kind === 'plan') {
+      const summary = planSummary(run, draft);
+      if (summary.errors.length) { draft.error = summary.errors.join(' '); persist(draft); syncControls(); return; }
+    }
     let apiAction;
     let payload = { feedback: draft.feedback };
     if (legacy) apiAction = 'approve';
@@ -239,6 +296,10 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     } finally { pending = false; syncControls(); }
   }
   container.addEventListener('click', (event) => {
+    const taskButton = event.target.closest('[data-edit-task]');
+    if (taskButton && !taskButton.disabled) { openTask(taskButton.dataset.editTask); return; }
+    const featureButton = event.target.closest('[data-review-add-feature]');
+    if (featureButton && !featureButton.disabled) { addFeature(); return; }
     const defaults = event.target.closest('[data-platform-defaults]');
     if (defaults) {
       const {run,busy}=getState(); if (pending || busy || !run || run.sourceSuperseded) return;
@@ -262,7 +323,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     if (button && !button.disabled) { act(button.dataset.reviewAction); return; }
     const documentButton = event.target.closest('[data-review-document]');
     if (documentButton) { showArtifact(documentButton.dataset.reviewDocument); return; }
-    if (event.target.closest('#review-load-current') && currentDraft && !pending) { clearDraft(currentDraft); viewKey = ''; render(); return; }
+    if (event.target.closest('#review-load-current') && currentDraft && !pending) { clearDraft(currentDraft); viewKey = ''; render(); onPlanDraft(); return; }
     const suggest = event.target.closest('[data-suggest-answer]');
     if (suggest && !suggest.disabled && currentDraft) {
       const q = getState().run.specQuestions[Number(suggest.dataset.suggestAnswer)];
@@ -274,5 +335,27 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
       $('#review-suggestion-note').hidden = false; input.focus();
     }
   });
-  return { render };
+  function openTask(id) {
+    const { run, busy } = getState();
+    if (!run || run.sourceSuperseded || busy || pending || run.workflowVersion !== 2 || run.status !== 'awaiting_review') return false;
+    const index = run.tasks.findIndex(task => task.id === id);
+    if (index < 0) return false;
+    const draft = getDraft(run, 'plan'); draft.selectedTask = id; persist(draft);
+    reviewModes.set(run.id, 'plan'); viewKey = ''; render();
+    const details = $(`[data-review-details="task-${index}"]`);
+    if (!details) return false;
+    details.open = true;
+    details.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+    $(`[data-review-field="task.${index}.title"]`)?.focus({ preventScroll: true });
+    return true;
+  }
+  function taskDraft() {
+    const { run } = getState();
+    if (!run || run.sourceSuperseded || run.workflowVersion !== 2 || run.status !== 'awaiting_review' || !run.planRevision) return null;
+    const draft = getDraft(run, 'plan');
+    if (!draft.dirty || draft.revision !== run.planRevision || draft.specRevision !== run.specRevision) return null;
+    const summary = planSummary(run, draft);
+    return { tasks: draft.tasks, changedIds: summary.changed.map(task => task.id), downstreamIds: summary.downstreamIds };
+  }
+  return { render, openTask, taskDraft };
 }

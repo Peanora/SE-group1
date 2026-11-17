@@ -11,7 +11,7 @@ const fixture = () => ({ current: { revision: a, generation: 1, source: { filena
 const harness = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"></head><body><main style="max-width:1000px;margin:auto"><div id="panel"></div></main><script type="module">
 import {createSourceChanges} from '/source-changes.js';
 window.ctx={projectId:'a'};window.states={a:${JSON.stringify(fixture())},b:${JSON.stringify(fixture())}};
-window.requests=[];window.errors=[];window.applied=[];window.holds={};window.pending=[];window.mode={};window.saved=new Map();window.counter=0;
+ window.requests=[];window.errors=[];window.applied=[];window.replans=[];window.holds={};window.pending=[];window.mode={};window.saved=new Map();window.counter=0;
 window.release=async(index, options={})=>{const p=window.pending[index];if(options.error){p.reject(Object.assign(new Error(options.error),{status:options.status}));return;}try{p.resolve(options.response??await p.execute());}catch(e){p.reject(e);}};
 const api=(url,options={})=>{
  const method=options.method||'GET',pid=decodeURIComponent(url.split('/')[3]),body=options.body?JSON.parse(options.body):null;
@@ -32,14 +32,14 @@ const api=(url,options={})=>{
   }
   if(window.mode.postStatus)throw Object.assign(new Error('保存失败，草稿已保留'),{status:window.mode.postStatus});
   const key=pid+':'+body.requestKey;let change=window.saved.get(key);
-  if(!change){change={...body,id:'change-'+(++window.counter),projectId:pid,generation:state.current.generation,sourceRevision:'${b}',status:'pending',createdAt:'2026-11-14T00:00:00Z',draft:{reason:body.reason,kind:body.kind,changes:{blocks:[{type:'modify',oldStartLine:1,newStartLine:1,removed:state.current.source.content,added:body.source.content}]},impact:{requiresMigrationReview:true}}};window.saved.set(key,change);state.changes.push(change);}
+   if(!change){change={...body,id:'change-'+(++window.counter),projectId:pid,generation:state.current.generation,sourceRevision:window.mode.sourceRevision??'${b}',status:'pending',createdAt:'2026-11-14T00:00:00Z',draft:{reason:body.reason,kind:body.kind,changes:{blocks:[{type:'modify',oldStartLine:1,newStartLine:1,removed:state.current.source.content,added:body.source.content}]},impact:{requiresMigrationReview:true}}};window.saved.set(key,change);state.changes.push(change);}
   if(window.mode.saveThenFail){window.mode.saveThenFail=false;throw new TypeError('连接中断，结果不确定');}
   return {change:structuredClone(change)};
  };
  const key=method+':'+pid;if(window.holds[key]){window.holds[key]--;return new Promise((resolve,reject)=>window.pending.push({url,method,body,execute,resolve,reject}));}
  return execute();
 };
-window.panel=createSourceChanges({api,getContext:()=>window.ctx,onApplied:x=>{window.applied.push(structuredClone(x));if(window.mode.callbackFails)return Promise.reject(new Error('parent refresh failed'));},onError:e=>window.errors.push(e.message)});
+ window.panel=createSourceChanges({api,getContext:()=>window.ctx,onApplied:x=>{window.applied.push(structuredClone(x));if(window.mode.callbackFails)return Promise.reject(new Error('parent refresh failed'));},onReplan:x=>window.replans.push(structuredClone(x)),onError:e=>window.errors.push(e.message)});
 await window.panel.mount(document.querySelector('#panel'));window.ready=true;
 </script></body></html>`;
 let browser, server, address;
@@ -258,4 +258,94 @@ test('a parent callback failure preserves confirmed application and is not notif
   await page.evaluate(() => { window.mode.callbackFails = true; }); await apply(page).click(); await page.waitForFunction(() => window.applied.length === 1); await page.getByRole('alert').waitFor({ state: 'visible' });
   assert.match(await page.getByRole('alert').innerText(), /需求已应用/); assert.equal(await page.evaluate(() => window.states.a.changes[0].status), 'applied');
   await refresh(page); assert.equal(await page.evaluate(() => window.applied.length), 1); assert.equal(await apply(page).isDisabled(), true);
+});
+
+test('新增功能预览保留现有正文，加入草稿不重复、不调用后端，刷新和切项目保留填写', async t => {
+  for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
+    const page = await pageFor(t, viewport); await body(page).fill('原有功能\n尚未保存的修改');
+    await page.evaluate(() => window.panel.openFeature());
+    const name = page.getByLabel('功能名称', { exact: true }), description = page.getByLabel('功能说明', { exact: true }), acceptance = page.getByLabel('功能验收条件（每行一条）');
+    await name.fill('导出资源'); await description.fill(marker); await acceptance.fill('只能导出当前筛选结果\n空结果显示说明');
+    const preview = await page.getByLabel('功能追加预览').textContent();
+    assert.ok(preview.startsWith('原有功能\n尚未保存的修改\n\n## 新增功能：导出资源'));
+    assert.ok(preview.includes(marker)); assert.ok(preview.includes('- 只能导出当前筛选结果\n- 空结果显示说明'));
+    assert.equal(await body(page).inputValue(), '原有功能\n尚未保存的修改'); assert.equal(await page.evaluate(() => window.requests.filter(x => x.method === 'POST').length), 0);
+    assert.equal(await page.locator('.source-changes img, .source-changes script').count(), 0);
+    const shots = new URL('../output/verification/source-changes-panel/', import.meta.url); await mkdir(shots, { recursive: true }); await page.screenshot({ path: fileURLToPath(new URL(`feature-${viewport.width}.png`, shots)), fullPage: true });
+    await page.getByRole('button', { name: '加入需求草稿', exact: true }).click();
+    const appended = await body(page).inputValue(); assert.equal(appended, preview);
+    assert.equal(await page.getByRole('button', { name: '已加入需求草稿', exact: true }).isDisabled(), true);
+    assert.equal(await reason(page).inputValue(), '新增功能：导出资源');
+    await refresh(page); assert.equal(await body(page).inputValue(), appended); assert.equal(await page.evaluate(() => window.requests.filter(x => x.method === 'POST').length), 0);
+    await page.evaluate(async () => { window.ctx.projectId = 'b'; await window.panel.refresh(); window.panel.openFeature(); });
+    await name.fill('B项目功能');
+    await page.evaluate(async () => { window.ctx.projectId = 'a'; await window.panel.refresh(); });
+    assert.equal(await name.inputValue(), '导出资源'); assert.equal(await description.inputValue(), marker); assert.equal(await body(page).inputValue(), appended);
+    await page.reload(); await page.waitForFunction(() => window.ready);
+    assert.equal(await name.inputValue(), '导出资源'); assert.equal(await acceptance.inputValue(), '只能导出当前筛选结果\n空结果显示说明'); assert.equal(await body(page).inputValue(), appended);
+    assert.equal(await page.getByRole('button', { name: '已加入需求草稿', exact: true }).isDisabled(), true);
+    await page.getByRole('button', { name: '填写另一个功能', exact: true }).click();
+    await name.fill('导出资源'); await description.fill(marker); await acceptance.fill('只能导出当前筛选结果\n空结果显示说明');
+    assert.equal(await page.getByRole('button', { name: '已加入需求草稿', exact: true }).isDisabled(), true, '相同功能不能再次追加');
+    assert.equal(await body(page).inputValue(), appended); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    assert.equal(await page.evaluate(() => window.replans.length), 0);
+  }
+});
+
+test('新增功能步骤只采用后端保存和同版本应用事实，重新规划须独立点击', async t => {
+  const page = await pageFor(t); await page.getByRole('button', { name: '新增功能', exact: true }).click();
+  await page.getByLabel('功能名称', { exact: true }).fill('筛选资源'); await page.getByLabel('功能说明', { exact: true }).fill('按资源类型筛选');
+  await page.getByLabel('功能验收条件（每行一条）').fill('切换类型只显示对应资源');
+  await page.getByRole('button', { name: '加入需求草稿', exact: true }).click();
+  const progress = page.getByLabel('新增功能流程'), replan = page.getByRole('button', { name: '重新规划', exact: true });
+  assert.equal(await progress.locator('[data-confirmed="true"]').count(), 0); assert.equal(await replan.isDisabled(), true);
+  await page.evaluate(() => { window.holds['POST:a'] = 1; }); await save(page).click(); await page.waitForFunction(() => window.pending.length === 1);
+  assert.equal(await progress.locator('[data-confirmed="true"]').count(), 0);
+  await page.evaluate(() => window.release(0)); await saved(page); assert.match(await progress.innerText(), /后端已确认保存/);
+  await page.evaluate(() => { window.mode.applyMode = 'responseOnly'; }); await apply(page).click(); await page.getByRole('alert').waitFor({ state: 'visible' });
+  assert.equal(await replan.isDisabled(), true); assert.doesNotMatch(await progress.innerText(), /后端已确认新版本/);
+  await page.evaluate(() => { window.mode.applyMode = ''; }); await apply(page).click(); await page.waitForFunction(() => window.applied.length === 1);
+  await replan.waitFor(); await page.waitForFunction(() => ![...document.querySelectorAll('button')].find(el => el.textContent === '重新规划').disabled);
+  assert.match(await progress.innerText(), /后端已确认新版本/); assert.equal(await page.evaluate(() => window.replans.length), 0, '应用不自动启动规划');
+  await replan.click(); assert.deepEqual(await page.evaluate(() => window.replans), [{ projectId: 'a', changeId: 'change-1', revision: b, generation: 2 }]);
+  await page.evaluate(async revision => { window.states.a.current.revision = revision; await window.panel.refresh(); }, c);
+  assert.equal(await replan.isDisabled(), true); assert.doesNotMatch(await progress.innerText(), /后端已确认新版本/);
+  await page.evaluate(async () => { window.ctx.projectId = 'b'; await window.panel.refresh(); }); assert.equal(await replan.isDisabled(), true);
+  assert.equal(await page.evaluate(() => window.replans.length), 1);
+});
+
+test('功能表单遇到旧版本和超长正文时保留填写并阻止追加', async t => {
+  const page = await pageFor(t); await page.evaluate(() => window.panel.openFeature());
+  await page.getByLabel('功能名称', { exact: true }).fill('新功能'); await page.getByLabel('功能说明', { exact: true }).fill('新增说明');
+  await page.getByLabel('功能验收条件（每行一条）').fill('可验证结果');
+  await body(page).fill('x'.repeat(99995));
+  const add = page.getByRole('button', { name: '加入需求草稿', exact: true }); assert.equal(await add.isDisabled(), true); assert.match(await page.locator('.sc-feature').innerText(), /超过100000字符/);
+  await body(page).fill('保留的修改');
+  await page.evaluate(async revision => { window.states.a.current.revision = revision; await window.panel.refresh(); }, c);
+  assert.equal(await add.isDisabled(), true); assert.equal(await page.getByLabel('功能说明', { exact: true }).inputValue(), '新增说明'); assert.equal(await body(page).inputValue(), '保留的修改');
+  await page.getByRole('button', { name: '基于当前版本重新编辑', exact: true }).click();
+  assert.equal(await page.getByLabel('功能说明', { exact: true }).inputValue(), '新增说明'); assert.equal(await add.isEnabled(), true);
+  assert.equal(await page.evaluate(() => window.requests.filter(x => x.method === 'POST').length), 0);
+});
+
+test('之前已应用的功能不能替代本次未保存的功能或正文修改来启用重新规划', async t => {
+  const page = await pageFor(t), replan = page.getByRole('button', { name: '重新规划', exact: true }), progress = page.getByLabel('新增功能流程');
+  await edit(page, '已应用的功能A'); await save(page).click(); await saved(page); await apply(page).click(); await page.waitForFunction(() => window.applied.length === 1);
+  await page.waitForFunction(() => ![...document.querySelectorAll('button')].find(el => el.textContent === '重新规划').disabled);
+  await page.evaluate(() => window.panel.openFeature());
+  await page.getByLabel('功能名称', { exact: true }).fill('功能B');
+  assert.equal(await replan.isDisabled(), true); assert.equal(await progress.locator('[data-confirmed="true"]').count(), 0);
+  await page.getByLabel('功能说明', { exact: true }).fill('添加功能B的行为'); await page.getByLabel('功能验收条件（每行一条）').fill('B可独立验证');
+  assert.match(await page.locator('.sc-feature-replan').innerText(), /不能使用之前已应用的版本/);
+  await page.getByRole('button', { name: '基于当前版本重新编辑', exact: true }).click();
+  await page.getByRole('button', { name: '加入需求草稿', exact: true }).click(); const merged = await body(page).inputValue();
+  assert.ok(merged.startsWith('已应用的功能A\n\n## 新增功能：功能B')); assert.equal(await replan.isDisabled(), true); assert.doesNotMatch(await progress.innerText(), /后端已确认新版本/);
+  await page.evaluate(revision => { window.mode.sourceRevision = revision; }, c);
+  await save(page).click(); await page.waitForFunction(() => window.states.a.changes.length === 2); await page.waitForFunction(() => document.querySelector('.source-changes button.sc-primary').textContent === '保存为待应用变更');
+  assert.equal(await apply(page).isEnabled(), true); assert.equal(await page.getByLabel('选择变更记录').inputValue(), 'change-2');
+  assert.match(await progress.innerText(), /后端已确认保存/); assert.equal(await replan.isDisabled(), true);
+  await apply(page).click(); await page.waitForFunction(() => window.applied.length === 2); await page.waitForFunction(() => ![...document.querySelectorAll('button')].find(el => el.textContent === '重新规划').disabled);
+  assert.match(await progress.innerText(), /后端已确认新版本/); await refresh(page); assert.equal(await replan.isEnabled(), true);
+  await body(page).fill(`${merged}\n尚未保存的下一项修改`); assert.equal(await replan.isDisabled(), true); assert.doesNotMatch(await progress.innerText(), /后端已确认新版本/);
+  await refresh(page); assert.equal(await replan.isDisabled(), true); assert.equal(await page.evaluate(() => window.replans.length), 0);
 });

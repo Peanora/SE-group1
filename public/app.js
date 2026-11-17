@@ -40,6 +40,12 @@ function syncExecutionPanel() {
 }
 const sourceChanges = createSourceChanges({ api: sourceApi, getContext: () => ({ projectId: state.selectionPending ? '' : state.project?.id ?? '' }),
   onApplied: async change => { if (change.projectId !== state.project?.id || state.selectionPending) return; if (await refreshSourceProject(change.projectId, state.epoch)) toast('新需求已应用，请重新编排并确认规格和计划'); },
+  onReplan: ({ projectId, revision, generation }) => {
+    if (state.selectionPending || projectId !== state.project?.id || revision !== state.project.currentSourceRevision || generation !== state.project.sourceGeneration) throw new Error('需求版本已变化，请刷新核对后再重新规划。');
+    if ($('#start-run').disabled) throw new Error('当前不能启动规划，请先核对已有运行状态、规划模式和预算提示。');
+    $('.flow-panel').scrollIntoView({ block: 'start' });
+    $('#start-run').click();
+  },
   onError: error => showError(error) });
 void sourceChanges.mount(document.querySelector('#source-changes-host'));
 function syncSourceChanges() {
@@ -184,6 +190,8 @@ const planningReview = createPlanningReview({
     if (id === state.run?.id && epoch === state.epoch) { updateRun(run); schedulePoll(); }
   },
   showArtifact: (name) => { showArtifact(name); $('#records-body').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); },
+  addFeature: openFeatureEditor,
+  onPlanDraft: () => { if (state.tab === 'tasks') renderRecords(); },
   toast,
 });
 function openSourceEditor() {
@@ -191,6 +199,11 @@ function openSourceEditor() {
   if (!section || section.hidden) { toast('当前项目没有可提交的原始需求修改入口。'); return; }
   section.open = true;
   section.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+}
+async function openFeatureEditor() {
+  if (!state.project || state.selectionPending) return;
+  openSourceEditor();
+  await sourceChanges.openFeature();
 }
 const specRepair = createSpecRepair({
   container: $('#spec-repair-host'), getState: () => ({ run: historicalRun() ? { ...state.run, sourceSuperseded: true } : state.run, busy: state.busy || state.selectionPending }),
@@ -319,8 +332,15 @@ function taskLayout(tasks) {
   return { positions, width: Math.max(750, (Math.max(...levels.values()) + 1) * 230 + 24), height: Math.max(280, Math.max(...counts.values()) * 110 + 26) };
 }
 function renderTasks() {
+  const simulation = simulatedTasks.selection(), preview = simulation ? null : planningReview.taskDraft();
+  const editable = !simulation && !historicalRun() && state.run?.workflowVersion === 2 && state.run.status === 'awaiting_review';
+  const toolbar = `<div class="task-change-toolbar"><div><strong>修改任务与添加功能</strong><p>${preview ? '图中显示未保存草稿：蓝色标记为已改任务，橙色标记为需要一起核对的下游。' : editable ? '点选图中任务后直接修改。新增业务功能会进入需求变更与重新规划。' : '当前计划只读。新增或调整业务功能，请通过新需求版本重新规划。'}</p></div><div><button type="button" class="button button-outline" data-edit-selected-task ${!editable || state.busy || state.selectionPending ? 'disabled' : ''}>修改此任务</button><button type="button" class="button button-primary" data-add-feature ${!state.project || state.busy || state.selectionPending ? 'disabled' : ''}>新增功能</button></div></div>`;
+  return toolbar + renderTaskWorkspace();
+}
+function renderTaskWorkspace() {
   const simulation = simulatedTasks.selection();
-  const tasks = simulation ? simulation.tasks.map(task => task.definition) : state.run?.tasks || [];
+  const preview = simulation ? null : planningReview.taskDraft();
+  const tasks = simulation ? simulation.tasks.map(task => task.definition) : preview?.tasks || state.run?.tasks || [];
   if (!tasks.length) return emptyContent('graph', '开发任务将在这里展开', '任务拆解完成后，可检查依赖关系、验收条件与需求来源。');
   if (!tasks.some((task) => task.id === state.taskId)) state.taskId = tasks[0].id;
   const selected = tasks.find((task) => task.id === state.taskId);
@@ -330,7 +350,7 @@ function renderTasks() {
     const x1 = from.x + 196, x2 = to.x, y1 = from.y + 44, y2 = to.y + 44;
     return `<path class="task-edge" d="M${x1} ${y1}C${x1 + 30} ${y1},${x2 - 30} ${y2},${x2} ${y2}" marker-end="url(#task-arrow)"/>`;
   })).join('');
-  const nodes = tasks.map((task) => { const pos = layout.positions.get(task.id); return `<button class="dev-task ${simulation ? 'sim-' + simulation.tasks.find(item => item.id === task.id)?.status : ''} ${task.id === state.taskId ? 'selected' : ''}" style="left:${pos.x}px;top:${pos.y}px" data-task="${escape(task.id)}" data-focus-key="task-${escape(task.id)}" aria-pressed="${task.id === state.taskId}"><span class="dev-task-top"><span>${escape(task.id)}</span><span>${escape(simulation ? SIM_STATUS[simulation.tasks.find(item => item.id === task.id)?.status] : task.category || '开发')}</span></span><span class="dev-task-title">${escape(task.title)}</span></button>`; }).join('');
+  const nodes = tasks.map((task) => { const pos = layout.positions.get(task.id), changed = preview?.changedIds.includes(task.id), downstream = preview?.downstreamIds.includes(task.id); return `<button class="dev-task ${simulation ? 'sim-' + simulation.tasks.find(item => item.id === task.id)?.status : ''} ${changed ? 'draft-changed' : downstream ? 'draft-downstream' : ''} ${task.id === state.taskId ? 'selected' : ''}" style="left:${pos.x}px;top:${pos.y}px" data-task="${escape(task.id)}" data-focus-key="task-${escape(task.id)}" aria-pressed="${task.id === state.taskId}"><span class="dev-task-top"><span>${escape(task.id)}</span><span>${escape(simulation ? SIM_STATUS[simulation.tasks.find(item => item.id === task.id)?.status] : changed ? '未保存改动' : downstream ? '下游待核对' : task.category || '开发')}</span></span><span class="dev-task-title">${escape(task.title)}</span></button>`; }).join('');
   const sources = (selected.requirementIds || []).map((id) => (simulation?.spec ?? state.run.spec)?.requirements?.find((requirement) => requirement.id === id)).filter(Boolean);
   const boundary = [['计划修改范围', selected.writePaths], ['输入资料', selected.inputs?.length ? selected.inputs : ['当前计划未明确输入资料，请结合前置任务与规格来源核对。']], ['预期产出', selected.outputs?.length ? selected.outputs : ['当前计划未明确输出，请结合目标与验收条件核对。']]]
     .filter(([, values]) => Array.isArray(values) && values.length).map(([label, values]) => `<h4>${label}</h4><ul>${values.map(value => `<li>${escape(value)}</li>`).join('')}</ul>`).join('');
@@ -402,7 +422,7 @@ function renderAll() { renderProjects(); renderHeader(); renderRun(); }
 
 function setBusy(value) { state.busy = value; renderControls(); $('#create-project-button').disabled = value; $('#create-project-button').textContent = value ? '正在创建…' : '创建项目'; $$('[data-close-dialog]', $('#project-dialog')).forEach((button) => { button.disabled = value; }); }
 function rememberSelection() {
-  try { sessionStorage.setItem('taskflow-selection', JSON.stringify({ projectId: state.project?.id, runId: state.run?.id })); } catch { /* The current view remains usable without session storage. */ }
+  try { sessionStorage.setItem('taskflow-selection', JSON.stringify({ projectId: state.project?.id, runId: state.run?.id, taskId: state.taskId })); } catch { /* The current view remains usable without session storage. */ }
 }
 function selectedSource() { return state.run?.sourceSnapshot ?? state.project?.source; }
 function updateRun(run) {
@@ -567,10 +587,12 @@ $('#source-button').addEventListener('click', () => { if (!state.project) return
 $('#revise-source').addEventListener('click', () => { $('#source-dialog').close(); const section = $('#source-changes-section'); section.open = true; section.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); });
 $('#project-dialog').addEventListener('cancel', (event) => { if (state.busy) event.preventDefault(); });
 document.addEventListener('click', (event) => {
+  const editTask = event.target.closest('[data-edit-selected-task]'); if (editTask && !editTask.disabled) { planningReview.openTask(state.taskId); return; }
+  const addFeature = event.target.closest('[data-add-feature]'); if (addFeature && !addFeature.disabled) { void openFeatureEditor().catch(showError); return; }
   const close = event.target.closest('[data-close-dialog]'); if (close) close.closest('dialog')?.close();
   const project = event.target.closest('[data-project]'); if (project && !state.busy) selectProject(project.dataset.project);
   const stage = event.target.closest('[data-stage]'); if (stage) { state.stageId = stage.dataset.stage; renderWorkflow(); renderInspector(); }
-  const task = event.target.closest('[data-task]'); if (task) { state.taskId = task.dataset.task; renderRecords(); }
+  const task = event.target.closest('[data-task]'); if (task) { state.taskId = task.dataset.task; renderRecords(); rememberSelection(); }
   const artifact = event.target.closest('[data-artifact]'); if (artifact) showArtifact(artifact.dataset.artifact);
   const tab = event.target.closest('[data-tab]'); if (tab) { state.tab = tab.dataset.tab; renderRecords(); }
   const remove = event.target.closest('[data-delete-project]'); if(remove){ if(!remove.disabled) deleteProject(remove.dataset.deleteProject); return; }
@@ -605,6 +627,7 @@ async function initialize() {
       try { selection = JSON.parse(sessionStorage.getItem('taskflow-selection')); } catch { /* Start with the most recently updated project. */ }
       const project = projects.find(item => item.id === selection?.projectId) || projects[0];
       await selectProject(project.id, { runId: selection?.runId });
+      if (state.project?.id === selection?.projectId && state.run?.id === selection?.runId && state.run?.tasks?.some(task => task.id === selection?.taskId)) { state.taskId = selection.taskId; renderRecords(); rememberSelection(); }
     }
     else if (state.project) {
       const selectedRun = state.run?.id;

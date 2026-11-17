@@ -11,16 +11,18 @@ const STYLE = `
 .source-changes button:disabled{opacity:.5;cursor:default}.source-changes .sc-primary{background:#2469b0;border-color:#2469b0;color:white}
 .source-changes .sc-note{padding:10px 12px;border-left:3px solid #90b6dc;background:#f3f7fc}.source-changes .sc-error{border-color:#c25b4f;color:#983c35;background:#fff4f2}
 .source-changes pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;padding:10px;background:#f4f6f9;font:12px/1.7 monospace}.source-changes details{margin:12px 0}.source-changes summary{cursor:pointer;font-weight:600}
+.source-changes .sc-feature{margin:18px 0;padding:16px;border:1px solid #b7cde5;border-radius:8px;background:#f8fbff}.source-changes .sc-feature h3{margin-top:0}.source-changes .sc-feature-actions{display:flex;flex-wrap:wrap;gap:4px}.source-changes .sc-feature-steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:14px 0;padding:0;list-style:none}.source-changes .sc-feature-steps li{padding:9px 10px;border-bottom:3px solid #d3dfed;background:#f4f7fb;overflow-wrap:anywhere}.source-changes .sc-feature-steps strong,.source-changes .sc-feature-steps small{display:block}.source-changes .sc-feature-steps [data-confirmed="true"]{border-color:#408365;background:#eff7f2}.source-changes .sc-feature-help{margin:8px 0;color:#536b87}.source-changes .sc-feature-replan{margin-top:12px}
 @media(max-width:600px){.source-changes{padding:16px 12px}.source-changes button{width:100%;margin:5px 0}}
+@media(max-width:600px){.source-changes .sc-feature{padding:12px}.source-changes .sc-feature-steps{grid-template-columns:repeat(2,minmax(0,1fr))}}
 `;
 
 /** Only backend source facts authorize application. All document strings stay text. */
-export function createSourceChanges({ api, getContext, onApplied = () => {}, onError = () => {} }) {
+export function createSourceChanges({ api, getContext, onApplied = () => {}, onError = () => {}, onReplan = null }) {
   if (typeof api !== 'function' || typeof getContext !== 'function') throw new TypeError('需求变更面板需要api和项目上下文。');
   let root, refs, mounted = false, destroyed = false, timer, projectId = '', epoch = 0, readId = 0;
   let data = null, dataRead = 0, draft = emptyDraft(), action = null, error = '', notice = '', loading = false, edits = 0, detailSignature = '';
   const drafts = new Map(), applications = new Map();
-  function emptyDraft() { return { baseRevision: null, baseGeneration: null, filename: '', content: '', reason: '', kind: 'other', requestKey: null, requestBody: null, uncertain: false, selectedId: '' }; }
+  function emptyDraft() { return { baseRevision: null, baseGeneration: null, filename: '', content: '', reason: '', kind: 'other', requestKey: null, requestBody: null, uncertain: false, selectedId: '', featureName: '', featureDescription: '', featureAcceptance: '', featureOpen: false }; }
   function node(tag, text, className) { const el = document.createElement(tag); if (text != null) el.textContent = text; if (className) el.className = className; return el; }
   function button(text, handler, primary = false) { const el = node('button', text, primary ? 'sc-primary' : ''); el.type = 'button'; el.addEventListener('click', handler); return el; }
   function field(title, control) { const label = node('label'); label.append(node('span', title), control); return label; }
@@ -52,8 +54,10 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
       const text = sessionStorage.getItem(`taskflow.sourceChanges.${id}`);
       if (!text || text.length > 2 * 1024 * 1024) return emptyDraft();
       const value = JSON.parse(text), result = emptyDraft();
-      for (const name of ['filename', 'content', 'reason', 'kind', 'selectedId']) if (typeof value?.[name] === 'string') result[name] = value[name];
+      for (const name of ['filename', 'content', 'reason', 'kind', 'selectedId', 'featureName', 'featureDescription', 'featureAcceptance']) if (typeof value?.[name] === 'string') result[name] = value[name];
       if (result.filename.length > 160 || result.content.length > 100000 || result.reason.length > 5000 || !Object.hasOwn(KINDS, result.kind)) return emptyDraft();
+      if (result.featureName.length > 200 || result.featureDescription.length > 10000 || result.featureAcceptance.length > 10000) return emptyDraft();
+      result.featureOpen = value.featureOpen === true;
       if (typeof value.baseRevision === 'string' && HASH.test(value.baseRevision)) result.baseRevision = value.baseRevision;
       if (Number.isSafeInteger(value.baseGeneration) && value.baseGeneration >= 0) result.baseGeneration = value.baseGeneration;
       if (typeof value.requestKey === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value.requestKey) && typeof value.requestBody === 'string' && value.requestBody.length < 1024 * 1024) {
@@ -67,20 +71,73 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
     persist(); projectId = next; epoch++; readId++; action = null; data = null; dataRead = 0; applications.clear(); loading = false; error = ''; notice = ''; detailSignature = ''; edits++;
     draft = next ? restore(next) : emptyDraft(); fillForm(); return true;
   }
-  function fillForm() { if (!refs) return; for (const key of ['filename', 'content', 'reason', 'kind']) refs[key].value = draft[key]; refs.file.value = ''; }
+  function fillForm() { if (!refs) return; for (const key of ['filename', 'content', 'reason', 'kind', 'featureName', 'featureDescription', 'featureAcceptance']) refs[key].value = draft[key]; refs.file.value = ''; }
   function loadCurrent() {
     if (syncContext()) { render(); void refresh(); return; }
     if (action || !validCurrent(current())) return;
-    draft = { ...emptyDraft(), baseRevision: current().revision, baseGeneration: current().generation, filename: current().source.filename, content: current().source.content, selectedId: draft.selectedId };
+    draft = { ...emptyDraft(), baseRevision: current().revision, baseGeneration: current().generation, filename: current().source.filename, content: current().source.content, selectedId: draft.selectedId,
+      featureName: draft.featureName, featureDescription: draft.featureDescription, featureAcceptance: draft.featureAcceptance, featureOpen: draft.featureOpen };
     edits++; error = ''; notice = '已载入当前输入。请编辑并保存为待应用变更。'; fillForm(); persist(); render();
   }
   function schedule() { clearTimeout(timer); if (mounted && !destroyed && projectId) timer = setTimeout(() => { void refresh(); }, 3000); }
+  function featureBlock() {
+    const name = draft.featureName.trim(), description = draft.featureDescription.trim(), acceptance = draft.featureAcceptance.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    if (!name || !description || !acceptance.length) return '';
+    return `## 新增功能：${name}\n\n### 功能说明\n${description}\n\n### 验收条件\n${acceptance.map(line => `- ${line}`).join('\n')}`;
+  }
+  function featureText(block = featureBlock()) { return block ? `${draft.content}${draft.content.endsWith('\n\n') || !draft.content ? '' : draft.content.endsWith('\n') ? '\n' : '\n\n'}${block}\n` : ''; }
+  function featureAdded() { const block = featureBlock(); return !!block && draft.content.includes(block); }
+  function unappendedFeature() { return [draft.featureName, draft.featureDescription, draft.featureAcceptance].some(value => value.trim()) && !featureAdded(); }
+  function featureProblem() {
+    if (action) return '正在处理上一步操作，请稍候。';
+    if (stale()) return '请先载入当前需求版本，再把功能加入草稿。已填写的功能说明会保留。';
+    if (!featureBlock()) return '请填写功能名称、功能说明和至少一条验收条件。';
+    if (featureAdded()) return '此功能已在需求草稿中，不会重复添加。调整已添加内容可编辑上方需求正文。';
+    if (featureText().length > 100000) return '加入后需求正文将超过100000字符，请先精简正文或功能说明。';
+    return '';
+  }
+  function addFeature() {
+    if (destroyed || syncContext()) { render(); void refresh(); return; }
+    if (featureProblem()) return;
+    const block = featureBlock(); draft.content = featureText(block);
+    if (!draft.reason.trim()) draft.reason = `新增功能：${draft.featureName.trim()}`;
+    draft.requestKey = null; draft.requestBody = null; draft.uncertain = false; edits++; error = ''; notice = '功能已加入本地需求草稿，原有编辑已保留。请核对正文，再保存为待应用变更；尚未更新项目需求，也未调用模型。';
+    fillForm(); persist(); render(); refs.content.focus();
+  }
+  function openFeature() {
+    if (!mounted || destroyed) return;
+    const changed = syncContext(); draft.featureOpen = true; persist(); render();
+    if (changed || !data) void refresh();
+    refs.featureName.focus(); refs.feature.scrollIntoView({ block: 'nearest' });
+  }
+  function appliedCurrent() {
+    if (!validCurrent(current()) || !data?.capabilities) return null;
+    const item = savedDraft();
+    return item?.status === 'applied' && item.sourceRevision === current().revision && Number.isSafeInteger(item.generation)
+      && item.appliedGeneration === item.generation + 1 && item.appliedGeneration === current().generation ? item : null;
+  }
+  function savedDraft() {
+    if (unappendedFeature()) return null;
+    const item = selected(); return item && item.projectId === projectId && item.baseRevision === draft.baseRevision && item.generation === draft.baseGeneration
+      && item.source?.filename === draft.filename && item.source?.content === draft.content && item.reason === draft.reason && item.kind === draft.kind ? item : null;
+  }
+  async function replan() {
+    if (destroyed || syncContext()) { render(); void refresh(); return; }
+    const confirmed = appliedCurrent(); if (action || loading || !confirmed || typeof onReplan !== 'function') return;
+    const token = { projectId, epoch, kind: 'replan' }; action = token; error = ''; render();
+    try { await onReplan({ projectId, changeId: confirmed.id, revision: current().revision, generation: current().generation }); }
+    catch (failure) { if (isCurrent(token)) report(failure); }
+    finally { if (isCurrent(token) && action === token) { action = null; render(); schedule(); } else if (!destroyed && syncContext()) { render(); void refresh(); } }
+  }
   function build(element) {
     root = node('section', null, 'source-changes'); root.setAttribute('aria-label', '需求输入变更'); root.append(node('style', STYLE));
     root.append(node('h2', '需求输入变更'), node('p', '保存待应用请求不会修改当前输入，也不调用模型。应用只更新需求输入并使旧运行只读；再次编排会继承上一版运行已保存的回答，新版需求正文优先，只需补充新增或变化的问题。新规格和计划需重新确认，代码和数据库迁移尚未执行。', 'sc-note'));
     const refreshButton = button('刷新变更状态', () => { void refresh(); }), status = node('p'), errorBox = node('p', '', 'sc-note sc-error'), noticeBox = node('p', '', 'sc-note');
     status.setAttribute('role', 'status'); errorBox.setAttribute('role', 'alert'); noticeBox.setAttribute('role', 'status'); root.append(refreshButton, status, errorBox, noticeBox);
-    const body = node('div'), version = node('p'), staleBox = node('p', '', 'sc-note'), load = button('基于当前版本重新编辑', loadCurrent); body.append(version, staleBox, load);
+    const body = node('div'), version = node('p'), staleBox = node('p', '', 'sc-note'), load = button('基于当前版本重新编辑', loadCurrent);
+    const featureToggle = button('新增功能', openFeature), steps = node('ol', null, 'sc-feature-steps'), stepLabels = ['填写功能', '核对并保存', '应用新版本', '重新规划'];
+    const stepStates = stepLabels.map((label, index) => { const item = node('li'), title = node('strong', `${index + 1}. ${label}`), state = node('small'); item.append(title, state); steps.append(item); return { item, state }; });
+    steps.setAttribute('aria-label', '新增功能流程'); body.append(version, staleBox, load, featureToggle, steps);
     const form = node('form'), filename = node('input'), content = node('textarea', '', 'sc-source'), reason = node('textarea'), kind = node('select');
     filename.maxLength = 160; content.maxLength = 100000; reason.maxLength = 5000; reason.rows = 3;
     for (const [value, title] of Object.entries(KINDS)) { const option = node('option', title); option.value = value; kind.append(option); }
@@ -90,11 +147,25 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
     const save = button('保存为待应用变更', () => { void perform('save'); }, true), saveHint = node('p', '', 'sc-note'); form.append(save, saveHint); form.addEventListener('submit', event => event.preventDefault()); body.append(form);
     for (const name of ['filename', 'content', 'reason', 'kind']) refsInput(name, { filename, content, reason, kind }[name]);
     function refsInput(name, control) { control.addEventListener('input', () => { if (syncContext()) { render(); void refresh(); return; } if (draft[name] === control.value) return; draft[name] = control.value; draft.requestKey = null; draft.requestBody = null; draft.uncertain = false; edits++; notice = '草稿已修改，尚未保存或应用。'; persist(); render(); }); }
+    const feature = node('section', null, 'sc-feature'); feature.setAttribute('aria-label', '新增功能说明');
+    feature.append(node('h3', '说明要增加的功能'), node('p', '填写后先核对追加预览，再加入需求草稿。原有正文和未保存的修改会保留，以上操作不调用模型。', 'sc-feature-help'));
+    const featureName = node('input'), featureDescription = node('textarea'), featureAcceptance = node('textarea');
+    featureName.maxLength = 200; featureDescription.maxLength = 10000; featureAcceptance.maxLength = 10000; featureDescription.rows = 3; featureAcceptance.rows = 3;
+    feature.append(field('功能名称', featureName), field('功能说明', featureDescription), field('功能验收条件（每行一条）', featureAcceptance));
+    for (const [name, control] of Object.entries({ featureName, featureDescription, featureAcceptance })) control.addEventListener('input', () => {
+      if (syncContext()) { render(); void refresh(); return; } draft[name] = control.value; edits++; persist(); render();
+    });
+    const featurePreview = node('pre'), featureHint = node('p', '', 'sc-feature-help'), featureAdd = button('加入需求草稿', addFeature);
+    const featureNext = button('填写另一个功能', () => { if (action || syncContext()) { render(); void refresh(); return; } draft.featureName = ''; draft.featureDescription = ''; draft.featureAcceptance = ''; fillForm(); persist(); render(); refs.featureName.focus(); });
+    featurePreview.setAttribute('aria-label', '功能追加预览'); const featureActions = node('div', null, 'sc-feature-actions'); featureActions.append(featureAdd, featureNext);
+    feature.append(node('h4', '加入后的需求正文预览'), featurePreview, featureHint, featureActions); body.append(feature);
     const history = node('select'), detail = node('details'), detailBody = node('div'), apply = button('应用为新需求版本', () => { void perform('apply'); }, true);
     detail.open = true; detail.append(node('summary', '变更原文与影响'), detailBody); history.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } draft.selectedId = history.value; persist(); render(); });
-    body.append(node('h3', '变更记录'), field('选择变更记录', history), detail, apply);
+    const replanButton = button('重新规划', () => { void replan(); }), replanHint = node('p', '', 'sc-feature-help'), replanArea = node('div', null, 'sc-feature-replan');
+    replanArea.append(replanButton, replanHint); body.append(node('h3', '变更记录'), field('选择变更记录', history), detail, apply, replanArea);
     const versions = node('details'), versionsBody = node('div'); versions.append(node('summary', '输入版本历史'), versionsBody); body.append(versions); root.append(body); element.append(root);
-    refs = { refreshButton, status, errorBox, noticeBox, body, version, staleBox, load, filename, content, reason, kind, file, importButton, save, saveHint, history, detail, detailBody, apply, versionsBody };
+    refs = { refreshButton, status, errorBox, noticeBox, body, version, staleBox, load, filename, content, reason, kind, file, importButton, save, saveHint, history, detail, detailBody, apply, versionsBody,
+      featureToggle, feature, featureName, featureDescription, featureAcceptance, featurePreview, featureHint, featureAdd, featureNext, stepStates, replanArea, replanButton, replanHint };
   }
   function renderDetail(item) {
     const signature = JSON.stringify(item ?? null); if (signature === detailSignature) return; detailSignature = signature;
@@ -144,6 +215,18 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
     if (refs.history.dataset.signature !== listSignature) { refs.history.replaceChildren(); for (const item of list) { const option = node('option', `${STATUSES[item.status] ?? '未知'} · ${item.createdAt ?? ''} · ${item.id}`); option.value = item.id; refs.history.append(option); } refs.history.dataset.signature = listSignature; }
     if (!list.some(item => item.id === draft.selectedId)) draft.selectedId = list.at(-1)?.id ?? '';
     refs.history.value = draft.selectedId; refs.history.disabled = !list.length; renderDetail(selected());
+    const added = featureAdded(), applied = appliedCurrent(), saved = savedDraft();
+    refs.feature.hidden = !draft.featureOpen; refs.featureToggle.disabled = !projectId;
+    for (const name of ['featureName', 'featureDescription', 'featureAcceptance']) refs[name].disabled = !projectId || !!action || added;
+    refs.featureAdd.disabled = !!featureProblem(); refs.featureAdd.textContent = added ? '已加入需求草稿' : '加入需求草稿'; refs.featureNext.hidden = !added; refs.featureNext.disabled = !!action;
+    refs.featureHint.textContent = featureProblem() || '确认预览后加入草稿，再点击上方“保存为待应用变更”；不会自动保存或应用。';
+    const preview = added ? draft.content : featureText(); if (refs.featurePreview.textContent !== preview) refs.featurePreview.textContent = preview || '填写完整的功能说明后，这里显示保留原有编辑并追加功能后的完整正文。';
+    const stepText = [added ? '已加入本地草稿' : featureBlock() ? '本地填写中' : '填写说明与验收条件', saved ? '后端已确认保存' : '草稿尚未保存', applied ? '后端已确认新版本' : '等待安全检查点应用', '点击后生成新规格和计划'];
+    refs.stepStates.forEach(({ item, state }, index) => { state.textContent = stepText[index]; item.dataset.confirmed = String(index === 1 ? !!saved : index === 2 ? !!applied : false); });
+    refs.replanArea.hidden = typeof onReplan !== 'function'; refs.replanButton.disabled = !!action || loading || !applied;
+    refs.replanHint.textContent = applied ? '本次草稿对应的新需求版本已由后端确认。点击“重新规划”才会启动规划；若选择模型模式，会按页面预算调用模型。新规格和计划仍需你确认。'
+      : unappendedFeature() ? '当前填写的功能尚未加入需求正文。请先加入草稿、保存并应用，不能使用之前已应用的版本替代本次功能。'
+        : '先将当前草稿保存并应用为新需求版本，取得后端确认后才能从这里重新规划。保存与应用不调用模型。';
     const versionText = JSON.stringify(Array.isArray(data?.versions) ? data.versions : []);
     if (refs.versionsBody.dataset.signature !== versionText) { refs.versionsBody.dataset.signature = versionText; refs.versionsBody.replaceChildren(); for (const item of Array.isArray(data?.versions) ? data.versions : []) refs.versionsBody.append(node('p', `代次 ${item?.generation ?? '未知'} · ${item?.revision ?? '未知'} · ${item?.source?.filename ?? item?.filename ?? ''}`)); }
   }
@@ -186,6 +269,9 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
         if (!response?.change || typeof response.change.id !== 'string') throw new Error('保存结果不完整，请刷新核对；不要重复创建新请求。');
         if (draft.requestKey === requestKey) draft.uncertain = false; draft.selectedId = response.change.id; persist();
         notice = '请求已保存；当前输入未因保存而改变。请核对差异与后端状态。'; await refresh();
+        // The refresh initially renders the previous history. Re-select this
+        // confirmed save after the new history arrives, instead of an older row.
+        if (isCurrent(token) && changes().some(change => change.id === response.change.id)) { draft.selectedId = response.change.id; persist(); render(); }
       } else {
         const key = JSON.stringify([item.id, item.baseRevision, item.generation, item.sourceRevision]);
         if (!applications.has(key)) applications.set(key, { projectId, epoch, id: item.id, baseRevision: item.baseRevision, generation: item.generation, sourceRevision: item.sourceRevision, readFloor: readId, notified: false });
@@ -198,6 +284,6 @@ export function createSourceChanges({ api, getContext, onApplied = () => {}, onE
       if (isCurrent(token)) { if (kind === 'apply' && token.application?.notified) return; if (attemptedSave && draft.requestKey === submittedKey) { draft.uncertain = !Number.isInteger(failure?.status) || failure.status >= 500; persist(); } report(failure); if (kind === 'apply') { if (token.application) token.application.lastError = error; notice = '应用未获确认。草稿已保留，可刷新后在安全检查点核对。'; } }
     } finally { if (isCurrent(token) && action === token) { action = null; render(); schedule(); } else if (!destroyed && syncContext()) { render(); void refresh(); } }
   }
-  return Object.freeze({ mount(element) { if (mounted || destroyed || !element?.append) throw new Error('需求变更面板只能挂载一次。'); mounted = true; build(element); syncContext(); fillForm(); render(); return refresh(); }, refresh,
+  return Object.freeze({ mount(element) { if (mounted || destroyed || !element?.append) throw new Error('需求变更面板只能挂载一次。'); mounted = true; build(element); syncContext(); fillForm(); render(); return refresh(); }, refresh, openFeature,
     destroy() { persist(); destroyed = true; mounted = false; epoch++; readId++; action = null; applications.clear(); clearTimeout(timer); root?.remove(); refs = null; } });
 }

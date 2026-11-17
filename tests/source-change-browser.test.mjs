@@ -117,3 +117,39 @@ test('late parent refresh after applying a source cannot announce success in a d
   assert.doesNotMatch(await page.locator('#toast').textContent(), /新需求已应用/);
   assert.equal(await page.locator('#project-title').textContent(), other.name);
 });
+
+test('新增功能在真实工作台经草稿、保存、应用和单独重新规划，桌面与窄屏保留旧运行归属', { timeout: 90000 }, async t => {
+  for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
+    const { app, project, run, page } = await fixture(t); await page.setViewportSize(viewport);
+    const panel = page.locator('.source-changes'), source = panel.getByLabel('需求正文', { exact: true }), oldSnapshot = structuredClone(run.sourceSnapshot);
+    await source.fill(`${original}\n已有未保存的补充说明。`);
+    await panel.getByRole('button', { name: '新增功能', exact: true }).click();
+    await panel.getByLabel('功能名称', { exact: true }).fill('资源筛选'); await panel.getByLabel('功能说明', { exact: true }).fill('用户可以按资源类型筛选结果。');
+    await panel.getByLabel('功能验收条件（每行一条）').fill('选择某一类型后仅显示对应资源\n清除条件后恢复全部结果');
+    assert.equal(project.source.content, original); assert.equal(app.sourceChangeService.list({ projectId: project.id }).length, 0);
+    assert.equal(await panel.getByRole('button', { name: '重新规划', exact: true }).isDisabled(), true);
+    const featureShots = path.resolve('output/visual-task-changes'); await mkdir(featureShots, { recursive: true });
+    await panel.locator('.sc-feature').screenshot({ path: path.join(featureShots, `feature-${viewport.width}.png`) });
+    await panel.getByRole('button', { name: '加入需求草稿', exact: true }).click(); const merged = await source.inputValue();
+    assert.ok(merged.startsWith(`${original}\n已有未保存的补充说明。\n\n## 新增功能：资源筛选`));
+    assert.ok(merged.includes('- 清除条件后恢复全部结果')); assert.equal(project.source.content, original); assert.equal(project.runs.length, 1);
+    await page.reload(); await page.getByRole('button', { name: '确认规格并继续', exact: true }).waitFor();
+    await page.locator('#source-changes-section').evaluate(el => { el.open = true; });
+    await panel.getByLabel('功能名称', { exact: true }).waitFor(); assert.equal(await panel.getByLabel('功能名称', { exact: true }).inputValue(), '资源筛选'); assert.equal(await source.inputValue(), merged);
+    await panel.getByRole('button', { name: '保存为待应用变更', exact: true }).click();
+    await page.waitForFunction(() => ![...document.querySelectorAll('.source-changes button')].find(el => el.textContent === '应用为新需求版本')?.disabled);
+    assert.equal(project.source.content, original); assert.equal(project.runs.length, 1); assert.match(await panel.getByLabel('新增功能流程').innerText(), /后端已确认保存/);
+    await panel.getByRole('button', { name: '应用为新需求版本', exact: true }).click();
+    await page.getByRole('heading', { name: '历史需求输入：确认记录只读', exact: true }).waitFor();
+    const replan = panel.getByRole('button', { name: '重新规划', exact: true });
+    await page.waitForFunction(() => ![...document.querySelectorAll('.source-changes button')].find(el => el.textContent === '重新规划')?.disabled);
+    assert.equal(project.source.content, merged); assert.equal(project.sourceGeneration, 1); assert.equal(project.runs.length, 1);
+    assert.equal(run.sourceSuperseded, true); assert.deepEqual(run.sourceSnapshot, oldSnapshot); assert.match(await panel.getByLabel('新增功能流程').innerText(), /后端已确认新版本/);
+    const shots = path.resolve('output/verification/source-feature-browser'); await mkdir(shots, { recursive: true }); await page.screenshot({ path: path.join(shots, `applied-${viewport.width}.png`), fullPage: true });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await replan.click(); await page.getByRole('button', { name: '确认规格并继续', exact: true }).waitFor();
+    assert.equal(project.runs.length, 2); const next = project.runs.at(-1);
+    assert.notEqual(next.id, run.id); assert.equal(next.sourceGeneration, 1); assert.equal(next.sourceSnapshot.content, merged); assert.equal(next.status, 'awaiting_spec');
+    assert.deepEqual(next.approvals, { spec: null, plan: null }); assert.equal(run.sourceSuperseded, true);
+  }
+});
