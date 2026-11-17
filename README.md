@@ -18,7 +18,7 @@ Agent 开发前阅读 [AGENTS.md](AGENTS.md)，其中包含完整开发流程、
 
 ## 启动
 
-Windows双击`start.cmd`启动普通工作台，双击`start-demo.cmd`启动独立模拟示例（4320端口）。启动入口会先验证Node.js版本及`node:sqlite`，默认Node过旧时查找本机可用运行环境；不修改系统PATH。`npm start`使用同一检测入口。可设置`TASKFLOW_NODE`为合适node程序的绝对路径；显式配置无效时明确报错，不静默忽略。直接执行`node server.mjs`仍要求当前终端Node.js本身符合要求。
+在项目目录执行`npm start`启动普通工作台，执行`npm start -- --demo`启动独立模拟示例（4320端口）。启动入口会先验证Node.js版本及`node:sqlite`，默认Node过旧时查找本机可用运行环境；不修改系统PATH。可设置`TASKFLOW_NODE`为合适node程序的绝对路径；显式配置无效时明确报错，不静默忽略。直接执行`node server.mjs`仍要求当前终端Node.js本身符合要求。
 
 安装 Node.js 22.21 或以上版本，在项目目录执行：
 
@@ -28,7 +28,7 @@ npm ci --ignore-scripts
 npm start
 ```
 
-浏览器打开 [本地工作台](http://127.0.0.1:4317)。Windows 下也可以双击 `start.cmd` 启动。停止服务时，在启动终端按 `Ctrl+C`。
+浏览器打开 [本地工作台](http://127.0.0.1:4317)。停止服务时，在启动终端按 `Ctrl+C`。
 
 平台锁定`playwright-core`作为独立浏览器验收依赖，使用系统Microsoft Edge；仅生成规划文档不启动验收浏览器。选择模型执行后，后端独立启动检查浏览器。修改服务端代码时可用`npm run dev`启动监视模式，修改前端静态文件后刷新页面即可。
 
@@ -36,7 +36,7 @@ npm start
 
 ## 当前验收入口
 
-当前统一按浏览器网页应用规划，采用平台提供的HTML/CSS/JavaScript、Node.js与SQLite；无需用户填写技术方案。Windows使用浏览器访问，不生成原生桌面安装包。已在本地启动时直接打开工作台；重新开机后可双击start.cmd。旧规格因选型未定而失败时，点击“采用默认方案并重新确认”，原文和回答保留，该步骤不调用模型；之后确认规格才会按页面预算请求工程设计。
+当前统一按浏览器网页应用规划，采用平台提供的HTML/CSS/JavaScript、Node.js与SQLite；无需用户填写技术方案。Windows使用浏览器访问，不生成原生桌面安装包。已在本地启动时直接打开工作台；重新开机后在项目目录执行`npm start`。旧规格因选型未定而失败时，点击“采用默认方案并重新确认”，原文和回答保留，该步骤不调用模型；之后确认规格才会按页面预算请求工程设计。
 
 可复现验收使用 `npm run acceptance`：固定示例、local模式、两次独立运行，校验规格/架构/任务/检查/导出ZIP的文档哈希和计划投影，不调用模型、不写用户数据；报告在 `output/acceptance-<时间>/`。提供与当前规则兼容的固定参考源码ZIP时，加 `--archive 路径` 可再执行固定HTTP/数据库和真实Edge检查。详见[可复现验收流程](docs/ACCEPTANCE.md)。
 

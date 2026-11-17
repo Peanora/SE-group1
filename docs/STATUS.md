@@ -1,5 +1,11 @@
 # 当前实现与开发交接
 
+## 2026-11-17 删除 CMD 启动文件
+
+基线`main/d307fa9`。按用户要求删除根目录`start.cmd`和`start-demo.cmd`，README与模拟演示说明同步改用`npm start`、`npm start -- --demo`。保留现有Node运行环境检测器；后续启动按更新后的README执行。下方CMD相关说明仅为历史记录。
+
+实际验证：`npm start -- --check-runtime`通过，选中Node.js 22.21.0；`node scripts/check-syntax.mjs`为117脚本通过；`node --test tests/start-local.test.mjs`为2/2通过，失败/取消/跳过均0，包含临时工作台真实启动、HTTP健康检查及正常关闭；`git diff --check`通过。未运行全仓库测试、模拟演示全流程或付费模型；未改用户数据，无数据及配置迁移。
+
 ## 2026-11-17 需求变更草稿保存按钮
 
 用户反馈“修改当前项目需求”表单里“保存为待应用变更”按钮点不了。原因是旧浏览器草稿可能只有`baseRevision`、缺少`baseGeneration`，而保存按钮的可用性同时比较两者；即使revision仍是当前版本，按钮也会一直禁用。生产代码`73d1bec`。
