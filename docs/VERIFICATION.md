@@ -223,3 +223,7 @@ QA平台PTY正常STOP退出0；63820/57843/51033已无监听，4317仍原PID8473
 生产代码`a08319a`。`npm run check`为117脚本语法通过；`npm test`为705项，675通过、30跳过、0失败、0取消，98,501.7928ms。30项跳过为未启用真实MXC或显式真实Edge的既有集成项。
 
 新增回归：不同工程校验错误会持续自动带具体反馈重试直到成功，不设次数上限（测试第4次调用成功）；完全相同校验错误连续出现时停止；无效工程JSON自动修正后成功，engineeringCalls=2且两条私有回执保留；模型连续失败后显式`use_local_engineering`不新增模型调用，本地架构/任务/检查成功并停在计划确认，plan.json含engineeringFallback；`{resourceId}`路径和`text/image/textarea`等ARIA别名规范化并写回；原免费重校验、凭据/传输/取消边界保持通过。未调用真实付费模型，未修改用户运行。证据见`docs/tasks/engineering-auto-repair.md`。
+
+## 2026-11-17 澄清停点阶段展示
+
+生产代码`f20b458`。`npm run check`为117脚本语法通过；`npm test`为705项，675通过、30跳过、0失败、0取消，101,728.6256ms。`tests/requirement-clarification-browser.test.mjs`在1440px/390px均通过：等待补充时`spec`节点无`succeeded`样式/勾选，显示“等待补充需求”，阶段详情状态和输出文案正确，进度不把占位规格算完成；重新整理出正式规格后恢复已完成。只改前端展示和浏览器回归，未调用模型、未改存储或审批。当前4317服务PID 2772，静态文件刷新即可生效。
