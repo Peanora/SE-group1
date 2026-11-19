@@ -85,8 +85,15 @@ test('prepares independent browser data only from matching authorized provisioni
   assert.deepEqual(result.repairedSessions, ['member-b', 'member-a', 'manager']);
   assert.ok(start > 0);
   assert.ok(steps.slice(0, start).every(step => step.session === 'manager'));
-  assert.deepEqual(steps.slice(0, start).filter(step => step.testId === 'admin-username').map(step => step.value), ['sample-a', 'sample-b']);
-  assert.deepEqual(steps.slice(0, start).filter(step => step.testId === 'admin-create-status').map(step => step.value), [true, true]);
+  const provisioning = steps.slice(0, start);
+  const accountValues = provisioning.filter(step => step.testId === 'admin-username').map(step => [step.op, step.value]);
+  assert.deepEqual(accountValues, [['fill', 'sample-a'], ['value', ''], ['fill', 'sample-b'], ['value', '']]);
+  const completionSteps = provisioning.flatMap((step, position) => step.op === 'click' && step.testId === 'admin-create-submit'
+    ? [provisioning.slice(position + 1, position + 3).map(({ op, testId, value }) => [op, testId, value])]
+    : []);
+  assert.deepEqual(completionSteps, Array.from({ length: 2 }, () => [
+    ['value', 'admin-username', ''], ['visible', 'admin-create-status', true],
+  ]));
   assert.deepEqual(steps.filter(step => !step.id.startsWith('prepare-login-')), input.definition.browser.steps);
   assert.deepEqual(result.proposal.steps, input.definition.steps);
   assert.ok(check(result.proposal).browser);
