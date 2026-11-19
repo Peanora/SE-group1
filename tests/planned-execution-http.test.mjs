@@ -7,6 +7,7 @@ import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { createApp } from '../server.mjs';
+import { WORKFLOW } from '../lib/orchestrator.mjs';
 import { ProjectStore } from '../lib/store.mjs';
 import { createPlannedExecutionService } from '../lib/planned-execution-service.mjs';
 import { createVerificationPlanningService } from '../lib/verification-planning-service.mjs';
@@ -64,37 +65,53 @@ test('development routes enforce loopback host, same Origin, cross-project runs 
   const disabled = await routeFixture(t, null); assert.equal((await fetch(disabled.route)).status, 404);
 });
 
-function confirmedRun(project) {
+function confirmedRun(project, login = false) {
   const id = randomUUID(), source = project.source, spec = { title: '资源系统', summary: source.content, goals: ['读取资源'], roles: [], constraints: [], assumptions: [], questions: [], acceptanceScenarios: ['返回资源'], stack: { frontend: 'HTML/CSS/JavaScript', backend: 'Node.js', storage: 'SQLite' }, requirements: [{ id: 'R1', title: '读取', description: source.content, sourceQuote: source.content, acceptance: ['返回列表'] }] };
   const specRevision = contentRevision(spec), engineeringPlan = validateEngineeringPlan({ spec, binding: { projectId: project.id, runId: id, specRevision }, proposal: { version: 1, title: '资源工程', summary: '读取接口', entities: [], routes: [{ id: 'read', method: 'GET', path: '/resources', roles: [], request: '无正文', response: '资源列表', errors: [], requirementIds: ['R1'] }], views: [{ id: 'home', path: '/', title: '资源', requirementIds: ['R1'], selectors: [{ testId: 'resources', role: 'list' }] }], tasks: [{ id: 'implement', title: '实现资源', description: '实现资源列表', requirementIds: ['R1'], dependsOn: [], writePaths: ['src/app.mjs'], inputs: ['规格'], outputs: ['列表'], acceptance: ['可读'] }] } });
-  const run = { id, projectId: project.id, workflowVersion: 2, sourceSnapshot: source, sourceRevision: contentRevision(source), sourceGeneration: 0, status: 'succeeded', stages: [], spec, specRevision, specQuestions: [], engineeringPlan, tasks: engineeringTasks(engineeringPlan), artifacts: [{ name: 'architecture.md', content: '读取资源' }], review: { passed: true, issues: [] }, approvals: { spec: { revision: specRevision } } };
+  const authenticated = login ? validateEngineeringPlan({ spec, binding: { projectId: project.id, runId: id, specRevision }, proposal: {
+    ...structuredClone(engineeringPlan.proposal),
+    routes: [...engineeringPlan.proposal.routes, { id: 'login', method: 'POST', path: '/api/auth/login', roles: [], request: '测试账号登录', response: '登录结果', errors: [], requirementIds: ['R1'] }],
+    views: [
+      { ...engineeringPlan.proposal.views[0], selectors: [...engineeringPlan.proposal.views[0].selectors, { testId: 'logout-button', role: 'button' }] },
+      { id: 'login-page', path: '/login.html', title: '登录', requirementIds: ['R1'], selectors: [
+        { testId: 'login-username', role: 'textbox' }, { testId: 'login-password', role: 'textbox' }, { testId: 'login-submit', role: 'button' },
+      ] },
+    ],
+  } }) : engineeringPlan;
+  const run = { id, projectId: project.id, workflowVersion: 2, sourceSnapshot: source, sourceRevision: contentRevision(source), sourceGeneration: 0, status: 'succeeded', stages: [], spec, specRevision, specQuestions: [], engineeringPlan: authenticated, tasks: engineeringTasks(authenticated), artifacts: [{ name: 'architecture.md', content: '读取资源' }], review: { passed: true, issues: [] }, approvals: { spec: { revision: specRevision } } };
   run.planRevision = planningRevision(run); run.approvals.plan = { revision: run.planRevision, specRevision }; return run;
 }
 function jointDefinition() { return { version: 1, id: 'resources', name: '资源联合定义', sessions: [], steps: [{ id: 'read', type: 'request', requirementIds: ['R1'], dependsOn: [], request: { id: 'get', method: 'GET', path: '/resources', assertions: [{ id: 'ok', op: 'status', value: 200 }] } }], browser: { version: 1, sessions: ['visitor'], steps: [{ id: 'home', session: 'visitor', requirementIds: ['R1'], op: 'goto', path: '/' }, { id: 'list', session: 'visitor', requirementIds: ['R1'], op: 'visible', testId: 'resources', value: true }] } }; }
 function missingLoginDefinition() {
   const proposal = jointDefinition();
-  proposal.sessions.push('alice');
+  proposal.sessions.push('alice', 'bob');
   proposal.steps.push({ id: 'login-alice', type: 'request', requirementIds: ['R1'], dependsOn: [],
     request: { id: 'login', method: 'POST', path: '/api/auth/login', session: 'alice', body: { username: 'sample', password: 'sample-test-value' }, assertions: [{ id: 'login-status', op: 'status', value: 200 }] } },
+  { id: 'login-bob', type: 'request', requirementIds: ['R1'], dependsOn: [],
+    request: { id: 'bob-login', method: 'POST', path: '/api/auth/login', session: 'bob', body: { username: 'sample-bob', password: 'bob-test-value' }, assertions: [{ id: 'bob-login-status', op: 'status', value: 200 }] } },
   { id: 'anonymous-profile', type: 'request', requirementIds: ['R1'], dependsOn: [],
     request: { id: 'profile', method: 'GET', path: '/api/auth/me', assertions: [{ id: 'profile-status', op: 'status', value: 401 }] } });
   proposal.browser.sessions = ['bob', 'alice'];
   proposal.browser.steps = [
     { id: 'login-page', session: 'bob', op: 'goto', path: '/login.html' },
-    { id: 'fill-password', session: 'bob', op: 'fill', testId: 'login-password', value: 'sample-test-value' },
+    { id: 'fill-username', session: 'bob', op: 'fill', testId: 'login-username', value: 'sample-bob' },
+    { id: 'fill-password', session: 'bob', op: 'fill', testId: 'login-password', value: 'bob-test-value' },
     { id: 'submit', session: 'bob', op: 'click', testId: 'login-submit' },
     { id: 'list-page', session: 'alice', op: 'goto', path: '/' },
     { id: 'result', session: 'alice', op: 'visible', testId: 'resources', value: true },
+    { id: 'logout-result', session: 'alice', op: 'visible', testId: 'logout-button', value: true },
   ].map(step => ({ ...step, requirementIds: ['R1'] }));
   return proposal;
 }
 async function connectedFixture(t, mode = 'held') {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'planned-http-connected-')), store = await new ProjectStore(directory).init();
-  const project = await store.create({ name: '真实检查点连接', source: { filename: 'r.md', content: '用户读取资源列表。' } }), run = confirmedRun(project);
-  if (mode === 'login-failed') Object.assign(run, { planVersion: 1, decisions: [], revisionHistory: { spec: [], plan: [] }, events: [] });
+  const project = await store.create({ name: '真实检查点连接', source: { filename: 'r.md', content: '用户读取资源列表。' } }), run = confirmedRun(project, mode === 'login-failed');
+  if (mode === 'login-failed') Object.assign(run, { planVersion: 1, decisions: [], revisionHistory: { spec: [], plan: [] }, events: [],
+    stages: WORKFLOW.map(stage => ({ ...stage, status: 'succeeded', attempt: 1, history: [] })) });
   project.runs.push(run); await store.save(project); await store.flush();
   const identity = { projectId: project.id, runId: run.id }, entered = deferred(), release = deferred(); let planned, coreCalls = 0;
   const verification = await createVerificationPlanningService({ rootDir: path.join(directory, 'verification-planning'), getPlanning: (...args) => store.getPersistedRun(...args), getPlanningSync: (...args) => store.getPersistedRun(...args), config, timeoutMs: 2000, cleanupMs: 30,
+    ...(mode === 'login-failed' ? { maxAttempts: 1 } : {}),
     dependencies: { createModel: () => async input => { const proposal = mode === 'login-failed' ? missingLoginDefinition() : jointDefinition(), usage = { inputTokens: 1, outputTokens: 1 }; await input.onReceipt({ model: config.model, finishReason: 'stop', usage, content: JSON.stringify(proposal) }); return { proposal, usage, model: config.model, policyHash: verificationModelPolicy.hash, coverage: 'structural_only' }; } } });
   const forwarding = Object.fromEntries(['list', 'start', 'cancel', 'download', 'withProjectCheckpoint', 'shutdown'].map(name => [name, (...args) => planned?.[name](...args)]));
   const app = await createApp({ store, stepDelayMs: 0, verificationPlanningService: verification, plannedExecutionService: forwarding });
@@ -106,7 +123,10 @@ async function connectedFixture(t, mode = 'held') {
       if (mode === 'login-failed') {
         record.status = 'failed';
         const actual = JSON.stringify({ operation: 'goto', observed: { status: 200 }, guardFailures: { console_error: 1 } });
-        record.versions = [{ acceptance: { browser: { checks: ['DESKTOP', 'MOBILE'].map(view => ({ id: `BROWSER-${view}-list-page`, passed: false, actual })) } } }];
+        record.versions = [{ acceptance: { browser: { checks: ['DESKTOP', 'MOBILE'].flatMap(view => [
+          ...['login-page', 'fill-username', 'fill-password', 'submit'].map(id => ({ id: `BROWSER-${view}-${id}`, passed: true })),
+          { id: `BROWSER-${view}-list-page`, passed: false, actual },
+        ]) } } }];
       }
       entered.resolve(); return { id: record.id, snapshot: () => structuredClone(record), cancel: () => release.resolve(record), done: ['fake-accepted', 'login-failed'].includes(mode) ? Promise.resolve(record) : release.promise };
     } } });
@@ -142,6 +162,48 @@ test('a missing-login result offers a versioned checklist repair without spendin
   assert.deepEqual(revision.body.run.tasks[0].writePaths, ['src/app.mjs']);
   assert.equal(f.coreCalls(), 1);
   assert.equal((await f.request(`/${failed.id}/revise-checklist`, {})).status, 409);
+
+  const action = f.route.replace(/development-executions$/u, 'action');
+  const plans = f.route.replace(/development-executions$/u, 'verification-plans');
+  const list = () => fetch(plans).then(response => response.json());
+  const { planRevision } = revision.body.run;
+  assert.equal((await list()).capabilities.canRecoverLogin, false);
+  await until(() => f.run.status === 'awaiting_review');
+  const approved = await fetch(action, post({ action: 'approve_plan', revision: planRevision, specRevision: f.run.specRevision }));
+  assert.equal(approved.status, 200, await approved.text());
+  const ready = await until(async () => { const state = await list(); return state.capabilities.canRecoverLogin && state; });
+  assert.equal(ready.capabilities.budget.remainingAttempts, 0);
+  const body = { contractRevision: ready.capabilities.contractRevision, planRevision };
+  assert.equal((await fetch(`${plans}/recover-login`, post({ ...body, planRevision: original }))).status, 409);
+  const prior = ready.proposals.find(item => item.id === failed.proposalId);
+  await f.app.orchestrator.withProjectCheckpoint(f.project.id, async () => {
+    const attempted = await fetch(`${plans}/import`, post({ contractRevision: body.contractRevision, proposal: prior.proposal, feedback: '并发导入' }));
+    assert.equal(attempted.status, 409);
+  });
+  const recovered = await fetch(`${plans}/recover-login`, post(body));
+  const recoveredBody = await recovered.json();
+  assert.equal(recovered.status, 201, JSON.stringify(recoveredBody));
+  const { proposal: draft } = recoveredBody;
+  assert.equal(draft.status, 'draft');
+  assert.equal(draft.dispatched, false);
+  assert.equal(draft.binding.planRevision, planRevision);
+  assert.deepEqual(draft.proposal.steps, prior.proposal.steps);
+  assert.deepEqual(draft.proposal.browser.steps.filter(step => prior.proposal.browser.steps.some(item => item.id === step.id)), prior.proposal.browser.steps);
+  assert.equal((await f.request()).body.capabilities.canStart, false);
+
+  const again = await fetch(`${plans}/recover-login`, post(body));
+  assert.equal(again.status, 200);
+  assert.equal((await again.json()).proposal.id, draft.id);
+  assert.equal((await list()).proposals.length, ready.proposals.length + 1);
+  assert.equal((await list()).capabilities.canRecoverLogin, false);
+  assert.equal(f.coreCalls(), 1);
+
+  const accepted = await fetch(`${plans}/${draft.id}/approve`, post({ revision: draft.revision, feedback: '确认登录与原业务检查。' }));
+  assert.equal(accepted.status, 200);
+  const state = (await f.request()).body;
+  assert.equal(state.capabilities.canStart, true);
+  assert.deepEqual(state.capabilities.supportedProposalIds, [draft.id]);
+  assert.equal(state.executions.find(item => item.id === failed.id).current, false);
 });
 
 test('saving a confirmed plan revision is blocked while its code execution is active', async t => {

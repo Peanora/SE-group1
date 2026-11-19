@@ -364,6 +364,10 @@ function guideAction(action) {
   if (action === 'tasks') openDeliveryStage('plan');
   else if (action === 'documents') { showArtifact('task.md'); focusWorkspaceTarget($('#records-body')); }
   else if (action === 'verificationDetails') openDeliveryStage('verification');
+  else if (action === 'editVerificationDraft' || action === 'importVerification') {
+    openDeliveryStage('verification');
+    void verificationPlans?.guideAct(action === 'editVerificationDraft' ? 'openRecovery' : 'openImport');
+  }
   else if (action === 'codingDetails') openDeliveryStage('coding');
   else if (action === 'buildDetails') openDeliveryStage('testing');
   else if (action === 'deliveryDetails') openDeliveryStage('delivery');

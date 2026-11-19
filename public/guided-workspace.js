@@ -62,22 +62,29 @@ function present({ project, run, historical, busy, startLabel, model, canStart, 
       primary: canEdit && verification.draft.canApprove ? button('approveVerification', '确认验收清单') : null,
       secondary: button('verificationDetails', '查看清单详情', true), content: 'checklist',
     });
-    if (verification.working) return info('正在准备验收清单', '系统正在把你确认的功能整理成检查步骤。');
+    if (verification.working) return info(verification.workingText || '正在准备验收清单', '完成后，你可以核对清单中的检查步骤。');
     if (verification.repairable) return info('这份清单可以直接修好', '系统能从已保存的内容补齐格式问题。这次修复不增加模型用量。', {
       primary: canEdit ? button('repairVerification', '修好并查看清单') : null,
       secondary: button('verificationDetails', '查看失败记录', true),
     });
     if (verification.canGenerate) return info(verification.failed ? '这次没能准备好验收清单' : '先定好软件要怎样验收',
-      verification.failed ? '可以重新生成一份。本次操作会使用模型。' : '系统会根据已确认的功能安排接口和页面检查。本次操作会使用模型。', {
+      verification.recoveryUnavailable ? verification.detail : verification.failed ? '可以重新生成一份。本次操作会使用模型。' : '系统会根据已确认的功能安排接口和页面检查。本次操作会使用模型。', {
         primary: canEdit ? button('generateVerification', verification.failed ? '重新准备验收清单' : '准备验收清单') : null,
+        secondary: verification.recoveryUnavailable && verification.canImport ? button('importVerification', '导入已有清单', true) : null,
         cost: verification.cost,
       });
     if (verification.blocked) return info('正在核对当前进度', '项目正在处理其他操作，等状态确认后可以继续。', {
       primary: button('refreshProgress', '刷新进度'), secondary: button('verificationDetails', '查看当前记录', true),
     });
+    if (verification.canOpenRecovery || verification.canImport) {
+      const edit = verification.canOpenRecovery && canEdit;
+      return info(verification.text || '准备验收清单', verification.detail || '你可以导入一份包含接口和页面检查的清单。', {
+        primary: edit ? button('editVerificationDraft', '载入并修改失败草案') : button('importVerification', '导入验收清单'),
+        secondary: edit ? button('importVerification', '导入已有清单', true) : verification.failed ? button('verificationDetails', '查看失败详情', true) : null,
+      });
+    }
     return info(verification.text || '正在读取验收进度', verification.detail || '状态确认后，这里会显示可以继续的操作。', {
-      primary: canEdit && verification.failed ? button('editSource', '补充验收要求') : null,
-      secondary: verification.failed ? button('verificationDetails', '查看失败详情', true) : null,
+      primary: verification.failed ? button('verificationDetails', '查看失败详情') : null,
     });
   }
   if (development?.accepted) {

@@ -10,6 +10,7 @@ import { createZip } from './lib/zip.mjs';
 import { SimulatedTaskService } from './lib/simulated-tasks.mjs';
 import { createLocalExecutionSubject } from './lib/team-access.mjs';
 import { createVerificationRecovery } from './lib/verification-recovery.mjs';
+import { loginContinuationDraft, loginRevisionNote, loginRevisionTask, previousLoginPlan } from './lib/verification-login-continuation.mjs';
 import { repeatedCounterSteps } from './public/verification-draft.js';
 
 import { DEFAULT_STACK, PLATFORM_DEFAULTS } from './lib/platform-defaults.mjs';
@@ -389,9 +390,9 @@ export async function createApp(options = {}) {
               throw new HttpError(409, '当前执行已经变化，或没有需要修订的登录检查。请刷新进度。');
             }
             const tasks = structuredClone(run.tasks);
-            const pageTask = tasks.find(task => task.writePaths?.some(file => file.startsWith('public/'))) ?? tasks[0];
+            const pageTask = loginRevisionTask(tasks);
             if (!pageTask) throw new HttpError(409, '当前计划没有可保存验收调整的开发任务。');
-            const setup = `验收修订第${(run.planVersion ?? 1) + 1}版。${failure.failureHelp.detail} 每个测试窗口都先准备该角色独立的测试账号并完成登录，再打开需要登录的页面。登录是否成功必须有后续检查；不能借用接口检查或其他浏览器窗口的登录及数据。公开页面仍检查无登录访问，保留既有权限和业务预期。`;
+            const setup = loginRevisionNote((run.planVersion ?? 1) + 1, failure.failureHelp.detail);
             if (pageTask.description.length + setup.length + 2 > 5000) throw new HttpError(409, '这项开发任务的说明已达上限。请在开发任务中整理说明后重试。');
             pageTask.description += `\n\n${setup}`;
             const updated = await atPlanRevisionCheckpoint(projectId, () => orchestrator.action(projectId, runId, {
@@ -414,14 +415,54 @@ export async function createApp(options = {}) {
           requireLocalExecutionRequest(request, server);
           if (!verificationPlanningService) throw new HttpError(404, '当前服务尚未开放独立测试提案。');
           const identity = { projectId, runId };
-          if (segments.length === 6 && method === 'GET') return respond(response, 200, await verificationPlanningService.list(identity));
+          const currentDefinition = result => result.proposals?.findLast(item => item.current && ['draft', 'approved', 'rejected'].includes(item.status));
+          if (segments.length === 6 && method === 'GET') {
+            const result = await verificationPlanningService.list(identity);
+            if (!result.capabilities) return respond(response, 200, result);
+            const canRecoverLogin = Boolean(plannedExecutionService && result.capabilities.canImportDefinition && !currentDefinition(result)
+              && (!teamAccess || teamAccess.identity(request.headers.cookie)?.role === 'owner') && previousLoginPlan(run));
+            return respond(response, 200, { ...result, capabilities: { ...result.capabilities, canRecoverLogin } });
+          }
+          if (segments.length === 7 && segments[6] === 'recover-login' && method === 'POST') {
+            const { contractRevision, planRevision } = exactFields(await readJson(request), ['contractRevision', 'planRevision']);
+            const fallback = { proposal: null, reason: '未能从旧清单确认所需的登录步骤。请检查或导入当前计划的验收清单。' };
+            const recovery = await orchestrator.withProjectCheckpoint(projectId, async () => {
+              const { run: current } = store.getRun(projectId, runId);
+              const result = await verificationPlanningService.list(identity);
+              requestChecks.get(request)?.();
+              if (current.planRevision !== planRevision || result.capabilities?.contractRevision !== contractRevision) {
+                throw new HttpError(409, '计划或验收规则已变化，请刷新工作区。');
+              }
+              const previous = previousLoginPlan(current);
+              if (!plannedExecutionService || !previous) return { status: 200, body: fallback };
+              const existing = currentDefinition(result);
+              if (existing) return { status: 200, body: { proposal: existing } };
+              if (!result.capabilities.canImportDefinition) throw new HttpError(409, result.capabilities.manualReason);
+              const { executions } = await plannedExecutionService.list(identity);
+              const draft = loginContinuationDraft({ run: current, previous, proposals: result.proposals, executions });
+              if (!draft) return { status: 200, body: fallback };
+              requestChecks.get(request)?.();
+              try {
+                const imported = await verificationPlanningService.importDefinition({ ...identity, contractRevision, ...draft });
+                return { status: 201, body: imported };
+              } catch (error) {
+                if (error.code === 'invalid_proposal') return { status: 200, body: fallback };
+                throw error;
+              }
+            });
+            return respond(response, recovery.status, recovery.body);
+          }
           if (segments.length === 7 && segments[6] === 'propose' && method === 'POST') {
             const body = exactFields(await readJson(request), ['contractRevision']);
             return respond(response, 202, await verificationPlanningService.propose({ ...identity, ...body }));
           }
           if (segments.length === 7 && segments[6] === 'import' && method === 'POST') {
             const body = dataFields(await readJson(request), ['contractRevision', 'proposal', 'feedback']);
-            return respond(response, 201, await verificationPlanningService.importDefinition({ ...identity, ...body }));
+            const imported = await orchestrator.withProjectCheckpoint(projectId, () => {
+              requestChecks.get(request)?.();
+              return verificationPlanningService.importDefinition({ ...identity, ...body });
+            });
+            return respond(response, 201, imported);
           }
           if (segments.length === 8 && segments[7] === 'repair-draft') {
             const source = { ...identity, proposalId: segments[6] }, checkAccess = () => requestChecks.get(request)?.();

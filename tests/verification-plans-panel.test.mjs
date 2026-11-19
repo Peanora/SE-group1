@@ -16,8 +16,9 @@ function row(overrides = {}) { return { id: 'proposal-1', projectId: 'project-a'
   finishReason: null, dispatched: true, receiptState: 'saved', receipt: { sha256: c, bytes: 123 }, error: null, errorCode: null, startedAt: '2026-11-14T00:00:00Z', finishedAt: '2026-11-14T00:00:01Z',
   actions: { canCancel: false, canRevise: true, canApprove: true, canReject: true }, ...overrides }; }
 function fixture() { return { coverage: 'structural_only', capabilities: { canPropose: true, contractRevision: d, budget: { maxAttempts: 3, remainingAttempts: 2, timeoutMs: 60000 }, model: 'fixture-model', reason: null }, proposals: [row()] }; }
-const harness = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"></head><body><main style="max-width:1100px;margin:auto"><div id="panel"></div></main><script type="module">
+const harness = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"></head><body><main style="max-width:1100px;margin:auto"><section id="guide" hidden><ol data-guide-steps></ol><div data-guide-surface></div></section><div id="panel"></div></main><script type="module">
 import {createVerificationPlans} from '/verification-plans.js';
+import {createGuidedWorkspace} from '/guided-workspace.js';
 window.ctx=${JSON.stringify(context)};window.initial=${JSON.stringify(fixture())};window.states={a:structuredClone(window.initial),b:structuredClone(window.initial)};
 for(const r of window.states.b.proposals){r.projectId='project-b';r.runId='run-b';r.binding.projectId='project-b';r.binding.runId='run-b';}
 window.requests=[];window.errors=[];window.holds={};window.pending=[];window.mode={};window.counter=1;
@@ -26,14 +27,20 @@ window.release=async(index,opts={})=>{const p=window.pending[index];if(opts.erro
 const api=(url,options={})=>{
  const method=options.method||'GET',key=stateKey(url),body=options.body?JSON.parse(options.body):null,snapshot=structuredClone(window.states[key]);window.requests.push({url,method,body});
  const execute=async()=>{
-  if(method==='GET'){if(window.mode.getStatus)throw Object.assign(new Error('读取测试提案失败'),{status:window.mode.getStatus});return snapshot;}
+  if(method==='GET'){
+   if(window.mode.getStatus)throw Object.assign(new Error('读取测试提案失败'),{status:window.mode.getStatus});
+   if(url.includes('/repair-draft'))return {proposalId:decodeURIComponent(url.split('/').at(-2)),diagnostic:structuredClone(window.mode.diagnostic),...(url.endsWith('?edit=1')?{draft:structuredClone(window.initial.proposals[0].proposal)}:{})};
+   return snapshot;
+  }
   if(window.mode.postStatus)throw Object.assign(new Error('提案操作失败，编辑内容保留'),{status:window.mode.postStatus});
   const state=window.states[key],action=url.split('/').at(-1),id=decodeURIComponent(url.split('/').at(-2));let target;
   if(action==='propose'){
    target=structuredClone(state.proposals[0]??window.initial.proposals[0]);target.id='proposal-'+(++window.counter);Object.assign(target,{status:'generating',proposal:null,revision:null,approved:false,attempt:window.counter,history:[],actions:{canCancel:true,canRevise:false,canApprove:false,canReject:false}});
    state.proposals.push(target);state.capabilities.budget.remainingAttempts--;state.capabilities.canPropose=false;
-  }else if(action==='import'){
-   target=structuredClone(window.initial.proposals[0]);Object.assign(target,{id:'manual-'+(++window.counter),origin:'manual',status:'draft',proposal:body.proposal,revision:'${c}',approved:false,approval:null,attempt:window.counter,history:[],model:null,usage:{inputTokens:0,outputTokens:0},dispatched:false,receipt:null,receiptState:'not_applicable',actions:{canCancel:false,canRevise:true,canApprove:true,canReject:true}});state.proposals.push(target);
+  }else if(action==='import'||action==='recover-login'){
+   if(action==='recover-login'&&window.mode.recoveryReason)return {proposal:null,reason:window.mode.recoveryReason};
+   const definition=action==='import'?body.proposal:{...window.initial.proposals[0].proposal,browser:{version:1,steps:[{id:'login',op:'goto'}]}};
+   target=structuredClone(window.initial.proposals[0]);Object.assign(target,{id:'manual-'+(++window.counter),origin:'manual',status:'draft',proposal:definition,revision:'${c}',approved:false,approval:null,attempt:window.counter,history:[],model:null,usage:{inputTokens:0,outputTokens:0},dispatched:false,receipt:null,receiptState:'not_applicable',actions:{canCancel:false,canRevise:true,canApprove:true,canReject:true}});state.proposals.push(target);
   }else{
    target=state.proposals.find(x=>x.id===id);if(action==='cancel'){target.status=window.mode.cancelState||'cancel_requested';target.actions.canCancel=false;}
    else if(action==='revise'){target.history.push({revision:target.revision,manifestHash:target.manifestHash,status:'revised',feedback:body.feedback,at:'now'});target.revision='${c}';target.proposal=body.proposal;target.status='draft';target.approved=false;target.approval=null;}
@@ -46,14 +53,25 @@ const api=(url,options={})=>{
  };
  const hold=method+':'+key;if(window.holds[hold]){window.holds[hold]--;return new Promise((resolve,reject)=>window.pending.push({url,method,body,execute,resolve,reject}));}return execute();
 };
-window.panel=createVerificationPlans({api,getContext:()=>window.ctx,onError:e=>window.errors.push(e.message)});
+const guide=createGuidedWorkspace(document.querySelector('#guide'),{isVisible:()=>!!window.mode.guided,act:action=>{
+ if(action==='importVerification')void window.panel.guideAct('openImport');
+ if(action==='editVerificationDraft')void window.panel.guideAct('openRecovery');
+}});
+const renderGuide=()=>{
+ const verification=window.panel.guide();
+ guide.render({project:{id:window.ctx.projectId},run:{id:window.ctx.runId,engineeringPlan:{},status:'succeeded'},verification,canEdit:window.mode.canEdit!==false,
+  steps:[...['source','spec','spec-approval','plan','plan-approval'].map(id=>({id,state:'done'})),{id:'verification',state:verification.state||'waiting'}]});
+};
+window.panel=createVerificationPlans({api,getContext:()=>window.ctx,onError:e=>window.errors.push(e.message),onUpdate:renderGuide,
+ failureRecovery:true,isGuided:()=>!!window.mode.guided,canEdit:()=>window.mode.canEdit!==false});
 await window.panel.mount(document.querySelector('#panel'));window.ready=true;
 </script></body></html>`;
 let browser, server, address;
 before(async () => {
   const module = await readFile(new URL('../public/verification-plans.js', import.meta.url));
   const draft = await readFile(new URL('../public/verification-draft.js', import.meta.url));
-  const modules = new Map([['/verification-plans.js', module], ['/verification-draft.js', draft]]);
+  const guide = await readFile(new URL('../public/guided-workspace.js', import.meta.url));
+  const modules = new Map([['/verification-plans.js', module], ['/verification-draft.js', draft], ['/guided-workspace.js', guide]]);
   server = http.createServer((req, res) => {
     if (modules.has(req.url)) { res.writeHead(200, { 'Content-Type': 'text/javascript' }); res.end(modules.get(req.url)); }
     else { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(harness); }
@@ -304,4 +322,70 @@ test('manual import keeps drafts across reload and an unconfirmed POST never ret
   assert.equal(await page.evaluate(() => window.requests.filter(x => x.method === 'POST').length), 1);
   await refresh(page); assert.equal(await page.evaluate(() => window.requests.filter(x => x.method === 'POST').length), 1);
   await page.evaluate(() => { window.states.a.capabilities.canImportDefinition = false; }); await refresh(page); assert.equal(await button(page, '保存为待审阅定义').isDisabled(), true);
+});
+
+test('plan-bound login recovery runs in technical view and waits for the saved draft before allowing further actions', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => {
+    window.states.a.proposals = [];
+    Object.assign(window.states.a.capabilities, { canRecoverLogin: true, canImportDefinition: true });
+    window.holds['POST:a'] = 1;
+  });
+  await refresh(page);
+  await page.waitForFunction(() => window.pending.length === 1);
+  assert.equal(await propose(page).isDisabled(), true);
+  await page.evaluate(() => { window.mode.guided = true; window.mode.holdConfirmation = true; });
+  await refresh(page);
+  await page.getByRole('heading', { name: '正在补上测试账号的登录步骤' }).waitFor();
+  assert.equal(await button(page, '准备验收清单').count(), 0);
+  await page.evaluate(() => window.release(0));
+  await page.waitForFunction(() => window.pending.length === 2);
+  assert.equal(await button(page, '确认验收清单').count(), 0);
+  await page.evaluate(() => window.release(1));
+  await button(page, '确认验收清单').waitFor();
+  const result = await page.evaluate(() => ({ posts: window.requests.filter(r => r.method === 'POST'), status: window.states.a.proposals[0].status,
+    approved: window.states.a.proposals[0].approved, remaining: window.states.a.capabilities.budget.remainingAttempts }));
+  assert.deepEqual(result, { posts: [{ method: 'POST', url: '/api/projects/project-a/runs/run-a/verification-plans/recover-login',
+    body: { contractRevision: d, planRevision: b } }], status: 'draft', approved: false, remaining: 2 });
+});
+
+test('unsupported login recovery preserves the reason and opens the manual import form in a single action', async t => {
+  const page = await pageFor(t, { width: 390, height: 844 });
+  await page.evaluate(() => {
+    window.states.a.proposals = [];
+    Object.assign(window.states.a.capabilities, { canRecoverLogin: true, canImportDefinition: true, canPropose: false });
+    window.states.a.capabilities.budget.remainingAttempts = 0;
+    window.mode.guided = true;
+    window.mode.recoveryReason = '旧清单没有可复用的登录检查。';
+  });
+  await refresh(page);
+  await page.locator('#guide').getByText('旧清单没有可复用的登录检查。', { exact: true }).waitFor();
+  await refresh(page);
+  await button(page, '导入验收清单').click();
+  assert.equal(await importJSON(page).isVisible(), true);
+  assert.equal(await importJSON(page).evaluate(el => el === document.activeElement), true);
+  assert.deepEqual(await page.evaluate(() => window.requests.filter(r => r.method === 'POST').map(r => r.url.split('/').at(-1))), ['recover-login']);
+});
+
+test('guide displays current draft diagnosis and only reports an HTTP step overflow above the limit', async t => {
+  const page = await pageFor(t, { width: 390, height: 844 });
+  await page.evaluate(() => {
+    const { capabilities, proposals } = window.states.a;
+    Object.assign(capabilities, { canImportDefinition: true, canPropose: false, reason: '本运行测试模型尝试预算已用尽。' });
+    capabilities.budget.remainingAttempts = 0;
+    Object.assign(proposals[0], { origin: 'model', status: 'failed', finishReason: 'stop', errorCode: 'invalid_model_response', proposal: null, revision: null });
+    window.mode.guided = true;
+    window.mode.diagnostic = { message: '浏览器清单包含冲突的检查目标。', canLoad: true, missing: [], httpSteps: 50, maxHttpSteps: 40 };
+  });
+  await refresh(page);
+  const guide = page.locator('#guide');
+  await guide.getByText(/浏览器清单包含冲突的检查目标。.*50 个接口步骤，上限是 40 个。.*预算已用尽/u).waitFor();
+  await button(page, '载入并修改失败草案').click();
+  await json(page).waitFor({ state: 'visible' });
+  assert.equal(await json(page).evaluate(el => el === document.activeElement), true);
+  await page.evaluate(() => { window.mode.diagnostic.httpSteps = 40; });
+  await button(page, '刷新测试提案').click();
+  await guide.getByText(/浏览器清单包含冲突的检查目标/u).waitFor();
+  assert.doesNotMatch(await guide.innerText(), /40 个接口步骤/u);
+  assert.equal(await page.evaluate(() => window.requests.filter(r => r.method === 'POST').length), 0);
 });

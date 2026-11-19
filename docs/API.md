@@ -1,5 +1,11 @@
 # 本地原型接口约定
 
+## 登录验收清单自动接续
+
+当前计划确认后，`GET /api/projects/:projectId/runs/:runId/verification-plans` 的 `capabilities.canRecoverLogin` 表示负责人可以尝试接续专用的登录清单修订。旧认可清单、实际浏览器失败和当前计划的对应关系在保存前重新核对。
+
+`POST /api/projects/:projectId/runs/:runId/verification-plans/recover-login` 接收 `{contractRevision,planRevision}`。提取并验证成功后创建待审阅草案，返回 `201 {proposal}`。若当前已有待审阅、认可或驳回记录，返回 `200 {proposal}`。无法可靠接续时返回 `200 {proposal:null,reason}`。版本不匹配或检查点在途时返回 409。接续不请求模型，原确认及验收结果保持历史归属。新清单核对通过并确认后才可开启开发。
+
 ## 现有工程接口请求和响应的人工修订
 
 `POST /api/projects/:projectId/runs/:runId/action`，正文为 `{action:"revise_route_contracts",revision,changes:[{id,request?,response?,roles?}],feedback?}`。每项指定一个已存在的接口及至少一个可修字段。请求和响应说明是最多2000字符的非空文本，角色必须来自当前已确认规格。整个请求至少需要一处实质变化。方法、路径、错误结构、需求归属和可写文件范围由原方案确定。

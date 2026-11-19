@@ -18,6 +18,8 @@ const contextValue = value => Object.fromEntries(['projectId', 'runId', 'specRev
 const contextKey = value => JSON.stringify(value);
 const bindingKey = value => JSON.stringify(Object.entries(value ?? {}).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
 const sessionKey = value => `taskflow.verificationPlans.${JSON.stringify([value.projectId, value.runId, value.specRevision, value.planRevision])}`;
+const httpStepOverflow = detail => Number.isSafeInteger(detail?.httpSteps) && Number.isSafeInteger(detail?.maxHttpSteps) && detail.httpSteps > detail.maxHttpSteps
+  ? `这份草案有 ${detail.httpSteps} 个接口步骤，上限是 ${detail.maxHttpSteps} 个。` : '';
 
 /** HTTP test definitions only. Server facts never become software acceptance in this component. */
 export function createVerificationPlans({ api, getContext, onError = () => {}, onUpdate = () => {}, onApproved = () => {}, failureRecovery = false, canEdit = () => true, isGuided = () => false }) {
@@ -28,6 +30,7 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
   let diagnosticKey = '', diagnosticRead = 0, diagnosis = null, openingDraft = false;
   let automaticRepairId = '';
   const sessions = new Map();
+  const loginRecoveries = new Map();
   const node = (tag, value, className) => { const element = document.createElement(tag); if (value != null) element.textContent = value; if (className) element.className = className; return element; };
   function button(label, handler, primary = false) { const element = node('button', label, primary ? 'vp-primary' : ''); element.type = 'button'; element.addEventListener('click', handler); return element; }
   function field(label, control) { const wrapper = node('label'); control.setAttribute('aria-label', label); wrapper.append(node('span', label), control); return wrapper; }
@@ -58,7 +61,9 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
   const inProgress = row => ['generating', 'cancel_requested'].includes(row?.status);
   const jointDraft = () => currentRows().findLast(row => currentRow(row) && row.status === 'draft' && row.proposal?.browser?.steps?.length && row.actions?.canApprove === true && !counterReviewPending(row));
   function workflowProgress() {
-    if (contextKey(contextValue(getContext())) !== key || !fresh) return { state: 'waiting', text: error ? '状态待核对' : '正在读取清单' };
+    if (contextKey(contextValue(getContext())) !== key) return { state: 'waiting', text: '正在读取清单' };
+    if (action?.kind === 'recover-login' || shouldRecoverLogin()) return { state: 'working', text: '正在补上测试账号的登录步骤' };
+    if (!fresh) return { state: 'waiting', text: error ? '状态待核对' : '正在读取清单' };
     const current = currentRows();
     const joint = current.findLast(row => currentRow(row) && row.status === 'approved' && row.approved && row.proposal?.browser?.steps?.length);
     if (joint) return { state: 'done', text: '清单已确认', detail: `HTTP ${joint.proposal.steps?.length ?? 0} 步 · 浏览器 ${joint.proposal.browser.steps.length} 步` };
@@ -75,19 +80,31 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
   }
   function guide() {
     const progress = workflowProgress();
-    if (!fresh || contextKey(contextValue(getContext())) !== key) return { text: progress.text };
+    if (!fresh || contextKey(contextValue(getContext())) !== key) {
+      return { text: progress.text, ...(progress.state === 'working' ? { working: true, workingText: progress.text } : {}) };
+    }
     const ready = jointDraft(), latest = currentRows().at(-1);
     const failed = ['failed', 'timed_out', 'cancelled', 'rejected', 'reconciliation_required'].includes(latest?.status);
     const working = Boolean(action || pending || progress.state === 'working' || automaticRepairId === latest?.id && hasRecovery(latest) && !diagnosticFor(latest)
       || counterDraft(latest) && !ready && !diagnosticFor(latest));
     const repairable = !working && (hasRecovery(latest) || counterDraft(latest)) && latest.id === selected()?.id && canImport() && Boolean(diagnosticFor(latest)?.suggestedRepair);
     const budget = data?.capabilities?.budget;
-    return { ...progress, working, failed, repairable, canGenerate: !working && validCost(),
-      ...(validCost() ? { cost: `使用 ${data.capabilities.model}，当前还可生成 ${budget.remainingAttempts} 次。` } : {}),
+    const canGenerate = !working && validCost();
+    const currentDiagnosis = diagnosticFor(latest);
+    const recoveryReason = loginRecoveries.get(sessionKey(context));
+    const importAllowed = !working && canImport();
+    const recoveryNeeded = !ready && !working && (recoveryReason || !canGenerate && (failed || importAllowed));
+    const detail = [currentDiagnosis?.message, httpStepOverflow(currentDiagnosis), recoveryReason, data?.capabilities?.reason].filter(Boolean).join(' ');
+    return { ...progress, working, failed, repairable, canGenerate,
+      canOpenRecovery: Boolean(recoveryNeeded && importAllowed && hasRecovery(latest) && latest.id === selected()?.id && currentDiagnosis?.canLoad),
+      canImport: importAllowed,
+      recoveryUnavailable: Boolean(recoveryReason),
+      ...(canGenerate ? { cost: `使用 ${data.capabilities.model}，当前还可生成 ${budget.remainingAttempts} 次。` } : {}),
       ...(ready && !working ? { draft: { id: ready.id, canApprove: canEdit() && !pending, http: ready.proposal.steps.length, browser: ready.proposal.browser.steps.length,
         requirements: [...new Set(ready.proposal.steps.flatMap(step => step.requirementIds ?? []))] } } : {}),
-      ...(failed && !repairable && !validCost() && !ready ? { text: '这次还没有可用的验收清单',
-        detail: '打开详情查看可以恢复的草案，或在需求里补充要验收的功能。'} : {}) };
+      ...(recoveryNeeded ? { text: '这次还没有可用的验收清单',
+        detail: detail || '打开详情查看失败记录和可继续的操作。' } : {}),
+      ...(working && progress.state === 'working' ? { workingText: progress.text } : {}) };
   }
   function guideAct(kind) {
     const current = guide();
@@ -96,6 +113,12 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
       return perform(kind, { automaticRepair: true });
     }
     if (kind === 'quickRepair' && current.repairable) return perform(kind);
+    if (kind === 'openImport' && current.canImport) {
+      refs.importDetails.open = true;
+      refs.importJSON.focus();
+      return;
+    }
+    if (kind === 'openRecovery' && current.canOpenRecovery) return openRecovery();
     if (kind !== 'approve' || !current.draft?.canApprove) return;
     saved.selectedId = current.draft.id;
     chooseRow();
@@ -108,14 +131,20 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
   }
   function validCost() {
     const cap = data?.capabilities, budget = cap?.budget;
-    return fresh && data?.coverage === 'structural_only' && confirmed() && cap?.canPropose === true && HASH.test(cap.contractRevision || '')
+    return fresh && !shouldRecoverLogin() && action?.kind !== 'recover-login' && pending?.kind !== 'recover-login'
+      && data?.coverage === 'structural_only' && confirmed() && cap?.canPropose === true && HASH.test(cap.contractRevision || '')
       && typeof cap.model === 'string' && !!cap.model.trim() && cap.model.length <= 200
       && Number.isInteger(budget?.maxAttempts) && budget.maxAttempts >= 1 && budget.maxAttempts <= 3
       && Number.isInteger(budget.remainingAttempts) && budget.remainingAttempts >= 1 && budget.remainingAttempts <= budget.maxAttempts
       && Number.isInteger(budget.timeoutMs) && budget.timeoutMs >= 1 && budget.timeoutMs <= 60000;
   }
   const canImport = () => canEdit() && fresh && confirmed() && data?.coverage === 'structural_only' && data.capabilities?.canImportDefinition === true && HASH.test(data.capabilities.contractRevision || '');
-  const savesDefinition = kind => ['import', 'repair', 'quickRepair'].includes(kind);
+  function shouldRecoverLogin() {
+    return !action && !pending && !openingDraft && canImport() && data.capabilities.canRecoverLogin === true
+      && !loginRecoveries.has(sessionKey(context)) && !draft?.touched && !saved.importJSON.trim() && !saved.importFeedback.trim()
+      && !boundRows().some(inProgress) && !currentRows().some(row => ['draft', 'approved', 'reconciliation_required'].includes(row.status));
+  }
+  const savesDefinition = kind => ['import', 'repair', 'quickRepair', 'recover-login'].includes(kind);
   const creates = kind => kind === 'propose' || savesDefinition(kind);
   function report(failure, kind = 'action') { error = failure instanceof Error ? failure.message : String(failure); errorKind = kind; try { Promise.resolve(onError(failure instanceof Error ? failure : new Error(error))).catch(() => {}); } catch { /* Parent notices cannot alter approval. */ } }
   function persist() {
@@ -178,6 +207,7 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     });
   }
   async function openRecovery() {
+    if (syncContext()) { render(); void refresh(); return; }
     const row = selected();
     if (openingDraft || action || !hasRecovery(row) || !diagnosis?.canLoad || !canImport()) return;
     if (draft?.repair) { refs.json.focus(); return; }
@@ -199,6 +229,7 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
   function allowed(kind) {
     const row = selected(); if (action || !fresh) return false;
     if (kind === 'propose') return validCost() && refs.consent.checked;
+    if (kind === 'recover-login') return shouldRecoverLogin();
     if (kind === 'import') return canImport() && !!saved.importJSON.trim() && !!saved.importFeedback.trim();
     if (kind === 'quickRepair') return (hasRecovery(row) || counterDraft(row)) && canImport() && Boolean(diagnosticFor(row)?.suggestedRepair);
     if (kind === 'repair') return hasRecovery(row) && canImport() && diagnosis?.canLoad && draft?.repair === true && !!draft.json.trim() && !!draft.feedback.trim();
@@ -240,13 +271,14 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     const saveRepair = button('保存为新待审阅清单', () => { void perform('repair'); }, true);
     detail.append(coverage, saveRepair, revise, approve, reject, cancel, goToCode);
     const history = node('details'), historyBody = node('div'); history.append(node('summary', '提案修订与审阅历史'), historyBody); detail.append(history); body.append(detail); root.append(body); element.append(root);
-    refs = { refreshButton, state, errorBox, noticeBox, body, cost, consent, propose, importJSON, importFeedback, importButton, select, detail, identity, status, facts, failure, failureText, missing, capacity, quickHint, quickRepair, openDraft, bindingText, stale, load, editor, editorHelp, json, feedback, saveRepair, revise, approve, reject, cancel, historyBody, coverage, goToCode };
+    refs = { refreshButton, state, errorBox, noticeBox, body, cost, consent, propose, importDetails, importJSON, importFeedback, importButton, select, detail, identity, status, facts, failure, failureText, missing, capacity, quickHint, quickRepair, openDraft, bindingText, stale, load, editor, editorHelp, json, feedback, saveRepair, revise, approve, reject, cancel, historyBody, coverage, goToCode };
     consent.addEventListener('change', render);
   }
   function render() {
     if (!refs || destroyed) return;
     refs.body.hidden = !context.projectId || !context.runId;
-    refs.state.textContent = refs.body.hidden ? '请先选择项目和规划运行。' : loading && !data ? '正在读取测试提案…' : !fresh ? '尚未取得当前提案许可，请刷新核对。' : data?.capabilities?.reason || '仅审阅HTTP结构测试定义，尚未运行。';
+    refs.state.textContent = refs.body.hidden ? '请先选择项目和规划运行。' : action?.kind === 'recover-login' ? '正在补上测试账号的登录步骤…'
+      : loading && !data ? '正在读取测试提案…' : !fresh ? '尚未取得当前提案许可，请刷新核对。' : data?.capabilities?.reason || '仅审阅HTTP结构测试定义，尚未运行。';
     refs.errorBox.hidden = !error; refs.errorBox.textContent = error; refs.noticeBox.hidden = !notice; refs.noticeBox.textContent = notice;
     const cap = data?.capabilities, budget = cap?.budget;
     const signature = JSON.stringify([key, cap?.contractRevision, cap?.budget, cap?.model]);
@@ -272,8 +304,9 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     refs.failureText.textContent = diagnosis?.message || (hasRecovery(row) ? '正在核对这次草案未通过的原因…' : text(row.error));
     refs.missing.hidden = !diagnosis?.missing?.length;
     refs.missing.replaceChildren(...(diagnosis?.missing ?? []).map(item => node('li', `${item.id} · ${item.title}`)));
-    refs.capacity.hidden = !diagnosis?.maxHttpSteps || diagnosis.httpSteps < diagnosis.maxHttpSteps;
-    refs.capacity.textContent = refs.capacity.hidden ? '' : `这份草案已有 ${diagnosis.httpSteps} 个接口步骤，达到上限。请合并重复检查或替换冗余步骤，为漏测需求补上检查。`;
+    const capacityMessage = httpStepOverflow(diagnosis);
+    refs.capacity.hidden = !capacityMessage;
+    refs.capacity.textContent = capacityMessage ? `${capacityMessage}请合并重复检查并保留必需的验收条件。` : '';
     refs.quickHint.textContent = diagnosis?.suggestedRepair ? `${diagnosis.suggestedRepair}保存草案无需调用模型。` : '';
     refs.quickHint.hidden = refs.quickRepair.hidden = !diagnosis?.suggestedRepair || !canEdit() || Boolean(draft?.repair);
     refs.quickRepair.disabled = !allowed('quickRepair') || openingDraft;
@@ -306,7 +339,7 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     if (intent.kind === 'reject') confirmed = currentRow(row) && row.status === 'rejected' && row.revision === intent.oldRevision && row.history?.some(item => item.status === 'reject' && item.revision === intent.oldRevision && item.feedback === intent.feedback);
     if (!confirmed) return;
     if (intent.kind !== 'cancel' || !['cancel_requested', 'reconciliation_required'].includes(row.status)) pending = null; error = ''; errorKind = '';
-    notice = ({ import: '后端已保存人工定义；仍待单独审阅和认可，尚未运行测试。', repair: '修改已保存为新的待审阅清单。请核对并认可这份清单。', quickRepair: '修复后的清单已保存。请核对后认可，验收检查尚未运行。', propose: '后端已记录新的提案尝试，尚未运行测试。', revise: '后端已保存提案修订，尚未认可或运行。', approve: '后端已认可当前测试定义，尚未运行测试，不代表软件通过。', reject: '后端已驳回当前测试定义，修订后需重新审阅。', cancel: row.status === 'cancel_requested' ? '已请求停止提案生成，尚未确认停止。' : `${STATUSES[row.status] ?? '停止状态未知，请核对'}，测试尚未运行。` })[intent.kind];
+    notice = ({ import: '后端已保存人工定义；仍待单独审阅和认可，尚未运行测试。', repair: '修改已保存为新的待审阅清单。请核对并认可这份清单。', quickRepair: '修复后的清单已保存。请核对后认可，验收检查尚未运行。', 'recover-login': '已补上测试账号的登录步骤。请核对并认可这份清单。', propose: '后端已记录新的提案尝试，尚未运行测试。', revise: '后端已保存提案修订，尚未认可或运行。', approve: '后端已认可当前测试定义，尚未运行测试，不代表软件通过。', reject: '后端已驳回当前测试定义，修订后需重新审阅。', cancel: row.status === 'cancel_requested' ? '已请求停止提案生成，尚未确认停止。' : `${STATUSES[row.status] ?? '停止状态未知，请核对'}，测试尚未运行。` })[intent.kind];
     if (creates(intent.kind) && saved.selectedId === intent.selectedId && draft === intent.draft && draft?.edits === intent.edits
       && ![refs.json, refs.feedback].includes(document.activeElement)) { saved.selectedId = row.id; saved.loadedKey = ''; draft = null; chooseRow(); }
     if (intent.kind === 'revise' && saved.selectedId === row.id && draft === intent.draft && draft.edits === intent.edits) loadRow(row, intent.feedback);
@@ -320,14 +353,22 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
       if (result?.coverage !== 'structural_only' || !Array.isArray(result.proposals) || result.proposals.some(row => !scope(row) || typeof row.id !== 'string' || !row.id || row.id.length > 128) || new Set(result.proposals.map(row => row.id)).size !== result.proposals.length) throw new Error('测试提案状态格式不完整，请刷新核对。');
       data = result; fresh = true; if (errorKind === 'read') { error = ''; errorKind = ''; } confirmPending(); render(); persist(); return true;
     } catch (failure) { if (isCurrent(token) && token.read === readId) { fresh = false; refs.consent.checked = false; report(failure?.status === 404 ? new Error('当前版本尚未开放独立测试提案。') : failure, 'read'); render(); } return false; }
-    finally { if (isCurrent(token) && token.read === readId) { loading = false; render(); finishAutomaticRepair(); onUpdate(); schedule(); } else if (!destroyed && syncContext()) { render(); void refresh(); } }
+    finally {
+      if (isCurrent(token) && token.read === readId) {
+        loading = false; render();
+        if (shouldRecoverLogin()) void perform('recover-login');
+        else finishAutomaticRepair();
+        onUpdate(); schedule();
+      } else if (!destroyed && syncContext()) { render(); void refresh(); }
+    }
   }
   async function perform(kind, { automaticRepair = false } = {}) {
     if (destroyed) return; if (syncContext()) { render(); void refresh(); return; } if (!allowed(kind)) return;
     const row = selected(), token = { key, epoch, kind, selectedId: saved.selectedId, draft, edits: draft?.edits, feedback: draft?.feedback, oldRevision: row?.revision, binding: bindingKey(row?.binding) };
     let body;
     try {
-      if (kind === 'propose' || kind === 'quickRepair') body = { contractRevision: data.capabilities.contractRevision };
+      if (kind === 'recover-login') body = { contractRevision: data.capabilities.contractRevision, planRevision: context.planRevision };
+      else if (kind === 'propose' || kind === 'quickRepair') body = { contractRevision: data.capabilities.contractRevision };
       else if (kind === 'import' || kind === 'repair') {
         const json = kind === 'repair' ? draft.json : saved.importJSON;
         if (new TextEncoder().encode(json).length > 262144) throw new Error('测试定义JSON不能超过256 KiB。');
@@ -340,11 +381,17 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
         let proposal; try { proposal = JSON.parse(draft.json); } catch { throw new Error('测试定义JSON格式无效，编辑内容已保留。'); }
         if (!proposal || Array.isArray(proposal) || typeof proposal !== 'object') throw new Error('测试定义必须为JSON对象。'); body.proposal = proposal; } }
     } catch (failure) { report(failure); render(); return; }
-    action = token; pending = null; error = ''; errorKind = ''; notice = ''; fresh = false; readId++; if (kind === 'propose') refs.consent.checked = false; render();
+    if (kind === 'recover-login') loginRecoveries.set(sessionKey(context), '');
+    action = token; pending = null; error = ''; errorKind = ''; notice = ''; fresh = false; readId++; if (kind === 'propose' || kind === 'recover-login') refs.consent.checked = false; render();
     try {
       const endpoint = ['repair', 'quickRepair'].includes(kind) ? repairPath(row) : `${base()}/${creates(kind) ? kind : `${encodeURIComponent(row.id)}/${kind}`}`;
       const result = await api(endpoint, { method: 'POST', body: JSON.stringify(body) }); if (!isCurrent(token) || action !== token) return;
       const returned = result?.proposal;
+      if (kind === 'recover-login' && returned === null) {
+        notice = typeof result.reason === 'string' && result.reason ? result.reason : '无法自动补齐登录步骤。可导入已核对的验收清单。';
+        loginRecoveries.set(sessionKey(context), notice);
+        await refresh(); return;
+      }
       if (!scope(returned) || !creates(kind) && returned.id !== row.id || kind === 'revise' && (!HASH.test(returned.revision || '') || returned.revision === row.revision)
         || savesDefinition(kind) && (returned.origin !== 'manual' || !HASH.test(returned.revision || '') || returned.status !== 'draft' || returned.approved !== false)) throw new Error('操作结果尚未完整确认，请刷新核对；不会自动重发。');
       if (kind === 'propose' && automaticRepair) automaticRepairId = returned.id;
