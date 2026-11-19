@@ -1,0 +1,40 @@
+// Held-out business contract, frozen before any model evaluation/platform tuning.
+import { buildKit, equal as eq, length as len, variable as v } from './definition-kit.mjs';
+export const procurementHoldout=Object.freeze({id:'procurement-holdout',requirementFile:'procurement-holdout.md',keys:['auth','suppliers','orders','approval','receiving','audit','consistency','ui','retention'],heldOut:true});
+export function procurementHoldoutDefinition({requirements,coverage}){
+  const k=buildKit({...procurementHoldout,name:'留出采购审批与部分收货固定业务预期',requirements,coverage,sessions:['alice','bob','approver','buyer','receiver','receiver2','hybrid']}),{api,login,race,restart,b,browserLogin}=k;
+  api('auth',null,'GET','/api/orders',401);for(const[s,u]of[['alice','alice'],['bob','bob'],['approver','approver'],['buyer','buyer'],['receiver','receiver'],['receiver2','receiver'],['hybrid','hybrid']])login(s,u);
+  api('suppliers','alice','GET','/api/suppliers?q=Supply&page=1&pageSize=2',200,undefined,[eq('$.total',2),eq('$.items[0].id','SUP-A')]);
+  api('orders','alice','POST','/api/orders',400,{reference:'BAD',supplierId:'SUP-A',description:'',lines:[{sku:'PART-A',quantity:0,unitPriceCents:100}]});
+  api('orders','alice','POST','/api/orders',201,{reference:'BENCH-A',supplierId:'SUP-A',description:'initial',lines:[{sku:'PART-A',quantity:2,unitPriceCents:100}]},[eq('$.item.version',1),eq('$.item.totalCents',200)],[['order','$.item.id']]);
+  api('orders','alice','PATCH','/api/orders/${order}',200,{version:1,description:'reviewed',lines:[{sku:'PART-A',quantity:3,unitPriceCents:100}]},[eq('$.item.version',2),eq('$.item.totalCents',300)]);
+  api('auth','bob','GET','/api/orders/${order}',404);
+  api('approval','alice','POST','/api/orders/${order}/approve',403,{version:2});
+  api('approval','alice','POST','/api/orders/${order}/submit',200,{version:2},[eq('$.item.status','pending'),eq('$.item.version',3)]);
+  api('orders','alice','PATCH','/api/orders/${order}',409,{version:3,description:'must-not-save'});
+  api('approval','buyer','POST','/api/orders/${order}/approve',403,{version:3});
+  api('approval','approver','POST','/api/orders/${order}/approve',200,{version:3},[eq('$.item.status','approved'),eq('$.item.version',4)]);
+  api('consistency','approver','POST','/api/orders/${order}/approve',409,{version:3},[eq('$.error.code','stale_version')]);
+  api('receiving','alice','POST','/api/orders/${order}/receipts',403,{version:4,key:'forbidden',sku:'PART-A',quantity:1});
+  api('receiving','receiver','POST','/api/orders/${order}/receipts',409,{version:4,key:'over',sku:'PART-A',quantity:4},[eq('$.error.code','over_receipt')]);
+  api('receiving','receiver','POST','/api/orders/${order}/receipts',201,{version:4,key:'receipt-first',sku:'PART-A',quantity:1},[eq('$.item.status','part_received'),eq('$.item.version',5)]);
+  race(['receiving','consistency'],[['receiver','POST','/api/orders/${order}/receipts',[201,409],{version:5,key:'race-A',sku:'PART-A',quantity:2}],['receiver2','POST','/api/orders/${order}/receipts',[201,409],{version:5,key:'race-B',sku:'PART-A',quantity:2}]],[201,409]);
+  api('receiving','receiver','GET','/api/orders/${order}/receipts',200,undefined,[len('$.items',2)],[['lastReceiptKey','$.items[1].key']]);
+  api('consistency','receiver','POST','/api/orders/${order}/receipts',200,{version:5,key:v('lastReceiptKey'),sku:'PART-A',quantity:2},[eq('$.replayed',true)]);
+  api('receiving','receiver','POST','/api/orders/${order}/receipts',409,{version:6,key:'extra',sku:'PART-A',quantity:1});
+  api('receiving','alice','GET','/api/orders/${order}',200,undefined,[eq('$.item.receivedQuantity',3),eq('$.item.status','received'),eq('$.item.totalCents',300),eq('$.item.version',6)]);
+  api('orders','hybrid','POST','/api/orders',201,{reference:'BENCH-H',supplierId:'SUP-B',description:'self-approval-denied',lines:[{sku:'PART-A',quantity:1,unitPriceCents:100},{sku:'PART-B',quantity:1,unitPriceCents:50}]},[len('$.item.lines',2),eq('$.item.totalCents',150)],[['self','$.item.id']]);
+  api('approval','hybrid','POST','/api/orders/${self}/submit',200,{version:1});api('approval','hybrid','POST','/api/orders/${self}/approve',403,{version:2},[eq('$.error.code','self_approval')]);
+  api('orders','approver','GET','/api/orders?q=BENCH&supplierId=SUP-A&status=received&page=1&pageSize=1',200,undefined,[eq('$.total',1),eq('$.items[0].reference','BENCH-A')]);
+  api('orders','approver','GET','/api/orders?q=BENCH&page=2&pageSize=1',200,undefined,[eq('$.total',2),eq('$.items[0].reference','BENCH-H')]);
+  api('audit','approver','GET','/api/orders/${order}/audit',200,undefined,[len('$.items',6),eq('$.items[2].action','submitted'),eq('$.items[3].actorId','approver'),eq('$.items[5].action','received')]);
+  api('audit','receiver','PATCH','/api/orders/${order}/receipts',405,{});
+  restart('retention');api(['retention','consistency'],'alice','GET','/api/orders/${order}',200,undefined,[eq('$.item.receivedQuantity',3),eq('$.item.status','received'),eq('$.item.description','reviewed')]);
+  api('auth','alice','POST','/api/logout',204,{});api('auth','alice','GET','/api/orders',401);
+  browserLogin('requester','alice');b('ui','requester','goto','/orders?q=WEB');b('suppliers','requester','fill','order-supplier','SUP-A');b('orders','requester','fill','order-reference','WEB-A');b('orders','requester','fill','order-description','<b>public</b>');b('orders','requester','fill','order-sku','PART-A');b('orders','requester','fill','order-quantity','2');b('orders','requester','fill','order-price','100');b('orders','requester','click','order-create');b('orders','requester','count','order-row',1);b('orders','requester','click','order-first-open');b('orders','requester','text','order-description-text','<b>public</b>');b('orders','requester','text','order-total','200');b('approval','requester','click','order-submit');b('approval','requester','text','order-status','pending');b('auth','requester','visible','order-approve',false);
+  b('suppliers','requester','text','order-supplier-id','SUP-A');
+  browserLogin('reviewer','approver');b('approval','reviewer','goto','/orders?q=WEB-A');b('approval','reviewer','click','order-first-open');b('approval','reviewer','click','order-approve');b('approval','reviewer','text','order-status','approved');
+  browserLogin('receiver','receiver');b('receiving','receiver','goto','/orders?q=WEB-A');b('receiving','receiver','click','order-first-open');b('receiving','receiver','fill','receipt-key','WEB-R1');b('receiving','receiver','fill','receipt-quantity','1');b('receiving','receiver','click','receipt-create');b('receiving','receiver','text','order-status','part_received');b('receiving','receiver','text','order-received','1');b('receiving','receiver','fill','receipt-key','WEB-R2');b('receiving','receiver','click','receipt-create');b('receiving','receiver','text','order-status','received');b('audit','receiver','count','receipt-row',2);b('audit','receiver','text','audit-count','5');
+  b('retention','requester','goto','/orders?q=WEB-A');b('retention','requester','click','order-first-open');b('retention','requester','text','order-status','received');b('consistency','requester','text','order-total','200');b('orders','requester','goto','/orders?q=WEB-A&supplierId=SUP-A&status=received');b('orders','requester','count','order-row',1);
+  return k.finish();
+}

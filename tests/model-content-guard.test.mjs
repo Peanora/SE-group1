@@ -103,7 +103,7 @@ test('helper policy hash binds its exact implementation bytes', async () => {
 
 test('Review policy changes with helper implementation hash or helper version', async () => {
   async function policy(version, hash) {
-    const script = `import {mock} from 'node:test';mock.module(${JSON.stringify(new URL('../lib/model-content-guard.mjs', import.meta.url).href)},{namedExports:{guardModelContent:()=>{throw new Error('not called')},modelContentGuardPolicy:{version:${JSON.stringify(version)},hash:${JSON.stringify(hash)}}}});const{projectReviewPolicy}=await import(${JSON.stringify(new URL('../lib/project-review-model.mjs', import.meta.url).href)});process.stdout.write(projectReviewPolicy.hash);`;
+    const script = `import {mock} from 'node:test';mock.module(${JSON.stringify(new URL('../lib/model-content-guard.mjs', import.meta.url).href)},{namedExports:{guardModelContent:()=>{throw new Error('not called')},guardModelRequestContent:()=>{throw new Error('not called')},modelContentGuardPolicy:{version:${JSON.stringify(version)},hash:${JSON.stringify(hash)}}}});const{projectReviewPolicy}=await import(${JSON.stringify(new URL('../lib/project-review-model.mjs', import.meta.url).href)});process.stdout.write(projectReviewPolicy.hash);`;
     return new Promise((resolve, reject) => {
       const child = spawn(process.execPath, ['--experimental-test-module-mocks', '--input-type=module'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
       let output = '', errors = ''; const timer = setTimeout(() => { child.kill(); reject(new Error('trusted policy probe timed out')); }, 10000);

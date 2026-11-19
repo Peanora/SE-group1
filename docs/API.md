@@ -1,5 +1,150 @@
 # 本地原型接口约定
 
+## 现有工程接口请求和响应的人工修订
+
+`POST /api/projects/:projectId/runs/:runId/action`，正文为 `{action:"revise_route_contracts",revision,changes:[{id,request?,response?,roles?}],feedback?}`。每项指定一个已存在的接口及至少一个可修字段。请求和响应说明是最多2000字符的非空文本，角色必须来自当前已确认规格。整个请求至少需要一处实质变化。方法、路径、错误结构、需求归属和可写文件范围由原方案确定。
+
+操作沿用负责人的权限与安全检查点，旧计划版本、重复接口与未知字段均拒绝。成功后生成新计划版本、更新架构文档并重新运行计划审阅，原始工程结果和用量保留。计划须再次确认才能导出或进入开发。`GET /api/health` 的 `engineeringRouteContractRevision` 声明网页是否可编辑请求和响应。旧的角色修订动作仍支持。
+
+## 工程接口允许角色的人工修订（i14已独立定向验收）
+
+`POST /api/projects/:projectId/runs/:runId/action`，正文为`{action:"revise_route_roles",revision,changes:[{id,roles}],feedback?}`。`revision`必须是当前计划版本，`id`是已存在的工程接口ID，`roles`只能选已确认规格中的角色。仅负责人在当前来源、规格已确认且等待计划确认的安全检查点可修改；评审者、观察者、旧来源及执行中请求不得写入。
+
+本操作只修改现有接口的允许角色集合，不增删接口、实体、视图、任务或可写文件。未知字段、未知或重复ID/角色、空修订及只有角色顺序变化均拒绝；校验失败不产生部分更新。成功后生成新计划版本并重做结构审阅，旧计划审批失效，必须再次确认后才能导出或执行。原工程模型结果、用量、预算和规格确认保留，不调用模型。
+
+网页在计划确认区提供角色勾选与修订原因；未保存的权限改动阻止直接确认，失败及刷新保留草稿。`GET /api/health`的`engineeringRoleRevision:{available:true,version:1}`表示服务支持该候选接口；旧服务不显示编辑入口。权限修订仍需人核对业务语义，结构校验不能证明权限设计正确。
+
+## 原生Review v2及失败反馈（i13完整Test，i14接线定向复验）
+
+新原生Review请求显式使用wire v2：模型只返回`summary/issues[{severity,file,line,message}]/resolutions`。严格校验字段与固定候选的路径/行号后，由控制器从该源码行派生evidence，并标记`evidenceOrigin:'controller_fixed_source_line'`；位置仍由模型选择，不等于审查意见必然正确。旧v1回执继续用v1校验，不修补原JSON或追加缺失字段。
+
+仅原生调用已完整停止、正常stop且回执已保存的格式/位置类`invalid_model_response`可在原Review次数、共享调用和原时限内重试同候选；每次独立计调用、usage和原回执。已知HTTP/浏览器失败优先实际编码修复，有效blocking必须在新代码关闭。length、未知终止、凭证、回执及传输等其它异常停止本次后续模型派发，显式另次修复仍保留原失败和账务。恢复时重新解码原回执并核对固定源码与历史问题，不能将有效blocking伪装成格式错误来抹除。
+
+启动失败新增可信诊断枚举与允许的相对源码位置进入编码反馈；不转发任意stderr、异常message/stack、宿主路径或业务私有值。未执行检查保持失败/未执行，不因有位置诊断而变为通过。正式资格仍由同版自检、独立HTTP/Edge和Review共同控制。
+
+## 编码模型控制配置（i11/i12已独立验收）
+
+研发执行在服务创建时冻结受控thinking/JSON选项，首派与恢复Worker均经匿名stdin交接；配置纳入执行contract和作业configRevision。默认值也被冻结，进程环境后续变化不改变已建适配器或旧作业。`LLM_THINKING`接受enabled/disabled/留空，`LLM_JSON_MODE`接受0/1/留空；非法值不派发。密钥及其它环境不进入公开DTO、argv或Worker环境。改变控制选项不能沿旧作业配置恢复，也不重置项目/run的历史调用与尝试预算。
+
+复杂工单真实输出在16384 token时只生成到第24个文件且JSON未结束，原失败与费用保留。i12只将编码单响应上限改为32768，Review仍4096、响应仍512KiB；单文件/总文件/路径门禁及完整正常stop资格不变，任何length响应均不应用文件。该容量调整不增加已冻结的3次attempt、18次调用或600秒时限。i12定向独立检查已通过，真实复杂案例仍以各自实际业务验收结果为准，不能把正常返回代码等同软件通过。
+
+留空时不发送thinking且默认请求JSON。普通编码/Review、首派Worker及安全退休后的下一代使用同一快照。无显式选项的三字段旧配置保留原默认hash语义，不能覆盖显式false或disabled；选项不是HTTP请求可增加的权限字段。非法选项在预留/派发或换代之前拒绝。
+
+## 安全暂停点恢复（W5候选，独立验收前）
+
+`POST /api/projects/:projectId/runs/:runId/development-executions/:executionId/recover`，正文精确为`{}`，负责人权限，返回202。只在当前任务图的`actions.canRecover === true`时使用；普通`resume`继续同一执行进程，`recover`保存安全点、确认旧进程退出后换代继续。状态可能经过`recovery_requested`、`paused_recovery_ready`再到`running`；202不代表已经恢复或软件通过。旧源版本、未知停止或缺少签名证据返回409并保留记录。
+
+恢复不新增开发attempt，不重置额度或绝对截止时间；已完成任务保留历史，不重做，剩余任务仍消耗原预留，最终集成重新验收。执行身份采用追加代次，当前上限8代，不能替换原注册或把JSON历史当原任务通过。此候选已有作者连续3代证据，独立固定版检查尚待完成。
+
+同一`cancel`入口可处理已确认的安全退休点：核实旧进程退出和历史费用后只结算已发生调用，取消剩余工作，不能授权源码交付。发起人撤权和时限到期禁止继续执行，不抹掉历史费用。停止或回执未知仍保留活动槽；该取消分支正在候选验证中。
+
+## 本机业务版本与已有数据演进（2026-11-18，集成验收中）
+
+这组入口仅管理平台持有的本机业务副本，不发布公网。演示预览库不登记为业务数据。`GET /api/health` 的 `localEvolution.available` 为服务能力开关；旧服务不提供时网页不请求新接口。下列身份均从路径取得，正文不得夹带 `projectId`、私有路径、通过标记、进程回执、能力句柄或数据库内容。
+
+项目基础路径 `/api/projects/:pid/local-releases`：
+
+| 方法和后缀 | 精确正文 | 行为 |
+| --- | --- | --- |
+| GET 基础路径 | 无 | 返回 `releases` 和 `capabilities.canActivate`；记录只有身份、提交、数据代次、状态、受控URL及actions |
+| POST `/activate` | `{runId,executionId,expectedReleaseId,expectedDataGeneration}` | 首次显式启用已验收源码，首次expectedReleaseId为null、代次0；已有数据升级由演进控制器提供私有迁移结果，公共请求不能覆盖旧库 |
+| POST `/:id/start` | `{expectedDataGeneration}` | 在共同检查点核对当前pair后启动MXC业务副本 |
+| POST `/:id/stop` | `{}` | 停止并核对源码、进程及数据指纹；unknown保留槽 |
+| POST `/:id/rollback` | `{expectedDataGeneration,reason}` | 仅恢复当前pair的直接前一代码与数据对；新写入、旧备份变动或代次不符拒绝 |
+
+新pair准备文件后，以本机私有SQLite事务更新指针。不是跨文件系统和多个数据库的分布式事务。常规关闭停止业务应用；重开不自动启动。意图或进程未能确认时保留待协调，不按PID猜停。每次回滚创建新pair，不能用A→B→A复活旧数据许可。真实业务数据库、备份、控制密钥及私有路径不进入公共DTO或普通源码包。
+
+演进基础路径 `/api/projects/:pid/runs/:rid/evolutions`（rid为新确认规划）：
+
+| 方法和后缀 | 精确正文 | 行为 |
+| --- | --- | --- |
+| GET 基础路径 | 无 | 返回evolutions、能力和明确支持范围；只读状态，不发模型 |
+| POST 基础路径 | `{releaseId,proposalId,definitionRevision,expectedSourceRevision,expectedSourceGeneration,requestKey,reason}` | 从当前已停止owned业务pair核源码/旧数据，私有快照后生成待确认迁移；同键同内容幂等 |
+| POST `/:id/revise` | `{revision,migration,reason}` | 有界迁移实质修订，新revision使旧确认失效 |
+| POST `/:id/approve` 或 `/reject` | `{revision,feedback}` | 精确迁移确认/驳回，不能替代规格、计划、联合定义确认；驳回后原文不能直接批准 |
+| POST `/:id/start` | `{revision,contractRevision}` | 核对同一预算和当前确认，在真实grant内创建跨版私有seed，再整体修改并独立重验 |
+| POST `/:id/activate` | `{revision}` | 必须新版本完整验收，再从旧快照另迁移新副本，fresh核对后交本机pair切换 |
+
+`migration`只接受固定合同的`none`或`bounded_operations`，支持`addColumn`和`mapValues`，不接SQL或脚本。值映射显式列出所有旧值（包括保留原值的映射），未知旧值拒绝。当前演进走整体项目；多任务scope未适配时在收费前明确拒绝，不静默降级。每个自检、独立HTTP、每个浏览器视口/原子场景从同一冻结旧快照取得新的迁移副本；不是空库代替旧数据或共用测试写入。模型修复反馈不包含观察到的原始旧数据或私有路径。
+
+团队模式：负责人可准备/修订/开发/启用/回滚；评审者可确认或驳回迁移；观察者只读。GET会按当前角色过滤actions和顶层能力，每次写入和异步完成点重新判权并审计。前端在POST后重新GET核对，读取待定或失败时撤下旧业务链接，保留草稿且不自动重发收费动作。这些接口的完整三类业务演进、激活后历史交付及故障恢复仍在验收，不能由单模块通过推断全部完成。
+
+## 研发Worker持久作业（2026-11-18，候选待独立验收）
+
+研发HTTP路径保持不变。默认正常开发使用独立Worker，DTO新增`executionEngine`和`recoverySupported`；私有持久审批、派发意图、原预算/绝对deadline、Worker身份/控制租约、签名原始证据和幂等结算联合约束。正常API关闭仅detach，重开先接回原作业；未确认派发/远端请求/Worker状态时保留活动和预留，不自动新派发。known失败或已确认取消的独立停止签名只授费用结算，不授源码交付；新用途验收封签不伪造原core/graph WeakMap身份。
+
+同版source修复和跨版seed目前明确走进程内路径，不能承诺Worker重启恢复；有效暂停任务检查点后的故障续跑尚未实现。已有源码ZIP重启恢复与在途Worker保活分别记录。作者94/94专项是候选证据，仍需非作者同固定版本检查。
+
+## 可选本地团队模式
+
+`TASKFLOW_TEAM_MODE=1`启动账号门禁；默认关闭，保留单人本地行为。启用后首次在`/team.html`设置负责人，由负责人添加成员。团队共享本地工作区，不提供跨团队/租户隔离或外部发布授权。所有项目API启用后必须登录；负责人可操作，评审者仅可确认/驳回规格、计划及独立测试定义，观察者只读。撤销或改角色使该账号所有既有会话失效；已经合法派发的后台工作保留历史授权，不声称撤权瞬停远端服务。
+
+| 接口 | 请求及权限 |
+| --- | --- |
+| GET `/api/team/session` | `{enabled,setupRequired,user}`；不返回密码/令牌。 |
+| POST `/api/team/setup` | 首次精确`{name,password}`，创建负责人并登录；并发仅一次成功。 |
+| POST `/api/team/login` | 精确`{name,password}`；密码12至128字符，5次失败锁定15分钟；实际发布会话前重查锁及账号版本。 |
+| POST `/api/team/logout` | `{}`，清除当前会话。 |
+| GET/POST `/api/team/members` | 负责人列出成员；创建精确`{name,password,role}`，role为owner/reviewer/observer，最多64个账号。 |
+| PATCH `/api/team/members/:id` | 负责人精确`{role,active}`；至少保留一位有效负责人；修改即撤销该成员全部会话。 |
+| GET `/api/team/audit?after=游标` | 负责人/评审者读取最多200项及后续cursor。 |
+
+Cookie为8小时HttpOnly/SameSite=Strict的随机会话，数据库仅保存令牌哈希及随机盐密码哈希。受本机Host/端口/来源边界保护；body完整读取后再次核对账号，不能靠慢上传延后已撤销权限。操作响应由服务生成`X-Request-Id`，审计尝试、内部账号事件及结果关联该编号，不记录请求正文、查询字符串、密码或Cookie。`health.teamAccess.enabled`用于旧界面兼容；未登录时前端转登录页，失效时清空私有成员视图并将焦点放回账号输入。
+
+## 按当前规划研发（planned-web-v1）
+
+执行能力中的 `budget.unlimited` 为 `true`，`maxAttempts`、`remainingAttempts`、`totalModelCalls`、`remainingModelCalls` 在累计额度位置返回 `null`。单轮预算及每条执行的实际 `totalModelCalls` 继续按原字段记录。保留旧 SQLite 账本的记录和已有预留。开始新执行前仍需取得当前确认、项目检查点及正常停止证据。
+
+`failureHelp` 可包含 `title`、`detail`、`nextStep` 与固定 `action`。`POST /:id/revise-checklist` 只接受空对象。当前负责人可以用最新同计划、已停止且已诊断出登录步骤缺失的失败执行准备新计划修订。回复 `{run}`。旧检查记录绑定旧版本，新的方案及验收清单仍需确认。已识别的旧清单不能触发重复付费开发。
+
+执行读取的 `workflow` 提供引导页使用的阶段摘要，包含 `stage`、`testing`、`selfCheck`、`reviewPending`、`reworkCount`、`cause` 与 `errorCode`。自动返工在同一执行内记录 `automatic_rework` 事件及下轮编号。独立接口测试与浏览器测试在同一固定版本并发运行，两项通过后才请求该版本的独立 Review。测试失败或有效阻塞意见在原预算内触发新代码版本及完整复验。仅格式或位置不合法的已保存 Review 可以在同一版本重审。导出仍由同版本验收证据和封签决定。
+
+已完整停止并保存回执的编码建议在原 JSON 格式错误时，可在原调用额度内改用带明确文件边界的文本格式。报告为本轮编码记录 `codeWireVersion: 2`。执行、回执核对与历史源码复核使用同一解码规则，逐字回执和精确可写路径校验继续适用。
+
+本地执行边界与固定参考相同：Host/Origin/端口必须匹配当前本地服务，不接受外部模型端点、目录、源码、命令或客户端通过结论。项目/运行归属先核对。固定参考、测试提案、规划及真实研发共同阻止活动期间需求发布或删除；保存变更草稿仍可用。
+
+基础路径`/api/projects/:projectId/runs/:runId/development-executions`：
+
+| 方法/后缀 | 请求 | 行为 |
+| --- | --- | --- |
+| GET基础路径 | 无 | `capabilities`含冻结模型/规则的`contractRevision`、每角色3次、600秒、3尝试/18模型调用共享预算，及`executions`真实状态。 |
+| POST `/start` | 精确`{proposalId,revision,contractRevision}` | 当前联合HTTP+浏览器定义已认可才202创建新记录。SQLite先预留预算，再进入共同检查点/冻结定义并启动编码；不自动开始。 |
+| POST `/:id/cancel` | `{}` | 请求停止；本地结束不证明远端终止。未知保持活动及预算预留。 |
+| POST `/:id/pause` | `{}` | 仅当前控制器持有的真实任务图：暂停新批次派发，返回`pause_requested`；在途结果保存后才`paused`。旧执行器/整体编码不支持则409。 |
+| POST `/:id/resume` | `{}` | 仅当前任务图`pause_requested/paused`，继续同版本就绪任务；不直接把失败检查标为通过。 |
+| POST `/:id/repair` | `{contractRevision}`，可加 `repairNote` | 仅服务自有、当前规划且正常停止候选；用私有DB定位报告，核对Git、回执和历史阻塞，在新工作区创建新执行。修复说明为1至2000字符，校验失败在预留预算前返回400。说明作为诊断资料随编码请求发送，并保存于新执行的私有记录。原代码范围、验收定义和独立Review依据由已确认版本决定。 |
+| GET `/:id/download` | 无 | 当前版本全部验收、阻塞关闭且可信原始结论仍有效才返回源码ZIP；存储JSON或POST通过声明不能授权。 |
+
+`actions.canRepair/canCancel/canDownload`只表示当前后端能力。前端收费动作还需本次预算勾选；POST后通过GET核对新id及定义版本，不能先显示通过。JSON DTO不包含工作区、回执路径、配置凭据或数据库。
+
+同版本交付恢复（当前实现仍在独立验收）：真实原始对象完整通过后，accepted行、私有HMAC封存及本次预算结算在同一SQLite事务保存。重启后的GET列表/下载可以在共同检查点惰性核对当前审批、代码/Git/原始回执/全部策略，再发行仅用于历史交付的私有许可；原任务品牌不重造、不新增模型调用或扣减预算。DTO `checkpoint:{sealed,restored,message}`区分；网页标明恢复历史资格，没有刚重跑测试。校核期间状态`restoring_delivery`持久占用项目槽，未知停止保留待协调；本会话失败不随轮询无变化重复Git。并发下载遇正在恢复可409，待列表核对后再试。
+
+普通旧JSON、无封存历史、签名/完整行归属变化、当前来源/策略或代码不一致、私有凭据不可用均不授权下载，也不事后补签旧记录。密钥在执行私有根目录、候选工作区外，不进API/模型/源码包；丢失时不自动重新生成并追认旧记录。可信主机/程序/私有数据库属于基础边界，不承诺防同账户管理员同时复制密钥与整库、整套私有备份回滚。当前只恢复已结束的同版本交付，外部Worker续跑仍待实现。
+
+无逐任务分组的定义继续整体按确认计划编码。开发任务图的模拟状态保持原义，不因真实路径新增而改造历史模拟结论。独立HTTP/浏览器定义的结构覆盖不证明业务充分。CLI `planned:verify`仅重新诊断包内定义，不认可历史Review或提供当前完成资格。
+
+### 真实任务图候选（集成验收中）
+
+联合提案可附`taskScopes:[{taskId,httpStepIds,browserStepIds}]`。必须精确匹配全部当前确认任务，各任务有明确非空writePaths，直接选择的HTTP请求与浏览器断言分别覆盖自己的REQ；HTTP依赖及浏览器同会话前序保留。完整任务集合及分组均参与父审批哈希，编码后不可变；可信派生绑定父清单、taskId和taskDefinitionHash。部分清单不能交付或封存整项目。确认定义仍不等于执行测试。
+
+当前支持2至8项、单一基础任务及依赖全部前项的唯一末项，最多2个独立任务并行，各自Git克隆/认领/租约/原始回执。全部同批门禁和来源核对后，可信控制器实际Git合并，才事务完成并释放下游；末项重新运行完整父清单及Review。一个私有任务库只有一个控制器写入；批量完成是无await的连续事务，不声明跨外部Worker的批量原子提交。在途Worker重启续跑及完整代码/数据需求变更另行验收。
+
+存在分组的批准定义时，GET预算新增`taskLimit/maxConcurrency/attemptModelCalls`，每任务最多3编码+3Review、整个图最多20分钟；初次冻结按当前可用定义的最大任务数预留（最多48调用），3次图尝试共享总调用上限。已有预算不自动扩大，选择超范围定义拒绝；`supportedProposalIds`指出可启动项。全图所有已发送模型调用计入用量，包括同批其它任务失败后的已用/未知，不能只结算最终任务。未派发确认0，已派发无完整回执保持未知。
+
+执行DTO保持`kind:planned_web`，新增`executionMode:task_dag`及真实`tasks`、`maxConcurrentTasks`、`actions.canPause/canResume`。任务详情提供依赖、尝试/基础/候选提交、阶段、差异、独立检查及用量，不含私有目录/租约令牌/回执正文。客户端只依据GET核对状态。最终已验收包额外包含经封存绑定的`delivery/task-execution.json`和全任务用量；归档重检始终不认可历史完成。任务图封签覆盖整个执行记录及最终原始结论，恢复仅发行最终历史交付许可，不将解析JSON重新授予任务品牌。
+
+当前返工候选增加每任务只读 `history`（旧尝试/候选、检查、调用和未知用量），源码包的任务历史同样保留旧失败，不覆盖计费。完整集成的可信原始检查发现唯一上游负责者的阻塞时，最多一次退回该任务及其依赖下游；所有 open blocking 必须属于该负责者，多个或混合负责者保留完整意见并停止，不扩大文件权限。当前图、每逻辑任务的累计编码/Review次数和绝对截止时间不重置，新的预留只允许收紧到剩余额度。该行为不新增客户端指定 owner/path/issue/passed 的接口。以本轮固定组合独立验收为准，不能用接口说明代替通过证据。
+
+`costEstimate` 用 `known:false,amount:null,currency:null` 明示没有模型单价时金额未知；实际 `totalModelCalls` 与 token 用量另行显示。未知 token 保留 null，不补零。任务 `error/errorCode` 为安全提示，网页以文本显示。
+
+## 工作区展示与通知
+
+四个前端工作面复用原规划、任务、需求变更和执行接口，不新增后端端点或可信成功状态。工作面、document-v1整页滚动位置和未保存输入只在当前标签会话保存，不授予审批或执行权限；旧面板相对滚动坐标不复用，原草稿不迁移或删除。
+
+需求变更面板可选`onReady({projectId})`布局回调，仅在当前项目、当前有效读取完成最终渲染后触发。工作区据此恢复整页阅读位置，避免初始化提示移除带偏坐标；迟到读取不触发，回调不改变需求状态或后端权限。
+
+执行及模拟前端模块可选`onFailure({id,message,context:{projectId,runId}})`，仅从当前有效响应的真实失败状态派生、按记录与尝试去重。回调异常不改变后端状态；迟到响应与ABA切换仍须被各模块拒绝。模拟`onActionSuccess`仅表示操作请求被接受，不代表任务完成或验收。统一通知按项目/运行归属清理，定位按钮只改变工作面和阅读位置，不启动模型或执行恢复动作。
+
 ## 问答确认来源
 
 控制器从已保存clarificationHistory派生C-轮次-问题序号来源。明确“都要/全部需要”等全选回答只授权对应列举选项；单一、无备选项的明确肯定可授权对应事项。否定不授权问题引用；含糊/多问句确认标记unresolved，并在规格中保留需进一步回答的问题。来源同时保留原问题、原回答、decision及quotes，不授予执行或审批权限。
@@ -98,7 +243,7 @@ sourceSnapshot为本次运行不可变原文，导出requirements.md也使用该
 
 ## 接口
 
-- GET `/api/health` → `{ok:true, model:{configured:boolean,model:string}, modelPlanning:{engineeringMaxCalls:null,engineeringCallLimit:false,engineeringTimeoutMs,engineeringTotalTimeoutMs}, supportedFormats:['.md','.txt','.docx']}`。工程规划不设调用次数上限，由单次时长和运行总时长约束；预算来自当前编排器，不包含凭据。
+- GET `/api/health` 返回模型名称、配置状态、支持格式与 `modelPlanning`。规格和工程默认 `MaxCalls:null`、对应 `CallLimit:false`，并提供单次时限及工程每轮时限。
 - GET `/api/projects` → `{projects:[{id,name,createdAt,updatedAt,filename,lastRunStatus,runCount}]}`
 - POST `/api/projects`，JSON `{name?,filename,content? ,fileBase64?}` → 201 `{project}`。文本使用 content，DOCX 使用 fileBase64。
 - GET `/api/projects/:pid` → `{project}`
@@ -129,11 +274,11 @@ approvals为`{spec:null|{revision,at,feedback},plan:null|{revision,specRevision,
 
 新版model运行在规格确认后，由architecture/tasks共享一次工程模型请求，生成经校验的实体、角色/接口、页面选择器和任务。DevTask增加writePaths/inputs/outputs，suggestedFiles与writePaths保持一致；计划版本另外绑定完整engineeringPlan，人工改任务同步更新草案/hash及架构。原接口、实体、页面及全图可写文件集合不能通过任务编辑改变；规格回修后重新规划。local/v1仍使用旧规则，无engineeringPlan时旧计划hash公式保持不变。
 
-工程适配器不设调用次数上限；单次最多60秒，每运行总时长最多10分钟。自动修正只在首次或连续结构失败时继续，遇到传输/配置/凭据/取消等非结构错误立即停止，遇到完全相同的校验说明视为无进展停止；总时长用尽或页面停止也停止。失败不静默回退规则。engineeringCalls记录实际预留尝试，不等于已证实收费请求数；因为无次数上限，页面不再显示“剩余次数”，改显示总时长预算。engineeringHistory只公开版本、状态、模型/用量、结束枚举、错误码/控制器校验说明及回执摘要；原四字段回执仅保存在data/.private，不能进入导出包。用量未知为null；回执IO超时/取消后未确认标unconfirmed，迟到结果不能发布。最终保存失败撤回草案及成功状态，公开固定persistence_failed，不传播底层路径/异常。工程草案仍为structural_only、待开发且须计划确认，不授予执行权限。
+工程规划默认不限调用次数，单次最多60秒，每轮自动修正最多10分钟。显式配置1–20时仍按有限预算执行；不限次数模式下手动重试或确认新规格开始新一轮工程时限。遇到传输、配置、凭据或取消等非结构错误，或连续出现相同校验说明时结束自动修正。`engineeringCalls` 记录预留尝试，`engineeringHistory` 公开状态、模型、用量、校验说明及回执摘要。私有回执保存在 `data/.private`。未知用量为 `null`，未确认停止的请求保留待核对状态。工程草案仍须计划确认。
 
 模型常把路由参数写成OpenAPI风格的`{recordId}`、把纯文本选择器角色写成`text`；控制器在校验前把前者规范化为`:recordId`，把`text/image/textarea/select/dropdown/anchor/listbox`等常见别名映射到有效ARIA角色，并把规范化结果写回草案参与hash和文档渲染。路径仍必须是应用内相对路径，空段、点段、编码、重复参数和不安全字符继续拒绝。
 
-模型草案未通过`invalid_model_response`（JSON不合法或结构校验失败）时，控制器自动带**控制器自己的校验说明**继续请求；该说明包含具体路由/页面/任务/文件位置，例如“共享文件src/app.mjs的任务A与任务B必须处于同一串行依赖链”或“页面VIEW的选择器X角色无效”。自动修正**不设调用次数上限**，每次消耗一次engineeringCalls和私有回执，直到通过、遇到非结构错误、总时长用尽、页面停止，或同一校验说明连续出现（无进展）才进入失败停点。反馈只含固定校验文本，不含整个模型正文或私有路径。
+模型草案未通过 `invalid_model_response` 时，控制器带上具体路由、页面、任务或文件的校验说明自动修正。每次尝试保存 `engineeringCalls` 和可核对的回执。自动修正沿用本轮时限；达到有限配置次数、发生非结构错误、遇到相同说明或页面停止时进入失败停点。
 
 失败的architecture/tasks GET可附加`engineeringFailure`：固定code/attemptId、remaining、canRetry、canRevalidate、canUseLocal、message、可选detail及nextStep。`{action:"revalidate_engineering"}`仅用于新版model运行、规格已确认且architecture/tasks失败、无其他活动阶段/运行/规格请求；服务器按attempt从新到旧读取同当前specRevision/sourceRevision的私有工程回执，核对普通文件、字节数和SHA256，解析并重新执行当前结构校验。任一保存草案通过后发布其规范化engineeringPlan；只追加engineeringRevalidations（attemptId、hash、policyHash、时间），不改写原失败、用量或engineeringCalls，不调用模型。新草案不能引入规格外实体/接口/页面/可写文件；不授予计划确认或执行许可。若所有保存草案仍不符合规则，409返回当前校验说明；JSON、回执、运行版本或活动状态不匹配均拒绝。公开接口不返回私有回执正文、路径或异常。
 
@@ -161,11 +306,19 @@ approvals为`{spec:null|{revision,at,feedback},plan:null|{revision,specRevision,
 
 ### 规格模型预算与回执
 
-`GET /api/health`的modelPlanning增加specificationMaxCalls和specificationTimeoutMs，默认新运行最多3次规格尝试、每次90秒；工程设计不设调用次数上限，披露单次/总时长和`engineeringCallLimit:false`。只由可信服务构造选项配置，客户端运行请求不能扩大。网页模型模式启动前显示预算；旧服务缺少字段时拒绝启动新模型运行，保留本地规则模式。
+`GET /api/health` 的 `modelPlanning` 含 `specificationMaxCalls`、`specificationCallLimit`、`specificationTimeoutMs` 与对应工程策略。不限次数用 `null` 表示，规格单次默认90秒。可信服务构造选项可显式设置有限策略，网页根据健康响应显示调用策略。
 
-首次新model规格调用冻结Run.specificationBudget，specificationCalls按预留尝试计数，失败不退回；重启后的有效上限取原冻结预算与当前控制器限制的较小值。specificationHistory保存attempt/sourceRevision/status/times/model/usage/finishReason/code、receiptState/requestState和receipt的id/sha256/bytes；未知token为null，不能当0。旧已存记录不伪造回执、用量或预算。尝试次数并不等于已证实的收费API请求次数。
+旧运行启动后按当前不限次数策略继续，历史调用、回执及用量保留。显式有限策略与已保存有限预算同时存在时取较小值。规格尝试继续按预留计数；`specificationHistory` 保存版本、状态、时间、结束原因和回执摘要。未知 token 为 `null`。
 
-规格适配器取得受控signal/timeoutMs/onReceipt。正常stop、私有回执持久化、与返回规格按现有解析规则等价、当前source/run和最后保存都确认后才能发布规格；保存失败恢复原规格与文档，不发布审批。回执原文仅在data/.private/specification-receipts，JSON/API中只有元数据，导出plan.json不携带这些调用历史或私有路径。失败回执也可保留已知用量，安全回执缺失时保持未知。
+### 查看问题与自然语言回答
+
+当前模型运行的澄清停点、规划失败或确定的审阅输入错误可在 `GET` 运行响应中提供 `planningIssue`。其中 `id` 绑定当前问题、规格、计划和输入版本。`qa` 为当前轮的 `{id, question}` 数组，需补答的原题包含 `previousAnswer`。`answers` 为已存逐题草稿。引用失败且能验证同一尝试的回执时，`draftRequirement` 仅返回出错条目的 `index`、`title`、`description`、`sourceQuote`，均标为未确认草案。
+
+- `{action:"explain_planning_issue",issueId,automatic:true}` 在 `autoExplain:true` 时调用配置的模型，返回简洁解释和最多二十个问题。已有规格问题或说明时直接复用。用量和私有回执记录在 `planningIssueHistory` 中，在途或未核对的请求会暂停后续派发。省略 `automatic` 可重试已结束的生成失败。
+- `{action:"answer_planning_issue",issueId,answers:{"Q-001":"答复"},continue:false}` 保存逐题草稿，每题最多4000字符。`continue:true` 保存完整一轮并重新整理同一运行，清除失效审批。下一轮仅保留这轮仍待明确的原题。重复提交仍含糊的补答会返回400并保留输入，且不请求模型。旧客户端仍可通过 `answer` 提交单文本回答。
+- `canRebuild:true` 的旧运行可用 `answers:{},continue:true` 重新整理，无需填写已过时的问题。引用失败用现有 `retry` 动作重跑规格。原输入和历轮答复保留，重整后仍须人工确认规格。
+
+规格适配器取得受控signal/timeoutMs/onReceipt。正常stop、私有回执持久化、与返回规格按现有解析规则等价、当前source/run和最后保存都确认后才能发布规格；保存失败恢复原规格与文档，不发布审批。完整回执仅保存在私有目录，API 的失败诊断最多提供当前出错条目的有限摘录。导出plan.json不携带调用历史或私有路径。失败回执也可保留已知用量，安全回执缺失时保持未知。
 
 本地适配器Promise结束不表示远端模型服务已确认停止。不合作provider或回执写入被标记unconfirmed，超时/关闭可有界结束阶段；同控制器真实在途任务settle前，项目检查点、新建和重试均拒绝。重启保留中断及未知历史，不自动重跑或声称远端已停。这不代表跨阶段共享费用预算或可靠外部Worker恢复。
 
@@ -190,9 +343,13 @@ Change含`id/projectId/status/baseRevision/generation/sourceRevision/source/reas
 
 网页“新增功能”表单将名称、说明和验收条件追加到本地需求草稿，复用上述创建变更与应用接口，不新增直接执行模型的端点。步骤、应用和“重新规划”入口绑定本次所选变更与完整草稿，未保存功能及其他历史记录不能替代本次确认。后端确认当前版本后，用户点击“重新规划”才通过已有创建run接口启动；前端再次核对项目、sourceRevision与generation，规划仍执行原预算和双确认。任务图编辑同样沿用`revise_plan`，本地差异预览不授予保存或执行权限。
 
+`revise_plan` 同时接受当前 `awaiting_review` 计划和已确认的 `succeeded` 计划。后者保存前检查开发、验收定义、预览和在途状态，冲突返回409。保存成功后将原计划与审批存为历史，作废当前计划确认，重新执行覆盖与依赖检查。旧验收定义和执行结果仍绑定原计划，新计划另行确认。
+
 创建run可选提交`expectedSourceRevision`（64位小写十六进制）和`expectedSourceGeneration`（非负安全整数），必须成对提供，缺失或非法返回400。控制器在项目准入互斥的同步区内比较当前需求双版本；任一不符返回409，尚未创建运行、保存或调用模型。同正文hash但generation已改变也拒绝。网页创建和重新规划均附带用户所见双版本，消除按钮核对与请求处理之间的发布竞争；旧API调用不传两字段时维持原兼容行为。
 
 ### 独立编码试验的内部接口
+
+规划驱动执行的可信内部task资料包含`requirements:[{id,text}]`，text由当前确认规格的标题、正文和完整验收组合，与版本、任务和工程契约共同传给整体、逐任务及持久Worker编码与Review。该字段来自服务核对的持久规划，不接受客户端替换或扩大权限。历史异常finish只作为完整响应、确认停止、原始回执/用量及版本可核对的历史账；实际应用版本coding和当前候选Review仍必须stop。未知远端状态、缺失或不一致回执不因此获得交付资格。
 
 本轮不新增 HTTP 路由，规划 Run、DevTask 和现有成功状态含义保持不变。命令入口为 `npm run execution:check -- --fixture|--model`。
 
@@ -257,3 +414,41 @@ repair用于当前失败候选具有有效、完整、同代码版本的阻塞Re
 服务持久化在独立SQLite中，原规划JSON不迁移。owner与活动槽事务控制同run拒重；每次状态控制递增版本，异步结束重新核对，取消或待协调不能被迟到成功覆盖。`source_history`和`preview_history`私有保留正常及未知停止证据。旧双活存档迁移保留多个待协调历史而不撞唯一索引；未知进程不自动当作已停止，阻止新的活动。该单控制器生命周期不等于多Worker租约/可靠恢复，正式TaskStore及通用验收模型尚未接入此链路。
 
 可信程序可`createApp({executionService?,executionRootDir?})`注入服务；`executionService:null`明确关闭网页执行。`startServer({loadEnv:false})`允许测试/嵌入宿主跳过本地.env读取，默认仍加载配置。这些选项不通过HTTP暴露。
+
+### 独立HTTP测试提案（定义阶段）
+
+基础路径为`/api/projects/:pid/runs/:rid/verification-plans`，采用与网页代码执行相同的回环Host/端口、实际连接及同源边界。身份只取URL；请求不能指定执行目录、通过结论、审批对象或模型回执。
+
+`GET /:proposalId/repair-draft` 对普通结束、回执完整的失败模型提案返回 `diagnostic`，包含校验说明和缺少接口覆盖的需求编号、标题。`?edit=1` 对当前计划的负责人另外返回可编辑的解析后清单。服务端验证归属、文件类型、长度与哈希。`POST /:proposalId/repair-draft` 接受 `{contractRevision,proposal,feedback}`，在当前计划检查点内校验联合清单并保存为新的待审阅人工记录。原失败记录保留，修订与另存均不发模型请求，后续仍须单独认可。
+
+可确定修复还覆盖仅关联已确认入口页 `/`、已有该页新浏览器会话中的有效断言、且未关联业务 API 的漏标需求。修复补入同源入口访问检查，保留浏览器断言及现有步骤和预期。引导页只对自身刚发起且当前仍可修改的提案自动保存待审阅草案。
+
+对于现有草案中可判定的列表条目与总数定位冲突，`repair-draft` 也提供恢复。拆开检查位置之后保存新的待审阅记录。冲突尚未修复时批准返回 409，已经冻结的历史版不变。两种诊断均可在保留数据与原断言的情况下检查补出的步骤。
+
+当前计划的失败草案可自动修复时，`diagnostic.suggestedRepair` 给出修复说明。负责人可向同一 `POST` 仅提交 `{contractRevision}`，由服务器从核验过的原回执补齐可确定的前置依赖，必要时移除无效的可选逐任务分组。原接口步骤、浏览器步骤和各项预期保持。同绑定同内容的待审阅清单可以复用。修复结果必须通过既有联合校验才会保存。
+
+`GET /api/health`增加`verificationPlanning:{available,phase:'definition_only'}`能力声明。前端仅在明确可用时挂载及读取提案；旧后端缺少声明或内部禁用时保留其余工作区，不向不存在接口轮询。
+
+| 方法与后缀 | 精确JSON正文 | 返回 |
+| --- | --- | --- |
+| GET基础路径 | 无 | 200，`{coverage, capabilities, proposals}` |
+| POST `/propose` | `{contractRevision}` | 202，`{proposal}`；预算内生成一次新提案 |
+| POST `/import` | `{contractRevision,proposal,feedback}` | 201，人工定义草稿；0模型请求，仍须单独认可 |
+| POST `/:id/revise` | `{revision, proposal, feedback}` | 200，实际内容修订后的定义 |
+| POST `/:id/approve` | `{revision, feedback}` | 200，只认可当前测试定义 |
+| POST `/:id/reject` | `{revision, feedback}` | 200，保留被驳回版本及依据 |
+| POST `/:id/cancel` | `{}` | 200，请求停止，不代表远端已确认停止 |
+
+`capabilities`含`canPropose/contractRevision/model/reason/budget`，预算为`maxAttempts/remainingAttempts/timeoutMs`；默认每run最多3次、每次60秒。未配置模型、未完成当前双确认、工程草案不一致、预算耗尽或项目在途均禁止新提案。未知用量为null。HTTP不接受预算、配置或依赖注入。
+
+新增`canImportDefinition/manualBudget/manualReason`；人工定义每run最多20份，保存不调用模型，不占用或退还模型预算。`origin:'manual'|'model'`区分来源，旧存档迁移默认为model；`attempt`是统一记录序号，模型预算仅计origin=model。人工定义model/finishReason/receipt为null，usage为明确的0/0、dispatched=false、receiptState=not_applicable；原失败模型记录与费用不改。导入须当前双确认和有效工程，通过同一DSL/覆盖校验、凭据检查、项目检查点及冻结门禁；未知请求仍阻断。人工导入不是已运行或已通过，不能绕过已驳回内容的认可限制；编码后定义不可替换。未配置测试模型仍可导入已有定义，但不授予编码配置或执行许可。
+
+提案绑定project/run、sourceRevision/sourceGeneration、specRevision/planRevision、engineeringHash/contextHash/policyHash。模型仅接收确认规格、任务和工程接口投影，不接收候选代码及测试结论。服务校验HTTP DSL结构、需求覆盖和依赖；`coverage:'structural_only'`不证明断言业务充分。
+
+记录含`id/status/revision/manifestHash/policyHash/binding/proposal/approval/history/current/approved/executed/actions`，另含尝试、模型、用量、回执状态及净化错误。认可为`approval.phase:'definition_only'`，始终`executed:false`；不编译DSL、不启动编码、不调用验收器，也不产生软件passed。驳回后必须改变定义，重新生成相同被驳回定义也不能绕过。修订、来源/规格/计划/规则变化会撤销当前许可；旧记录保留且动作关闭。
+
+定义与私有回执分别存于`data/verification-planning/verification.sqlite`及`receipts/`。记录的回执字段仅提供hash/字节数，原始模型回包和路径保留在服务端；规划JSON、文档和ZIP不嵌入提案或私有回执。恢复时活动或未知请求保留`reconciliation_required`，不推断远端结束。请求已派发且未收到完整回执时，取消/超时即使使本地HTTP Promise结束，也保留待协调活动槽；未派发的取消可以确认。当前没有自动核对远端或强行清除未知状态的接口。规划、代码执行、测试提案检查点共同保护需求发布；模拟活动沿用规划检查点拦截。项目删除也须通过提案检查点。保存待应用需求不受在途提案阻止。
+
+`GET /api/health`新增`verificationPlanning:{available,phase:'definition_only'}`。前端只在服务明确声明支持后挂载并轮询提案；声明缺失或禁用时保留其他工作区，显示当前未开放，而不请求旧后端没有的接口。
+
+可信内部可使用`createApp({verificationPlanningService?,verificationPlanningRootDir?})`注入；null禁用提案接口。不能确认提案检查点时禁止需求发布或项目删除，不降级绕过。服务初始化失败与close均关闭已创建的相关控制器；这些选项不通过HTTP暴露。

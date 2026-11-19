@@ -67,11 +67,12 @@ function previewURL(preview) {
 }
 
 /** Backend facts control every action; model and log strings are always text nodes. */
-export function createExecutionPanel({ api, getContext, onError = () => {} }) {
+export function createExecutionPanel({ api, getContext, onError = () => {}, onFailure = () => {} }) {
   if (typeof api !== 'function' || typeof getContext !== 'function') throw new TypeError('执行面板需要api和getContext。');
   let root, refs, mounted = false, destroyed = false, timer, request = 0, context = {}, key = '';
   let data = null, loadState = 'idle', error = '', activeAction = null, selectedId = '', preview = null, profileSignature = '';
   let inFlight = null, inFlightKey = '', inFlightSerial = 0, contentId = '', versionNodes = new Map(), eventNodes = new Map();
+  const failureNotices = new Set();
 
   function node(tag, className, content) {
     const element = document.createElement(tag);
@@ -101,10 +102,24 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
     const next = getContext() || {}, nextKey = snapshotKey(next);
     if (key === nextKey) return false;
     context = { ...next }; key = nextKey; request++; activeAction = null; data = null; loadState = 'idle'; error = ''; selectedId = ''; preview = null;
+    failureNotices.clear();
     profileSignature = ''; if (refs) refs.consent.checked = false;
     return true;
   }
   function isCurrent(savedKey) { return !destroyed && key === savedKey && snapshotKey(getContext() || {}) === savedKey; }
+  function notifyFailure() {
+    if (loadState !== 'ready' || !isCurrent(key)) return;
+    const execution = currentExecution();
+    if (!execution?.id || execution.status !== 'failed') return;
+    const raw = execution.error;
+    const message = raw == null || typeof raw === 'string' && !raw.trim() ? '代码执行未完成，请查看独立检查与恢复操作' : text(raw);
+    const signature = JSON.stringify([key, execution.id, execution.status, message]);
+    if (failureNotices.has(signature)) return;
+    failureNotices.add(signature);
+    try {
+      Promise.resolve(onFailure({ id: execution.id, message, context: { projectId: context.projectId, runId: context.runId } })).catch(() => {});
+    } catch { /* A host notification cannot change trusted execution facts. */ }
+  }
   function schedule() {
     clearTimeout(timer);
     if (mounted && !destroyed && context.projectId && context.runId && loadState !== 'unavailable') timer = setTimeout(() => { void refresh(); }, 3000);
@@ -149,7 +164,7 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
       result, state, failure, identity, calls, usage, executionBudget, cancel, retry, recheck, repair, recheckNotice, repairNotice, showPreview, stopPreview, previewLink, download, previewNotice, versions, diffText, eventList, noEvents };
     profiles.addEventListener('change', () => { consent.checked = false; render(); });
     consent.addEventListener('change', render);
-    executions.addEventListener('change', () => { selectedId = executions.value; consent.checked = false; preview = null; render(); });
+    executions.addEventListener('change', () => { selectedId = executions.value; consent.checked = false; preview = null; render(); notifyFailure(); });
     element.append(root);
   }
 
@@ -310,7 +325,7 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
         loadState = Number(cause?.status ?? cause?.statusCode) === 404 ? 'unavailable' : 'error';
         if (loadState === 'unavailable') error = ''; else setError(cause);
       } finally {
-        if (isCurrent(savedKey) && serial === request) { render(); schedule(); }
+        if (isCurrent(savedKey) && serial === request) { render(); notifyFailure(); schedule(); }
       }
     })();
     inFlight = pending; inFlightKey = savedKey; inFlightSerial = serial;
@@ -348,7 +363,7 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
     finally {
       if (activeAction === token) {
         activeAction = null;
-        if (isCurrent(savedKey)) { render(); schedule(); } else if (!destroyed) { syncContext(); render(); void refresh(); }
+        if (isCurrent(savedKey)) { render(); notifyFailure(); schedule(); } else if (!destroyed) { syncContext(); render(); void refresh(); }
       }
     }
   }
@@ -359,6 +374,6 @@ export function createExecutionPanel({ api, getContext, onError = () => {} }) {
       mounted = true; build(element); syncContext(); render(); return refresh();
     },
     refresh,
-    destroy() { destroyed = true; mounted = false; request++; activeAction = null; clearTimeout(timer); root?.remove(); refs = null; },
+    destroy() { destroyed = true; mounted = false; request++; activeAction = null; failureNotices.clear(); clearTimeout(timer); root?.remove(); refs = null; },
   };
 }

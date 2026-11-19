@@ -24,6 +24,20 @@ function proposal() { return { version: 1, title: '工单工程设计', summary:
 function draft(raw = proposal(), original = spec()) { return validateEngineeringPlan({ proposal: raw, spec: original, binding: bindingFor(original) }); }
 function rejects(mutate, pattern) { const value = proposal(); mutate(value); assert.throws(() => draft(value), pattern ?? { code: 'invalid_engineering_plan' }); }
 
+test('schema feedback locates missing and unknown fields without echoing untrusted field names', () => {
+  rejects(raw => { raw.reviewNotes = 'extra'; }, /工程草案包含1个未知字段；仅允许：version/u);
+  rejects(raw => { delete raw.entities[1].fields[0].required; }, /实体 ISSUE 的第1个字段缺少必要字段：required/u);
+  rejects(raw => { delete raw.tasks[1].outputs; }, /任务 BACKEND缺少必要字段：outputs/u);
+  const raw = proposal(); raw.routes[0]['private-field-do-not-echo'] = true;
+  assert.throws(() => draft(raw), error => error.code === 'invalid_engineering_plan'
+    && error.message.startsWith('接口 CREATE包含1个未知字段；仅允许：') && !error.message.includes('private-field-do-not-echo'));
+});
+
+test('duplicate selector feedback identifies the registered page and selector while preserving rejection', () => {
+  const raw = proposal(); raw.views.push({ ...structuredClone(raw.views[0]), id: 'SECOND', path: '/second' });
+  assert.throws(() => draft(raw), /页面 SECOND 的第1个选择器的testId issue-title 重复/u);
+});
+
 test('confirmed content, original requirements and Chinese role definitions remain immutable data with a canonical draft hash', () => {
   const original = spec(), raw = proposal(), result = draft(raw, original), { hash, ...body } = result;
   assert.equal(hash, contentRevision(body)); assert.equal(result.specHash, contentRevision(original)); assert.deepEqual(result.binding, bindingFor(original));

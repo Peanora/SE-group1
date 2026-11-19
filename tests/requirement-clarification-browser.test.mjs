@@ -7,6 +7,10 @@ import { chromium } from 'playwright-core';
 import { createApp } from '../server.mjs';
 import * as planner from '../lib/planner.mjs';
 
+async function openWorkflow(page) {
+  if (!await page.locator('#workflow-details').evaluate(element => element.open)) await page.locator('#workflow-details > summary').click();
+}
+
 for (const width of [1440, 390]) test(`Edge ${width}px：一句话需求可澄清、保存刷新、继续生成新规格`, { timeout: 45000 }, async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'taskflow-clarification-browser-'));
   const source = '我想做一个类似微信的聊天软件';
@@ -27,8 +31,9 @@ for (const width of [1440, 390]) test(`Edge ${width}px：一句话需求可澄�
   browser = await chromium.launch({ channel: 'msedge', headless: true });
   const page = await browser.newPage({ viewport: { width, height: 950 } }), errors = [];
   page.on('pageerror', e => errors.push(e.message)); page.on('console', e => { if (e.type() === 'error') errors.push(e.text()); });
-  await page.goto(url); await page.locator('#mode-select').selectOption('model'); await page.locator('#start-run').click();
+  await page.goto(url + '/?view=details'); await page.locator('#mode-select').selectOption('model'); await page.locator('#start-run').click();
   await page.getByRole('heading', { name: '需要补充需求信息', exact: true }).waitFor();
+  await openWorkflow(page);
   assert.match(await page.locator('#run-status').innerText(), /等待补充需求/);
   const specNode = page.locator('[data-stage="spec"]');
   assert.match(await specNode.getAttribute('class'), /awaiting-confirmation/u);
@@ -41,7 +46,10 @@ for (const width of [1440, 390]) test(`Edge ${width}px：一句话需求可澄�
   assert.equal(await page.getByRole('button', { name: '根据回答整理规格', exact: true }).isDisabled(), true);
   await page.getByLabel(/Q-001/).fill('Web网页'); await page.getByLabel(/Q-002/).fill('首版只做文字聊天');
   await page.getByRole('button', { name: '保存修订', exact: true }).click();
-  await page.waitForFunction(() => document.querySelector('[data-review-action="save"]').disabled);
+  // Disabled alone also describes an in-flight save. Wait for the visible
+  // follow-up action to be usable before reloading the persisted version.
+  await page.waitForFunction(() => document.querySelector('[data-review-action="save"]').disabled
+    && !document.querySelector('[data-review-action="approve"]').disabled);
   assert.equal(calls, 1);
   await page.reload(); await page.getByRole('heading', { name: '需要补充需求信息', exact: true }).waitFor();
   assert.equal(await page.getByLabel(/Q-002/).inputValue(), '首版只做文字聊天');
@@ -49,6 +57,7 @@ for (const width of [1440, 390]) test(`Edge ${width}px：一句话需求可澄�
   await page.getByRole('button', { name: '根据回答整理规格', exact: true }).click();
   await page.getByRole('heading', { name: '先确认规格，再生成开发计划', exact: true }).waitFor();
   assert.match(await page.locator('[data-stage="spec"]').getAttribute('class'), /(?:^|\s)succeeded(?:\s|$)/u);
+  await openWorkflow(page);
   await page.locator('[data-stage="spec"]').click();
   assert.match(await page.locator('#stage-inspector .status-tag').innerText(), /已完成/u);
   assert.equal(calls, 2); assert.ok(received.includes('首版只做文字聊天'));
@@ -73,12 +82,14 @@ for (const width of [1440,390]) test(`Edge ${width}px：旧失败显示原因、
   const old=structuredClone(run.specificationHistory);
   await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));browser=await chromium.launch({channel:'msedge',headless:true});
   const page=await browser.newPage({viewport:{width,height:950}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
-  await page.goto(`http://127.0.0.1:${app.server.address().port}`);
+  await page.goto(`http://127.0.0.1:${app.server.address().port}/?view=details`);
+  await openWorkflow(page);
   await page.getByRole('button',{name:'重新校验已保存响应（不调用模型）',exact:true}).waitFor();
   assert.match(await page.locator('#stage-inspector').innerText(),/引用格式校验/);
   assert.equal(await page.getByRole('button',{name:'调用次数已用尽',exact:true}).isDisabled(),true);
-  await page.reload();await page.getByRole('button',{name:'重新校验已保存响应（不调用模型）',exact:true}).click();
+  await page.reload();await openWorkflow(page);await page.getByRole('button',{name:'重新校验已保存响应（不调用模型）',exact:true}).click();
   await page.getByRole('heading',{name:'先确认规格，再生成开发计划',exact:true}).waitFor();
+  await page.locator('.workspace-budget > summary').click();
   assert.match(await page.locator('#planning-model-notice').innerText(),/已免费重新校验/);
   assert.equal(calls,1);assert.equal(run.specificationCalls,1);assert.deepEqual(run.specificationHistory,old);assert.equal(run.approvals.spec,null);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);assert.deepEqual(errors,[]);

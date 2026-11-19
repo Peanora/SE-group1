@@ -1,19 +1,26 @@
 import { summarizeTaskChanges, unavailableDependencies } from './task-plan-view.js';
+import { createEngineeringRouteRoles } from './engineering-route-roles.js';
 
 const escape = (value = '') => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const copy = (value) => structuredClone(value);
 const short = (value) => value ? String(value).slice(0, 10) : '尚未生成';
 const lines = (value) => String(value).split('\n').map((line) => line.trim()).filter(Boolean);
 const date = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—';
-const actionNames = { use_platform_defaults: '采用平台默认方案', use_local_engineering: '改用本地工程规则', clarify_spec: '补充需求并整理规格', supplement_spec: '补充规格信息', approve_spec: '确认规格', reject_spec: '退回规格', revise_spec: '修订规格', approve_plan: '确认计划', reject_plan: '退回计划', revise_plan: '修订计划' };
+const actionNames = { use_platform_defaults: '采用平台默认方案', use_local_engineering: '改用本地工程规则', clarify_spec: '补充需求并整理规格', supplement_spec: '补充规格信息', approve_spec: '确认规格', reject_spec: '退回规格', revise_spec: '修订规格', approve_plan: '确认计划', reject_plan: '退回计划', revise_plan: '修订计划', revise_route_roles: '修订接口权限', revise_route_contracts: '修订接口约定' };
+
+export function canEditPlanTasks(run) {
+  return Boolean(run?.workflowVersion === 2 && !run.sourceSuperseded && run.planRevision && run.tasks?.length
+    && (run.status === 'awaiting_review' || run.status === 'succeeded' && run.approvals?.plan?.revision === run.planRevision));
+}
 
 // This editor owns its inputs. Polling updates status without replacing live drafts or focus.
-export function createPlanningReview({ container, getState, submit, refresh, showArtifact, toast, addFeature = () => {}, onPlanDraft = () => {} }) {
+export function createPlanningReview({ container, getState, submit, refresh, showArtifact, toast, addFeature = () => {}, onPlanDraft = () => {}, inspectIssue = () => {}, onPlanRevised = () => {} }) {
   const drafts = new Map();
   const reviewModes = new Map();
   let viewKey = '';
   let currentDraft = null;
   let pending = false;
+  const routeRoles = createEngineeringRouteRoles({ getState, submit: ({ action, ...payload }) => submit(action, payload), refresh, toast, onChange: () => syncControls() });
   const $ = (selector) => container.querySelector(selector);
   const $$ = (selector) => [...container.querySelectorAll(selector)];
   const storageKey = (run, kind) => `taskflow-review:${run.id}:${kind}`;
@@ -55,8 +62,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     const inheritedNote = run.inheritedFrom ? `<p class="review-help">已从上一版运行继承 ${run.inheritedFrom.answerCount} 条已保存回答；新版需求正文优先。带“继承自上一版”的问题已预填，可直接核对或修改。</p>` : '';
     const questionLabel = (q, fallback) => `${q.id}　${q.question}${q.inherited ? '（继承自上一版，可修改）' : fallback ? '（必须回答）' : ''}`;
     if (run.spec?.clarificationRequired) {
-      const remaining = Math.max(0, Math.min(run.specificationBudget?.maxCalls ?? 3, getState().health?.modelPlanning?.specificationMaxCalls ?? 3) - (run.specificationCalls ?? 0));
-      return `${inheritedNote}<p class="review-help">你已提供项目想法，但具体范围还不明确。请补充以下信息；不确定的项目可以写明“首版暂不包含”。回答会保留，原始需求不会被覆盖。</p><section class="review-questions"><h4>需要补充的信息</h4><span id="review-question-count"></span>${(run.specQuestions || []).map(q => `<div class="review-question">${field(questionLabel(q, true), `answer.${q.id}`, draft.answers[q.id] || '', { multiline: true, rows: 3, max: 4000 })}</div>`).join('')}</section><p class="review-help">“保存修订”只保存回答，不调用模型。“根据回答整理规格”会新增一次模型请求，产生正常用量；当前运行剩余最多 ${remaining} 次。整理后仍需确认规格，尚未开始编码。</p>`;
+      return `${inheritedNote}<p class="review-help">你已提供项目想法，但具体范围还不明确。请补充以下信息；不确定的项目可以写明“首版暂不包含”。回答会保留，原始需求不会被覆盖。</p><section class="review-questions"><h4>需要补充的信息</h4><span id="review-question-count"></span>${(run.specQuestions || []).map(q => `<div class="review-question">${field(questionLabel(q, true), `answer.${q.id}`, draft.answers[q.id] || '', { multiline: true, rows: 3, max: 4000 })}</div>`).join('')}</section><p class="review-help">“保存修订”会保存回答。“根据回答整理规格”会新增一次模型请求，整理后需要确认规格。</p>`;
     }
     return `${inheritedNote}<div class="review-form-grid">${field('规格标题', 'spec.title', spec.title, { max: 200 })}${field('需求摘要', 'spec.summary', spec.summary, { multiline: true, rows: 3, max: 10000 })}</div>
       <section class="review-stack"><strong>${spec.platformDefaults ? '平台默认方案（无需填写）' : '旧版技术配置（请采用平台默认方案）'}</strong><p>${escape(spec.platformDefaults?.description || '当前仅支持平台统一的网页方案；采用后会重新生成规格版本并保留回答。')}</p><details><summary>查看技术配置</summary><p>前端：${escape(spec.stack?.frontend || '待确定')}；服务端：${escape(spec.stack?.backend || '待确定')}；存储：${escape(spec.stack?.storage || '待确定')}</p></details></section>
@@ -116,13 +122,16 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
   }
   function rejected(run, kind, revision) { return (run.decisions || []).some((item) => item.action === `reject_${kind}` && item.revision === revision); }
   function isSpecRevisionFromPlan(run, kind) { return run.workflowVersion === 2 && run.status === 'awaiting_review' && kind === 'spec'; }
+  function isConfirmedPlanEdit(run, kind) { return kind === 'plan' && run.status === 'succeeded' && getState().taskEditorOpen && canEditPlanTasks(run); }
   function syncControls() {
     const { run, busy } = getState();
     if (!run || !currentDraft) return;
     const draft = currentDraft;
     const legacy = run.workflowVersion !== 2;
     const revisingSpec = isSpecRevisionFromPlan(run, draft.kind);
-    const waiting = legacy ? run.status === 'awaiting_review' : revisingSpec || run.status === `awaiting_${draft.kind === 'spec' ? 'spec' : 'review'}`;
+    const revisingPlan = isConfirmedPlanEdit(run, draft.kind);
+    const savingOnly = revisingSpec || revisingPlan;
+    const waiting = legacy ? run.status === 'awaiting_review' : savingOnly || run.status === `awaiting_${draft.kind === 'spec' ? 'spec' : 'review'}`;
     const revision = draft.kind === 'spec' ? run.specRevision : run.planRevision;
     const stale = !legacy && (draft.revision !== revision || draft.kind === 'plan' && draft.specRevision !== run.specRevision);
     const unanswered = (run.specQuestions || []).filter((q) => !String(q.answer || '').trim()).length;
@@ -140,7 +149,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     $$('[data-review-mode]').forEach((button) => { button.disabled = lock; });
     $$('[data-review-action]').forEach((button) => {
       const action = button.dataset.reviewAction;
-      button.disabled = lock || !waiting || stale || (revisingSpec && action !== 'save') || (action === 'approve' && !legacy && (run.spec?.clarificationRequired ? (run.specQuestions || []).some(q => !String(draft.answers[q.id] || '').trim()) : draft.dirty || blocked || draft.kind === 'spec' && unanswered > 0)) || (action === 'save' && !draft.dirty);
+      button.disabled = lock || !waiting || stale || (savingOnly && action !== 'save') || (action === 'approve' && !legacy && (run.spec?.clarificationRequired ? (run.specQuestions || []).some(q => !String(draft.answers[q.id] || '').trim()) : draft.dirty || blocked || draft.kind === 'spec' && unanswered > 0)) || (action === 'save' && !draft.dirty);
     });
     const status = $('#review-draft-status');
     if (status) status.textContent = stale ? `保存版本已变化。当前草稿基于 ${short(draft.revision)}，仍保留原文；请载入最新版本后重新核对。` : draft.dirty ? '有未保存的修订。先保存，再确认新版本。' : blocked ? '本版已退回。请修改并保存为新版本后再确认。' : run.spec?.clarificationRequired ? '请补充所需信息，可先保存回答，再根据回答整理规格。' : draft.kind === 'spec' && unanswered ? `还有 ${unanswered} 个问题未答复；填写并保存后才能确认。` : '正在审阅已保存的版本。';
@@ -150,13 +159,18 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     if (count) count.textContent = `${(run.specQuestions || []).length} 项 / ${unanswered} 项未保存答复`;
     const error = $('#review-action-error');
     if (error) { error.textContent = draft.error || ''; error.hidden = !draft.error; }
+    const issue = $('[data-review-issue]');
+    if (issue) { issue.hidden = !draft.error || !run.planningIssue; issue.disabled = lock; }
     const approve = $('[data-review-action="approve"]');
     if (approve) approve.textContent = lock ? '正在处理…' : legacy ? '确认并导出' : draft.kind === 'spec' ? run.spec?.clarificationRequired ? '根据回答整理规格' : '确认规格并继续' : '确认计划并导出';
+    if (approve && draft.kind === 'plan' && routeRoles.hasDirty()) approve.disabled = true;
     syncPlanPreview(run, draft);
+    routeRoles.render();
   }
   function render() {
     const { run } = getState();
     if (run?.sourceSuperseded) {
+      routeRoles.mount(null);
       container.hidden = false; currentDraft = null;
       const key = `historical:${run.id}:${run.specRevision}:${run.planRevision}`;
       if (viewKey !== key) { viewKey = key; container.innerHTML = `<div class="review-intro"><div><h3 id="review-heading">历史需求输入：确认记录只读</h3><p>已应用新的项目需求。这里的规格、计划与确认保留为历史，请重新编排并确认新版本。</p></div></div>${run.workflowVersion === 2 ? history(run) : ''}`; }
@@ -165,27 +179,30 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     const legacy = run && run.workflowVersion !== 2;
     const visible = run && (legacy ? run.status === 'awaiting_review' : !!run.specRevision);
     container.hidden = !visible;
-    if (!visible) { viewKey = ''; currentDraft = null; return; }
+    if (!visible) { viewKey = ''; currentDraft = null; routeRoles.mount(null); return; }
     const localMode = run.status === 'awaiting_review' && run.workflowVersion === 2 ? reviewModes.get(run.id) || 'plan' : '';
     const kind = legacy ? 'legacy' : run.status === 'awaiting_spec' || !run.planRevision || localMode === 'spec' ? 'spec' : 'plan';
     const draft = getDraft(run, kind);
     currentDraft = draft;
-    const signature = `${run.id}:${kind}:${localMode}:${run.status}:${run.specRevision}:${run.planRevision}:${run.decisions?.length || 0}`;
+    const revisingPlan = isConfirmedPlanEdit(run, kind);
+    const signature = `${run.id}:${kind}:${localMode}:${run.status}:${run.specRevision}:${run.planRevision}:${run.decisions?.length || 0}:${revisingPlan}`;
     if (signature === viewKey) { syncControls(); return; }
     viewKey = signature;
     const focused = container.contains(document.activeElement) ? document.activeElement : null;
+    const routeFocus = routeRoles.captureFocus();
     const focusName = focused?.dataset.reviewField;
     const selection = focusName ? [focused.selectionStart, focused.selectionEnd] : null;
     const revisingSpec = isSpecRevisionFromPlan(run, kind);
-    const active = legacy ? true : revisingSpec || run.status === (kind === 'spec' ? 'awaiting_spec' : 'awaiting_review');
+    const savingOnly = revisingSpec || revisingPlan;
+    const active = legacy ? true : savingOnly || run.status === (kind === 'spec' ? 'awaiting_spec' : 'awaiting_review');
     const revision = kind === 'spec' ? run.specRevision : run.planRevision;
     const version = kind === 'spec' ? run.specVersion : run.planVersion;
     const failedSpec = run.status === 'failed' && run.stages?.some(s => s.id === 'spec' && s.status === 'failed');
-    container.innerHTML = `<div class="review-intro"><span class="review-check" aria-hidden="true">${failedSpec ? '!' : active ? '?' : '✓'}</span><div><h3 id="review-heading">${failedSpec ? '规格整理未完成，回答已保留' : legacy ? '旧版记录：开发计划等待审阅' : revisingSpec ? '修订已确认规格' : active ? kind === 'spec' ? run.spec?.clarificationRequired ? '需要补充需求信息' : '先确认规格，再生成开发计划' : '开发计划已生成，请确认后导出' : '本次运行的确认与修订记录'}</h3><p>${legacy ? '这条记录沿用旧版流程；本次确认仅用于导出规划文档。' : revisingSpec ? '保存新规格会使现有规格确认和开发计划失效。你需要重新确认规格，再生成并确认计划。' : active ? run.spec?.clarificationRequired ? '这不是执行故障。模型还无法确定具体功能，请回答下方问题后继续。' : '修改与确认分开记录，每次确认只对所显示的保存版本有效。' : '这里保留真实确认依据。开发任务仍需后续编码与验收。'}</p></div><button type="button" class="text-button" data-review-document="${kind === 'spec' ? 'spec.md' : 'task.md'}">${kind === 'spec' ? '查看规格文档' : '查看任务文档'}</button></div>
+    container.innerHTML = `<div class="review-intro"><span class="review-check" aria-hidden="true">${failedSpec ? '!' : active ? '?' : '✓'}</span><div><h3 id="review-heading">${revisingPlan ? '修订已确认的任务' : failedSpec ? '规格整理未完成，回答已保留' : legacy ? '旧版记录：开发计划等待审阅' : revisingSpec ? '修订已确认规格' : active ? kind === 'spec' ? run.spec?.clarificationRequired ? '需要补充需求信息' : '先确认规格，再生成开发计划' : '开发计划已生成，请确认后导出' : '本次运行的确认与修订记录'}</h3><p>${revisingPlan ? '保存后需要重新确认新计划和验收清单。' : legacy ? '这条记录沿用旧版流程；本次确认仅用于导出规划文档。' : revisingSpec ? '保存新规格会使现有规格确认和开发计划失效。你需要重新确认规格，再生成并确认计划。' : active ? run.spec?.clarificationRequired ? '这不是执行故障。模型还无法确定具体功能，请回答下方问题后继续。' : '修改与确认分开记录，每次确认只对所显示的保存版本有效。' : '这里保留真实确认依据。开发任务仍需后续编码与验收。'}</p></div><button type="button" class="text-button" data-review-document="${kind === 'spec' ? 'spec.md' : 'task.md'}">${kind === 'spec' ? '查看规格文档' : '查看任务文档'}</button></div>
       ${run.workflowVersion === 2 && !run.spec?.platformDefaults && ['awaiting_spec','awaiting_review','failed'].includes(run.status) && run.stages?.find(s => s.id === 'spec')?.status === 'succeeded' ? '<div class="review-plan-basis"><p>当前统一按浏览器网页应用规划，无需填写技术方案。旧规格需要免费采用默认方案，并重新确认。</p><button type="button" class="button button-primary" data-platform-defaults>采用默认方案并重新确认</button></div>' : ''}
       ${localMode ? `<div class="review-plan-basis"><button type="button" class="text-button" data-review-mode="${revisingSpec ? 'plan' : 'spec'}">${revisingSpec ? '返回计划审阅' : '返回规格修订'}</button><p>${revisingSpec ? '尚未保存的规格草稿不会改变已确认规格。返回计划审阅时，两份草稿都会保留。' : '发现规格问题可返回修订。切换视图会保留尚未保存的计划和规格草稿。'}</p></div>` : ''}
       ${legacy ? '' : `<ol class="review-steps"><li class="${run.approvals?.spec?.revision === run.specRevision ? 'confirmed' : kind === 'spec' ? 'current' : ''}"><span>1</span><div><strong>确认规格</strong><small>第 ${escape(run.specVersion || 1)} 版 / ${escape(short(run.specRevision))}</small></div></li><li class="${run.approvals?.plan?.revision === run.planRevision && run.planRevision ? 'confirmed' : kind === 'plan' && active ? 'current' : ''}"><span>2</span><div><strong>确认开发计划</strong><small>${run.planRevision ? `第 ${escape(run.planVersion || 1)} 版 / ${escape(short(run.planRevision))}` : '规格确认后生成'}</small></div></li></ol><p class="review-version">${kind === 'spec' ? '规格' : '计划'}第 ${escape(version || 1)} 版 / ${escape(short(revision))}${run.sourceRevision ? ` / 需求快照 ${escape(short(run.sourceRevision))}` : ''}</p>`}
-      ${active ? `${legacy ? '' : `<div class="review-editor">${kind === 'spec' ? specEditor(run, draft) : planEditor(run, draft)}</div>`}<div class="review-feedback-area">${field(revisingSpec ? '规格修订说明（选填）' : '审阅意见（退回修改时必填）', 'feedback', draft.feedback, { multiline: true, rows: 2, max: 4000 })}</div><p id="review-action-error" class="inline-error" role="alert" hidden></p><div class="review-bottom"><div><p id="review-draft-status" class="review-help" aria-live="polite"></p><button type="button" id="review-load-current" class="text-button" hidden>放弃本地草稿，载入最新版本</button></div><div class="review-actions">${legacy ? '' : `${revisingSpec ? '' : '<button type="button" class="button button-outline" data-review-action="reject">退回修改</button>'}<button type="button" class="button ${revisingSpec ? 'button-primary' : 'button-outline'}" data-review-action="save">保存修订</button>`}${revisingSpec ? '' : '<button type="button" class="button button-primary" id="approve-button" data-review-action="approve">确认</button>'}</div></div>` : ''}
+      ${active ? `${legacy ? '' : `<div class="review-editor">${kind === 'spec' ? specEditor(run, draft) : planEditor(run, draft)}</div>${kind === 'plan' && !revisingPlan ? '<div data-engineering-roles-host></div>' : ''}`}<div class="review-feedback-area">${field(savingOnly ? '修订说明（选填）' : '审阅意见（退回修改时必填）', 'feedback', draft.feedback, { multiline: true, rows: 2, max: 4000 })}</div><p id="review-action-error" class="inline-error" role="alert" hidden></p><button type="button" class="button button-outline" data-review-issue hidden>查看问题</button><div class="review-bottom"><div><p id="review-draft-status" class="review-help" aria-live="polite"></p><button type="button" id="review-load-current" class="text-button" hidden>放弃本地草稿，载入最新版本</button></div><div class="review-actions">${legacy ? '' : `${savingOnly ? '' : '<button type="button" class="button button-outline" data-review-action="reject">退回修改</button>'}<button type="button" class="button ${savingOnly ? 'button-primary' : 'button-outline'}" data-review-action="save">保存修订</button>`}${savingOnly ? '' : '<button type="button" class="button button-primary" id="approve-button" data-review-action="approve">确认</button>'}</div></div>` : ''}
       ${legacy ? '' : history(run)}`;
     $$('[data-review-details]').forEach((details) => {
       if (draft.opened.includes(details.dataset.reviewDetails)) details.open = true;
@@ -196,6 +213,9 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
       });
     });
     syncControls();
+    routeRoles.mount($('[data-engineering-roles-host]'));
+    syncControls();
+    routeRoles.restoreFocus(routeFocus);
     if (focusName) {
       const input = $$('[data-review-field]').find((element) => element.dataset.reviewField === focusName);
       if (input && !input.disabled) { input.focus({ preventScroll: true }); input.setSelectionRange(...selection); }
@@ -257,12 +277,13 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     if (!run || run.sourceSuperseded || !draft || busy || pending) return;
     const legacy = run.workflowVersion !== 2;
     const revisingSpec = isSpecRevisionFromPlan(run, draft.kind);
-    if (revisingSpec && action !== 'save') return;
+    const revisingPlan = isConfirmedPlanEdit(run, draft.kind);
+    if ((revisingSpec || revisingPlan) && action !== 'save') return;
     draft.error = '';
     if (action === 'reject' && !draft.feedback.trim()) {
       draft.error = '请在审阅意见中说明需要修改的位置和原因。'; persist(draft); syncControls(); $('[data-review-field="feedback"]')?.focus(); return;
     }
-    if (action === 'save' && draft.kind === 'spec' && !run.spec?.clarificationRequired) {
+    if (action === 'save' && draft.kind === 'spec' && run.mode !== 'model' && !run.spec?.clarificationRequired) {
       const invalid = !draft.spec.title?.trim() || !draft.spec.summary?.trim() || (draft.spec.requirements || []).some((r) => !r.title.trim() || !r.description.trim() || !r.acceptance.length);
       if (invalid) { draft.error = '请填写规格标题、摘要，以及每项需求的标题、描述和验收条件。'; persist(draft); syncControls(); return; }
     }
@@ -288,6 +309,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
       const savedRun = await submit(apiAction, payload);
       if (action === 'save' || action === 'approve') clearDraft(draft);
       if (revisingSpec && action === 'save') reviewModes.delete(run.id);
+      if (revisingPlan && action === 'save') onPlanRevised();
       viewKey = ''; render();
       toast(apiAction === 'clarify_spec' ? '回答已保存，正在根据补充信息整理规格' : action === 'save' ? '修订已保存，请核对新版本后单独确认' : action === 'reject' ? '已退回，请修改并保存为新版本' : legacy || draft.kind === 'plan' ? '已确认计划，正在导出规划文档' : '已确认规格，正在生成开发计划');
       return savedRun;
@@ -297,6 +319,8 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     } finally { pending = false; syncControls(); }
   }
   container.addEventListener('click', (event) => {
+    const issue = event.target.closest('[data-review-issue]');
+    if (issue && !issue.disabled) { inspectIssue(); return; }
     const taskButton = event.target.closest('[data-edit-task]');
     if (taskButton && !taskButton.disabled) { openTask(taskButton.dataset.editTask); return; }
     const featureButton = event.target.closest('[data-review-add-feature]');
@@ -338,7 +362,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
   });
   function openTask(id) {
     const { run, busy } = getState();
-    if (!run || run.sourceSuperseded || busy || pending || run.workflowVersion !== 2 || run.status !== 'awaiting_review') return false;
+    if (busy || pending || !canEditPlanTasks(run)) return false;
     const index = run.tasks.findIndex(task => task.id === id);
     if (index < 0) return false;
     const draft = getDraft(run, 'plan'); draft.selectedTask = id; persist(draft);
@@ -352,7 +376,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
   }
   function taskDraft() {
     const { run } = getState();
-    if (!run || run.sourceSuperseded || run.workflowVersion !== 2 || run.status !== 'awaiting_review' || !run.planRevision) return null;
+    if (!canEditPlanTasks(run)) return null;
     const draft = getDraft(run, 'plan');
     if (!draft.dirty || draft.revision !== run.planRevision || draft.specRevision !== run.specRevision) return null;
     const summary = planSummary(run, draft);

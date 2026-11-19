@@ -31,7 +31,7 @@ class ControlledExecutor {
 async function setup(t, executor = new ControlledExecutor()) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'taskflow-simulation-'));
   const app = await createApp({ dataDir: directory, stepDelayMs: 0, planner: simulationPlanner,
-    executionService: null, sourceChangeService: null, simulatedExecutor: executor });
+    executionService: null, sourceChangeService: null, verificationPlanningService: null, simulatedExecutor: executor });
   app.additionalShutdown = [];
   t.after(async () => { for (const service of app.additionalShutdown) await service.shutdown(); await app.close(); await rm(directory, { recursive: true, force: true }); });
   const project = await app.store.create({ name: '模拟验收', source: { filename: 'demo.md', content: 'A完成后B和C并行，D等待人工确认后E启动。' } });
@@ -172,7 +172,8 @@ test('模型工程计划复用原有校验，原规划任务和真实源码验�
   await f.action(run.id, { action: 'confirm', taskId: 'D', attempt: 1, reason: '工程计划模拟结果核对' });
   await f.executor.finish('E'); await until(() => f.current(run.id).status === 'completed');
   // A separate real service reads the same confirmed plan but never consumes simulated success.
-  const real = await createApp({ dataDir: f.directory, planner: simulationPlanner, sourceChangeService: null });
+  const real = await createApp({ dataDir: f.directory, planner: simulationPlanner, sourceChangeService: null,
+    plannedExecutionRootDir: path.join(f.directory, 'independent-real-planned-executions') });
   f.app.additionalShutdown.push({ shutdown: () => real.close() });
   const listing = await real.executionService.list({ projectId: f.project.id, runId: f.plan.id });
   assert.equal(listing.executions.length, 0);

@@ -29,8 +29,8 @@ async function fixture(t, { allowRunConflict = false } = {}) {
   });
   t.after(async () => { await browser.close(); await app.close(); assert.deepEqual(errors, []); assert.equal(path.dirname(directory), path.resolve(os.tmpdir())); assert.ok(path.basename(directory).startsWith('source-change-browser-')); await rm(directory, { recursive: true, force: true }); });
   const url = `http://127.0.0.1:${app.server.address().port}`;
-  await page.goto(url); await page.getByRole('button', { name: '确认规格并继续', exact: true }).waitFor();
-  await page.locator('#source-changes-section > summary').click();
+  await page.goto(url + '/?view=details'); await page.getByRole('button', { name: '确认规格并继续', exact: true }).waitFor();
+  await page.locator('[data-workspace-view="source"]').click();
   await page.locator('.source-changes').getByLabel('需求正文', { exact: true }).waitFor();
   await page.waitForFunction(() => !document.querySelector('.source-changes textarea.sc-source').disabled);
   const request = async (route, body) => { const response = await fetch(url + route, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); assert.ok(response.ok, await response.clone().text()); return response.json(); };
@@ -52,6 +52,7 @@ test('actual workbench parses Word into a pending draft, applies it, keeps histo
   assert.match(await page.locator('.source-changes').innerText(), /待应用|pending/);
   assert.match(await page.locator('.source-changes').innerText(), /迁移/);
   await page.getByRole('button', { name: '应用为新需求版本', exact: true }).click();
+  await page.locator('[data-workspace-view="plan"]').click();
   await page.getByRole('heading', { name: '历史需求输入：确认记录只读', exact: true }).waitFor();
   assert.equal(project.sourceGeneration, 1); assert.equal(project.source.content, changed); assert.equal(run.sourceSuperseded, true);
   assert.deepEqual(run.sourceSnapshot, oldSnapshot); assert.equal(run.specRevision, oldSpecRevision);
@@ -77,7 +78,8 @@ test('external source publication is observed by polling without replacing a foc
   const change = app.sourceChangeService.request({ projectId: project.id, baseRevision: app.store.getSourceVersion(project.id).revision,
     source: { filename: 'external.md', content: changed }, reason: '另一次请求应用需求', kind: 'field', requestKey: 'external-publication' });
   await app.sourceChangeService.apply({ projectId: project.id, changeId: change.id, baseRevision: change.baseRevision, generation: change.generation });
-  await page.getByRole('heading', { name: '历史需求输入：确认记录只读', exact: true }).waitFor();
+  await page.waitForFunction(() => document.querySelector('#review-heading')?.textContent === '历史需求输入：确认记录只读');
+  assert.equal(await page.locator('#workspace-source').isVisible(), true, '外部需求更新不能打断当前工作面');
   assert.equal(await body.inputValue(), '尚未保存的个人草稿');
   assert.deepEqual(await body.evaluate(el => [document.activeElement === el, el.selectionStart, el.selectionEnd]), [true, 2, 5]);
   assert.equal(await page.getByRole('button', { name: '保存为待应用变更', exact: true }).isDisabled(), true);
@@ -135,14 +137,13 @@ test('新增功能在真实工作台经草稿、保存、应用和单独重新�
     await panel.getByRole('button', { name: '加入需求草稿', exact: true }).click(); const merged = await source.inputValue();
     assert.ok(merged.startsWith(`${original}\n已有未保存的补充说明。\n\n## 新增功能：资源筛选`));
     assert.ok(merged.includes('- 清除条件后恢复全部结果')); assert.equal(project.source.content, original); assert.equal(project.runs.length, 1);
-    await page.reload(); await page.getByRole('button', { name: '确认规格并继续', exact: true }).waitFor();
-    await page.locator('#source-changes-section').evaluate(el => { el.open = true; });
+    await page.reload(); await page.locator('[data-workspace-view="source"]').click();
     await panel.getByLabel('功能名称', { exact: true }).waitFor(); assert.equal(await panel.getByLabel('功能名称', { exact: true }).inputValue(), '资源筛选'); assert.equal(await source.inputValue(), merged);
     await panel.getByRole('button', { name: '保存为待应用变更', exact: true }).click();
     await page.waitForFunction(() => ![...document.querySelectorAll('.source-changes button')].find(el => el.textContent === '应用为新需求版本')?.disabled);
     assert.equal(project.source.content, original); assert.equal(project.runs.length, 1); assert.match(await panel.getByLabel('新增功能流程').innerText(), /后端已确认保存/);
     await panel.getByRole('button', { name: '应用为新需求版本', exact: true }).click();
-    await page.getByRole('heading', { name: '历史需求输入：确认记录只读', exact: true }).waitFor();
+    await page.waitForFunction(() => document.querySelector('#review-heading')?.textContent === '历史需求输入：确认记录只读');
     const replan = panel.getByRole('button', { name: '重新规划', exact: true });
     await page.waitForFunction(() => ![...document.querySelectorAll('.source-changes button')].find(el => el.textContent === '重新规划')?.disabled);
     assert.equal(project.source.content, merged); assert.equal(project.sourceGeneration, 1); assert.equal(project.runs.length, 1);

@@ -2,11 +2,37 @@ const escape = value => String(value ?? '').replace(/[&<>"']/gu, c => ({ '&': '&
 export const SIM_STATUS = { pending: '待开始', ready: '就绪', running: '进行中', awaiting_confirmation: '待人工确认',
   completed: '模拟完成', failed: '失败', blocked: '阻塞', paused: '已暂停', interrupted: '已中断，需核对' };
 
-export function createSimulatedTasks({ api, getContext, onUpdate, onError }) {
-  let host, contextKey = '', runs = [], selectedId = '', canStart = false, reason = '', timer, busy = false, requestSequence = 0;
+export function createSimulatedTasks({ api, getContext, onUpdate = () => {}, onError = () => {}, onActionSuccess = () => {}, onFailure = () => {} }) {
+  let host, contextKey = '', runs = [], selectedId = '', canStart = false, reason = '', timer, busy = false, requestSequence = 0, contextEpoch = 0, actionError = null;
+  let showPlanOnly = false;
+  const reportedFailures = new Set();
   const draft = { concurrency: '2', durationMs: '1200', failOnceIds: '', confirmationIds: '', reason: '' };
   const selection = () => runs.find(run => run.id === selectedId) ?? null;
   const base = context => `/api/projects/${encodeURIComponent(context.projectId)}/runs/${encodeURIComponent(context.runId)}/simulations`;
+  function selectRecord(id) {
+    selectedId = id;
+    showPlanOnly = !id;
+    const context = getContext();
+    try { sessionStorage.setItem(`taskflow-simulation:${context.projectId}/${context.runId}`, selectedId); } catch { /* optional preference */ }
+  }
+  function reportFailure() {
+    const context = getContext(), run = selection();
+    if (!context.current || !run || contextKey !== JSON.stringify(context) || run.planRevision !== context.planRevision) return;
+    const failed = (run.tasks || []).filter(task => task.status === 'failed').map(task => {
+      const attempt = task.attempts?.at(-1);
+      const message = `任务 ${task.id}：${task.reason || attempt?.summary || '模拟失败，请查看任务详情。'}`;
+      return { taskId: task.id, message, key: JSON.stringify([run.id, task.id, attempt?.number ?? task.attempts?.length ?? 0, message]) };
+    });
+    if (!failed.length && run.status === 'failed') {
+      const message = String(run.error || run.reason || '本次模拟运行失败，请查看运行记录。');
+      failed.push({ taskId: '', message, key: JSON.stringify([run.id, 'run', message]) });
+    }
+    const fresh = failed.filter(item => !reportedFailures.has(item.key));
+    if (!fresh.length) return;
+    for (const item of fresh) reportedFailures.add(item.key);
+    onFailure({ id: fresh.map(item => item.key).join('|'), message: failed.map(item => item.message).join('\n'), taskId: fresh[0].taskId,
+      context: { projectId: context.projectId, runId: context.runId } });
+  }
   function render() {
     if (!host) return;
     const focused = host.contains(document.activeElement) ? document.activeElement : null;
@@ -21,8 +47,9 @@ export function createSimulatedTasks({ api, getContext, onUpdate, onError }) {
       <label>首次失败任务 ID <input data-sim-field="failOnceIds" aria-label="首次失败任务 ID" placeholder="例如 B，多个用逗号分隔" value="${escape(draft.failOnceIds)}"></label>
       <label>人工确认任务 ID <input data-sim-field="confirmationIds" aria-label="人工确认任务 ID" placeholder="例如 D，多个用逗号分隔" value="${escape(draft.confirmationIds)}"></label></div>
       <button class="button button-primary" data-simulation-action="start" ${!canStart || busy ? 'disabled' : ''}>启动模拟编排</button>
+      ${actionError ? `<p class="inline-error simulation-action-error" data-simulation-error role="alert">${escape(actionError.message)}</p>` : ''}
       <p role="status">${escape(reason || '当前计划已确认，可创建新的模拟运行。')}</p>
-      ${runs.length ? `<label>模拟运行历史 <select id="simulation-select" aria-label="模拟运行历史">${runs.map(item => `<option value="${escape(item.id)}" ${item.id === selectedId ? 'selected' : ''}>${escape(item.createdAt)} · 计划v${item.planVersion} · ${escape(SIM_STATUS[item.status] || item.status)} · ${escape(item.id.slice(0, 8))}</option>`).join('')}</select></label>` : '<p>尚未创建模拟运行，开发任务仍为待实施计划。</p>'}
+      ${runs.length ? `<label>模拟运行历史 <select id="simulation-select" aria-label="模拟运行历史"><option value="" ${showPlanOnly ? 'selected' : ''}>查看当前任务计划</option>${runs.map(item => `<option value="${escape(item.id)}" ${item.id === selectedId ? 'selected' : ''}>${escape(item.createdAt)} · 计划v${item.planVersion} · ${escape(SIM_STATUS[item.status] || item.status)} · ${escape(item.id.slice(0, 8))}</option>`).join('')}</select></label>` : '<p>尚未创建模拟运行。</p>'}
       ${run ? `<p><strong>模拟运行：${escape(SIM_STATUS[run.status] || run.status)}</strong> / 并发 ${run.concurrency} / 需求 ${escape(run.sourceRevision.slice(0, 8))} / 计划 ${escape(run.planRevision.slice(0, 8))}${editable ? '' : ' / 旧计划历史，只读'}</p>
       <div class="simulation-actions">${editable && ['running', 'awaiting_confirmation'].includes(run.status) ? '<button class="button button-outline" data-simulation-action="pause">阶段边界暂停</button>' : ''}
       ${editable && ['paused', 'interrupted'].includes(run.status) ? '<button class="button button-outline" data-simulation-action="resume">继续模拟</button>' : ''}
@@ -39,25 +66,31 @@ export function createSimulatedTasks({ api, getContext, onUpdate, onError }) {
     const request = ++requestSequence;
     clearTimeout(timer);
     const context = getContext(), key = JSON.stringify(context);
-    if (key !== contextKey) { contextKey = key; runs = []; selectedId = ''; render(); onUpdate(); }
+    if (key !== contextKey) { contextKey = key; contextEpoch++; reportedFailures.clear(); runs = []; selectedId = ''; showPlanOnly = false; actionError = null; render(); onUpdate(); }
     if (!context.projectId || !context.runId) return;
     try {
       const data = await api(base(context));
       if (request !== requestSequence || key !== JSON.stringify(getContext())) return;
       const previous = JSON.stringify({ runs, canStart, reason, selectedId });
       runs = data.runs; canStart = data.canStart; reason = data.reason;
-      if (!runs.some(run => run.id === selectedId)) {
-        try { selectedId = sessionStorage.getItem(`taskflow-simulation:${context.projectId}/${context.runId}`) ?? ''; } catch { /* optional preference */ }
-        if (!runs.some(run => run.id === selectedId)) selectedId = [...runs].reverse().find(run => run.planRevision === context.planRevision)?.id ?? runs.at(-1)?.id ?? '';
+      if (!showPlanOnly && !runs.some(run => run.id === selectedId)) {
+        try {
+          const saved = sessionStorage.getItem(`taskflow-simulation:${context.projectId}/${context.runId}`);
+          showPlanOnly = saved === ''; selectedId = saved ?? '';
+        } catch { /* optional preference */ }
+        if (!showPlanOnly && !runs.some(run => run.id === selectedId)) selectedId = [...runs].reverse().find(run => run.planRevision === context.planRevision)?.id ?? runs.at(-1)?.id ?? '';
       }
       if (previous !== JSON.stringify({ runs, canStart, reason, selectedId })) { render(); onUpdate(); }
+      reportFailure();
     } catch (error) { if (request === requestSequence && key === JSON.stringify(getContext())) { canStart = false; reason = `模拟状态读取失败：${error.message}`; render(); } }
     finally { if (request === requestSequence && key === JSON.stringify(getContext())) timer = setTimeout(refresh, 650); }
   }
   async function action(button) {
     if (busy) return;
     const context = getContext(), key = JSON.stringify(context), run = selection();
-    const action = button.dataset.simulationAction; busy = true; render();
+    if (key !== contextKey) { void refresh(); return; }
+    const epoch = contextEpoch;
+    const action = button.dataset.simulationAction; busy = true; actionError = null; render(); onUpdate();
     try {
       const split = value => value.split(/[,，\s]+/u).filter(Boolean);
       const body = action === 'start' ? { planRevision: context.planRevision, concurrency: Number(draft.concurrency), durationMs: Number(draft.durationMs),
@@ -65,20 +98,25 @@ export function createSimulatedTasks({ api, getContext, onUpdate, onError }) {
         ...(button.dataset.simTask ? { taskId: button.dataset.simTask } : {}),
         ...(action === 'confirm' ? { reason: draft.reason, attempt: Number(button.dataset.simAttempt) } : {}) };
       const data = await api(action === 'start' ? base(context) : `${base(context)}/${encodeURIComponent(run.id)}/action`, { method: 'POST', body: JSON.stringify(body) });
-      if (key !== JSON.stringify(getContext())) return;
-      selectedId = data.simulation.id;
-      try { sessionStorage.setItem(`taskflow-simulation:${context.projectId}/${context.runId}`, selectedId); } catch { /* optional preference */ }
+      if (epoch !== contextEpoch || key !== JSON.stringify(getContext())) return;
+      selectRecord(data.simulation.id);
       await refresh();
-    } catch (error) { if (key === JSON.stringify(getContext())) onError(error); }
-    finally { busy = false; render(); }
+      if (epoch === contextEpoch && key === JSON.stringify(getContext())) onActionSuccess({ action, taskId: button.dataset.simTask || '', projectId: context.projectId, runId: context.runId });
+    } catch (error) { if (epoch === contextEpoch && key === JSON.stringify(getContext())) {
+      const taskId = button.dataset.simTask || '';
+      actionError = { message: `${taskId ? `任务 ${taskId}：` : ''}${error.message || '模拟操作未完成，请核对当前任务后重试。'}`, taskId };
+      onError(error);
+    } }
+    finally { busy = false; render(); onUpdate(); }
   }
   function detail(taskId) {
     const run = selection(), task = run?.tasks.find(item => item.id === taskId); if (!task) return '';
     const editable = getContext().current && run.planRevision === getContext().planRevision;
     return `<section class="simulation-task-detail"><h4>模拟执行状态：${escape(SIM_STATUS[task.status])}</h4><p>${escape(task.reason)}</p>
       <p>当前尝试：${task.attempts.length} / ${task.requiresConfirmation ? '需要人工确认' : '自动发布模拟结果'}</p>
-      ${editable && task.status === 'failed' ? `<button class="button button-outline" data-simulation-action="retry" data-sim-task="${escape(task.id)}">重试此模拟任务</button>` : ''}
-      ${editable && task.status === 'awaiting_confirmation' ? `<button class="button button-primary" data-simulation-action="confirm" data-sim-task="${escape(task.id)}" data-sim-attempt="${task.attempts.length}">确认此模拟结果</button><p>请先在上方填写人工确认依据。</p>` : ''}
+      ${editable && task.status === 'failed' ? `<button class="button button-outline" data-simulation-action="retry" data-sim-task="${escape(task.id)}" data-focus-key="simulation-retry-${escape(task.id)}">重试此模拟任务</button>` : ''}
+      ${editable && task.status === 'awaiting_confirmation' ? `<button class="button button-primary" data-simulation-action="confirm" data-sim-task="${escape(task.id)}" data-sim-attempt="${task.attempts.length}" data-focus-key="simulation-confirm-${escape(task.id)}">确认此模拟结果</button><p>请先在上方填写人工确认依据。</p>` : ''}
+      ${actionError?.taskId === task.id ? `<p class="inline-error simulation-action-error" data-simulation-task-error role="alert">${escape(actionError.message)}</p>` : ''}
       <h4>执行记录</h4>${task.attempts.length ? task.attempts.map(attempt => `<p>第 ${attempt.number} 次 / ${escape(SIM_STATUS[attempt.status] || attempt.status)}<br>${escape(attempt.startedAt)} → ${escape(attempt.finishedAt || '进行中')}<br>${escape(attempt.summary)}${attempt.confirmation ? `<br>人工依据：${escape(attempt.confirmation.reason)} / ${escape(attempt.confirmation.at)}` : ''}</p>`).join('') : '<p>尚未派发。</p>'}
       <h4>状态历史</h4><ol>${task.history.map(event => `<li>${escape(event.at)} ${escape(SIM_STATUS[event.status])}：${escape(event.reason)}</li>`).join('')}</ol><p>仅模拟结果，不是软件验收。</p></section>`;
   }
@@ -86,12 +124,11 @@ export function createSimulatedTasks({ api, getContext, onUpdate, onError }) {
     host = element;
     host.addEventListener('input', event => { if (event.target.dataset.simField) draft[event.target.dataset.simField] = event.target.value; });
     host.addEventListener('change', event => { if (event.target.id === 'simulation-select') {
-      selectedId = event.target.value; const context = getContext();
-      try { sessionStorage.setItem(`taskflow-simulation:${context.projectId}/${context.runId}`, selectedId); } catch { /* optional preference */ }
-      render(); onUpdate();
+      selectRecord(event.target.value);
+      render(); onUpdate(); reportFailure();
     } });
     document.addEventListener('click', event => { const button = event.target.closest('[data-simulation-action]'); if (button) void action(button); });
     render();
   }
-  return { mount, refresh, selection, detail };
+  return { mount, refresh, selection, detail, showPlan() { selectRecord(''); render(); onUpdate(); } };
 }

@@ -58,7 +58,8 @@ test('approved workbench reaches the real isolated executor and persists its gen
   await request(`${runPath}/action`, { action: 'approve_plan', revision: run.planRevision, specRevision: run.specRevision }); await waitRun('succeeded');
   const page = await browser.newPage({ viewport: { width: 1365, height: 1000 } }), errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto(url);
+  await page.goto(url + '/?view=details');
+  await page.locator('[data-workspace-view="execution"]').click();
   const start = page.getByRole('button', { name: '使用配置模型开始执行', exact: true });
   await page.getByRole('combobox', { name: '执行范围', exact: true }).waitFor();
   assert.equal(await start.isDisabled(), true);

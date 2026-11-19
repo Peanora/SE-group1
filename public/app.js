@@ -1,19 +1,42 @@
-import { createPlanningReview } from './planning-review.js';
+import { canEditPlanTasks, createPlanningReview } from './planning-review.js';
 import { createSpecRepair } from './spec-repair.js';
+import { createPlanningIssue } from './planning-issue.js';
 import { createExecutionPanel } from './execution-panel.js';
+import { createVerificationPlans } from './verification-plans.js';
+import { createPlannedExecutionPanel } from './planned-execution.js';
+import { createProjectEvolution } from './project-evolution.js';
 import { createSourceChanges } from './source-changes.js';
 import { createSimulatedTasks, SIM_STATUS } from './simulated-tasks.js';
+import { createWorkspaceLayout } from './workspace-layout.js';
+import { createWorkspaceNotices } from './workspace-notices.js';
+import { createGuidedWorkspace } from './guided-workspace.js';
+import { deliverySteps } from './delivery-workflow.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const escape = (value = '') => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const state = { health: null, projects: [], project: null, run: null, stageId: 'spec', taskId: null, artifactName: 'task.md', tab: 'events', raw: false, busy: false, epoch: 0, selectionPending: false, pollTimer: null, feedback: '', importFile: null, filename: 'requirements.md' };
+let guided = new URLSearchParams(location.search).get('view') !== 'details';
+const isGuided = () => guided;
+const guideWorkspace = createGuidedWorkspace($('#guided-workspace'), { act: guideAction, isVisible: isGuided });
+let sourceReadyProject = '';
+let deliveryMarkup = '';
+let checklistAfterApproval = null;
+const notices = createWorkspaceNotices({ errorBanner: $('#error-banner'), errorText: $('#error-text'), dismissButton: $('#dismiss-error'), toast: $('#toast'),
+  getContext: () => ({ projectId: state.project?.id || '', runId: state.run?.id || '' }), locate: locateWorkspaceProblem });
+const workspaceLayout = createWorkspaceLayout({ getContext: () => ({ projectId: state.selectionPending ? '' : state.project?.id || '', runId: state.run?.id || '', busy: state.busy, runStatus: state.run?.status, historical: historicalRun() }),
+  isViewReady: view => view !== 'source' || sourceReadyProject === state.project?.id,
+  onViewChange: view => {
+    if (view === 'tasks') { state.tab = 'tasks'; renderRecords(); }
+    if (view === 'execution') $('#execution-tools').open = !state.run?.engineeringPlan || !state.health?.plannedExecution?.available;
+  } });
 let executionContextKey = '';
 let sourceContextKey = '';
 let simulationContextKey = '';
 const simulatedTasks = createSimulatedTasks({ api, getContext: () => ({ projectId: state.selectionPending ? '' : state.project?.id ?? '',
   runId: state.selectionPending ? '' : state.run?.id ?? '', planRevision: state.run?.planRevision ?? '', current: !state.selectionPending && !historicalRun() }),
-  onUpdate: () => { if (state.tab === 'tasks') renderRecords(); }, onError: showError });
+  onUpdate: () => { if (state.tab === 'tasks') renderRecords(); }, onError: error => showError(error, 'simulation'),
+  onFailure: ({ message, context }) => notices.error(message, { source: 'simulation', context }) });
 simulatedTasks.mount(document.querySelector('#simulation-panel-host'));
 function syncSimulatedTasks() {
   const key = JSON.stringify([state.selectionPending, state.project?.id, state.run?.id, state.run?.planRevision, historicalRun()]);
@@ -32,26 +55,65 @@ function executionContext() {
   return { projectId: state.project?.id ?? '', runId: run?.id ?? '', specRevision: run?.specRevision ?? '',
     planRevision: run?.planRevision ?? '', planningStatus: confirmed ? 'confirmed' : 'unconfirmed' };
 }
-const executionPanel = createExecutionPanel({ api, getContext: executionContext, onError: error => showError(error) });
+const executionPanel = createExecutionPanel({ api: executionApi, getContext: executionContext, onError: error => showError(error, 'execution'),
+  onFailure: ({ message, context }) => notices.error(message, { source: 'execution', context }) });
 void executionPanel.mount(document.querySelector('#execution-panel-host'));
+let verificationPlans = null, verificationContextKey = '';
+let plannedPanel = null, plannedContextKey = '';
+let evolutionPanel = null, evolutionContextKey = '';
+const evolutionContext = () => ({ ...executionContext(), sourceRevision: state.run?.sourceRevision ?? '', sourceGeneration: state.run?.sourceGeneration ?? 0 });
 function syncExecutionPanel() {
   const next = JSON.stringify(executionContext());
   if (next !== executionContextKey) { executionContextKey = next; void executionPanel.refresh(); }
+  // A running older server can serve fresh static files before its next restart.
+  // Only request the new routes after the server advertises the capability.
+  const available = state.health?.verificationPlanning?.available === true && state.health.verificationPlanning.phase === 'definition_only';
+  $('#verification-plans-section').hidden = !available;
+  $('#verification-plans-unavailable').hidden = !state.health || available;
+  if (!available && verificationPlans) { verificationPlans.destroy(); verificationPlans = null; verificationContextKey = ''; }
+  if (available && !verificationPlans) {
+    verificationPlans = createVerificationPlans({ api: verificationApi, getContext: executionContext, onError: error => showError(error, 'verification'),
+      onUpdate: renderDeliveryProgress, onApproved: () => { if (!guided) openDeliveryStage('coding'); void plannedPanel?.refresh(); }, isGuided,
+      failureRecovery: state.health.verificationPlanning.failureRecovery === true, canEdit: () => !state.health?.teamAccess?.enabled || state.actorRole === 'owner' });
+    verificationContextKey = next; void verificationPlans.mount($('#verification-plans-host'));
+  } else if (verificationPlans && next !== verificationContextKey) { verificationContextKey = next; void verificationPlans.refresh(); }
+  const plannedAvailable = available && state.health?.plannedExecution?.available === true && state.health.plannedExecution.profile === 'planned-web-v1';
+  $('#planned-execution-section').hidden = !plannedAvailable;
+  if (!plannedAvailable && plannedPanel) { plannedPanel.destroy(); plannedPanel = null; plannedContextKey = ''; }
+  if (plannedAvailable && !plannedPanel) {
+    plannedPanel = createPlannedExecutionPanel({ api: plannedApi, getContext: executionContext, onError: error => showError(error, 'planned'),
+      onFailure: ({ message, context }) => notices.error(message, { source: 'planned', context }),
+      onUpdate: renderDeliveryProgress, openVerification: () => openDeliveryStage('verification'), reviseChecklist: prepareChecklistRevision,
+      canReviseChecklist: () => !state.busy && !state.selectionPending && (!state.health?.teamAccess?.enabled || state.actorRole === 'owner'), isGuided });
+    plannedContextKey = next; void plannedPanel.mount($('#planned-execution-host'));
+  } else if (plannedPanel && next !== plannedContextKey) { plannedContextKey = next; void plannedPanel.refresh(); }
+  const evolutionAvailable = plannedAvailable && state.health?.localEvolution?.available === true;
+  $('#project-evolution-section').hidden = !evolutionAvailable;
+  if (!evolutionAvailable && evolutionPanel) { evolutionPanel.destroy(); evolutionPanel = null; evolutionContextKey = ''; }
+  const evolutionNext = JSON.stringify(evolutionContext());
+  if (evolutionAvailable && !evolutionPanel) {
+    evolutionPanel = createProjectEvolution({ api: plannedApi, getContext: evolutionContext, onError: error => showError(error, 'planned') });
+    evolutionContextKey = evolutionNext; void evolutionPanel.mount($('#project-evolution-host'));
+  } else if (evolutionPanel && evolutionNext !== evolutionContextKey) { evolutionContextKey = evolutionNext; void evolutionPanel.refresh(); }
 }
 const sourceChanges = createSourceChanges({ api: sourceApi, getContext: () => ({ projectId: state.selectionPending ? '' : state.project?.id ?? '' }),
+  onReady: ({ projectId }) => {
+    if (state.selectionPending || projectId !== state.project?.id) return;
+    sourceReadyProject = projectId; workspaceLayout.restore();
+  },
   onApplied: async change => { if (change.projectId !== state.project?.id || state.selectionPending) return; if (await refreshSourceProject(change.projectId, state.epoch)) toast('新需求已应用，请重新编排并确认规格和计划'); },
   onReplan: ({ projectId, revision, generation }) => {
     if (state.selectionPending || projectId !== state.project?.id || revision !== state.project.currentSourceRevision || generation !== state.project.sourceGeneration) throw new Error('需求版本已变化，请刷新核对后再重新规划。');
     if ($('#start-run').disabled) throw new Error('当前不能启动规划，请先核对已有运行状态、规划模式和预算提示。');
-    $('.flow-panel').scrollIntoView({ block: 'start' });
+    workspaceLayout.show('plan');
     return startRun({ revision, generation });
   },
-  onError: error => showError(error) });
+  onError: error => showError(error, 'source') });
 void sourceChanges.mount(document.querySelector('#source-changes-host'));
 function syncSourceChanges() {
   $('#source-changes-section').hidden = !state.project || state.selectionPending;
   const next = state.selectionPending ? '' : state.project?.id ?? '';
-  if (next !== sourceContextKey) { sourceContextKey = next; void sourceChanges.refresh(); }
+  if (next !== sourceContextKey) { sourceContextKey = next; sourceReadyProject = ''; void sourceChanges.refresh(); }
 }
 async function refreshSourceProject(projectId, epoch, expected) {
   const { project } = await api(`/api/projects/${encodeURIComponent(projectId)}`);
@@ -66,13 +128,32 @@ async function refreshSourceProject(projectId, epoch, expected) {
   return updatedEpoch === state.epoch && !state.selectionPending && state.project?.id === projectId;
 }
 async function sourceApi(url, options) {
-  const projectId = state.project?.id, epoch = state.epoch;
+  const projectId = state.project?.id, epoch = state.epoch, noticeContext = { projectId, runId: state.run?.id || '' };
   const result = await api(url, options);
+  if (options?.method === 'POST' && epoch === state.epoch && projectId === state.project?.id) notices.clear({ source: 'source', context: noticeContext });
   // A different request may apply a source version while this page is open.
   // Re-read persisted project facts before displaying actions for its old runs.
   if ((!options?.method || options.method === 'GET') && projectId && !state.selectionPending && epoch === state.epoch && state.project?.id === projectId
     && url === `/api/projects/${encodeURIComponent(projectId)}/changes` && Number.isSafeInteger(result?.current?.generation)
     && result.current.generation !== (state.project.sourceGeneration ?? 0)) await refreshSourceProject(projectId, epoch, result.current);
+  return result;
+}
+async function executionApi(url, options) {
+  const context = { projectId: state.project?.id || '', runId: state.run?.id || '' };
+  const result = await api(url, options);
+  if (options?.method === 'POST') notices.clear({ source: 'execution', context });
+  return result;
+}
+async function verificationApi(url, options) {
+  const context = { projectId: state.project?.id || '', runId: state.run?.id || '' };
+  const result = await api(url, options);
+  if (options?.method === 'POST') { notices.clear({ source: 'verification', context }); void plannedPanel?.refresh(); }
+  return result;
+}
+async function plannedApi(url, options) {
+  const context = { projectId: state.project?.id || '', runId: state.run?.id || '' };
+  const result = await api(url, options);
+  if (options?.method === 'POST') notices.clear({ source: 'planned', context });
   return result;
 }
 const ACTIVE = new Set(['running', 'paused', 'awaiting_spec', 'awaiting_review']);
@@ -153,14 +234,14 @@ const SAMPLE = `# 工单协作系统需求
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } });
   const data = await response.json().catch(() => ({}));
+  if (response.status === 401 && state.health?.teamAccess?.enabled) window.location.replace('/team.html');
   if (!response.ok) throw new Error(data.error || `服务请求失败（${response.status}）`);
   return data;
 }
 function basePath() { return `/api/projects/${encodeURIComponent(state.project.id)}/runs/${encodeURIComponent(state.run.id)}`; }
-function showError(error) { $('#error-text').textContent = error?.message || String(error); $('#error-banner').hidden = false; }
-function clearError() { $('#error-banner').hidden = true; }
-let toastTimer;
-function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 3600); }
+function showError(error, source = 'planning') { notices.error(error, { source }); }
+function clearError() { notices.clear(); }
+function toast(message) { notices.success(message); }
 function formatTime(value, full = false) {
   if (!value || Number.isNaN(new Date(value).getTime())) return '—';
   return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', ...(full ? { month: '2-digit', day: '2-digit' } : {}), hour: '2-digit', minute: '2-digit', ...(full ? {} : { second: '2-digit' }), hour12: false }).format(new Date(value));
@@ -180,30 +261,274 @@ function replacePreservingFocus(container, html) {
 function sortedRuns(project = state.project) { return [...(project?.runs || [])].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)); }
 function stageOf(id) { return state.run?.stages?.find((stage) => stage.id === id); }
 function stageTitle(id) { return stageOf(id)?.title || STAGES.find((stage) => stage.id === id)?.title || '运行'; }
-function specClarificationPending(run = state.run) { return Boolean(run?.workflowVersion === 2 && run.status === 'awaiting_spec' && run.spec?.clarificationRequired); }
+function specClarificationPending(run = state.run) {
+  return Boolean(run?.workflowVersion === 2 && run.status === 'awaiting_spec'
+    && (run.spec?.clarificationRequired || run.specQuestions?.some(item => item.blocking && !item.answer?.trim())));
+}
+function issueCoversSpecQuestions(run = state.run) {
+  return specClarificationPending(run) && run?.planningIssue?.stageId === 'spec' && !run.planningIssue.fromInput;
+}
 function runStatusLabel(run = state.run) { return !run ? '' : specClarificationPending(run) ? '等待补充需求' : STATUS[run.status] || run.status; }
+function workflowSteps() {
+  return deliverySteps({ project: state.project, run: state.selectionPending ? null : state.run, historical: historicalRun(),
+    verification: verificationPlans?.workflowProgress(), development: plannedPanel?.workflowProgress() });
+}
+function renderDeliveryProgress() {
+  const steps = workflowSteps(), host = $('#delivery-workflow');
+  host.hidden = !state.project;
+  const upcoming = steps.find(step => step.state !== 'done');
+  const markup = steps.map(({ id, title, state: status, text, detail }, index) => `<li><button type="button" class="delivery-step" data-delivery-step="${id}" data-focus-key="delivery-${id}" data-state="${status}" ${upcoming?.id === id ? 'aria-current="step"' : ''} ${state.selectionPending ? 'disabled' : ''}><span aria-hidden="true">${index + 1}</span><strong>${title}</strong><span class="delivery-state">${escape(text)}</span><small>${escape(detail)}</small></button></li>`).join('');
+  if (deliveryMarkup !== markup) {
+    deliveryMarkup = markup;
+    replacePreservingFocus($('#delivery-steps'), markup);
+  }
+  renderWorkspaceContext(steps);
+}
+function renderGuide(steps) {
+  document.body.dataset.workspaceLayout = guided ? 'guide' : 'details';
+  const toggle = $('#workspace-view-toggle');
+  toggle.textContent = guided ? '查看技术详情' : '返回引导流程';
+  const verification = verificationPlans?.guide();
+  const prepareChecklist = guided && state.health?.model?.configured === true && Boolean(state.run?.engineeringPlan && verificationPlans);
+  const approvalKey = JSON.stringify([state.project?.id, state.run?.id, state.run?.planRevision]);
+  if (checklistAfterApproval && (checklistAfterApproval !== approvalKey || state.run.status === 'failed')) checklistAfterApproval = null;
+  if (prepareChecklist && checklistAfterApproval === approvalKey && !state.busy && !state.selectionPending && state.run.status === 'succeeded'
+    && (verification?.canGenerate || verification?.working || verification?.draft || verification?.failed || verification?.state === 'done')) {
+    checklistAfterApproval = null;
+    if (verification.canGenerate && !verification.working && !verification.draft && !verification.failed && verification.state !== 'done') queueMicrotask(() => {
+      if (guided && approvalKey === JSON.stringify([state.project?.id, state.run?.id, state.run?.planRevision])) void verificationPlans?.guideAct('propose');
+    });
+  }
+  const embedded = guideWorkspace.render({ project: state.project, run: state.run, historical: historicalRun(), steps,
+    busy: state.busy || state.selectionPending, model: state.health?.model?.configured === true,
+    canEdit: !state.health?.teamAccess?.enabled || state.actorRole === 'owner',
+    canStart: !$('#start-run').disabled, startLabel: '开始整理需求',
+    verification, development: plannedPanel?.guide(), prepareChecklist });
+  document.body.dataset.guideEmbedded = embedded;
+  if (embedded === 'answers' && state.run?.planningIssue && $('#planning-issue-host').hidden) {
+    workspaceLayout.show('plan');
+    planningIssue.open({ focus: false });
+  }
+}
+function changeView(guide) {
+  guided = guide;
+  renderProjects();
+  renderDeliveryProgress();
+  if (guide) {
+    window.scrollTo({ top: 0 });
+    $('#guided-workspace h2')?.focus({ preventScroll: true });
+  }
+  void verificationPlans?.refresh();
+  void plannedPanel?.refresh();
+}
+function guideAction(action) {
+  if (!guided) return;
+  if (action === 'guideNavigation') { renderDeliveryProgress(); return; }
+  if (state.busy || state.selectionPending) return;
+  if (action === 'new' || action === 'sample') { openProjectDialog({ sample: action === 'sample' }); return; }
+  if (action === 'current') {
+    const currentRun = sortedRuns().find(run => !historicalRun(run));
+    if (currentRun) void selectRun(currentRun.id);
+    else { changeView(false); openSourceEditor(); }
+    return;
+  }
+  if (action === 'start') {
+    const model = $('#mode-select option[value="model"]');
+    $('#mode-select').value = model.disabled ? 'local' : 'model';
+    renderControls();
+    if ($('#start-run').disabled) showError(new Error('当前还不能开始整理。请检查模型是否可用，或查看是否有旧操作待确认。'));
+    else void startRun();
+    return;
+  }
+  if (action === 'source') { $('#source-button').click(); return; }
+  if (action === 'resume') { void runAction('resume'); return; }
+  if (action === 'refreshProgress') { void verificationPlans?.refresh(); void plannedPanel?.refresh(); return; }
+  if (action === 'confirmPlan') {
+    const confirm = $('#approve-button');
+    if (confirm && !confirm.disabled) {
+      if (state.run?.status === 'awaiting_review' && state.run.engineeringPlan && verificationPlans && state.health?.model?.configured === true) {
+        checklistAfterApproval = JSON.stringify([state.project.id, state.run.id, state.run.planRevision]);
+      }
+      confirm.click(); return;
+    }
+    changeView(false);
+    handleWorkspaceNext();
+    return;
+  }
+  const verificationAction = { approveVerification: 'approve', generateVerification: 'propose', repairVerification: 'quickRepair' }[action];
+  if (verificationAction) { void verificationPlans?.guideAct(verificationAction); return; }
+  const developmentAction = { startBuild: 'start', repairBuild: 'repair', stopBuild: 'cancel', resumeBuild: 'resume', recoverBuild: 'recover', reviseChecklist: 'revise-checklist',
+    preview: 'preview', stopPreview: 'stop-preview' }[action];
+  if (developmentAction) { void plannedPanel?.guideAct(developmentAction); return; }
+  changeView(false);
+  if (action === 'tasks') openDeliveryStage('plan');
+  else if (action === 'documents') { showArtifact('task.md'); focusWorkspaceTarget($('#records-body')); }
+  else if (action === 'verificationDetails') openDeliveryStage('verification');
+  else if (action === 'codingDetails') openDeliveryStage('coding');
+  else if (action === 'buildDetails') openDeliveryStage('testing');
+  else if (action === 'deliveryDetails') openDeliveryStage('delivery');
+  else if (action === 'editSource') openSourceEditor();
+  else if (action === 'planningFailure') handleWorkspaceNext();
+}
+function renderWorkspaceContext(steps = workflowSteps()) {
+  const run = state.run, historical = historicalRun(), context = $('#workspace-context');
+  let title = '开始整理项目需求', note = '先选择规划模式，再开始编排。模型模式会按显示的预算产生用量。', action = '查看规划控制', kind = 'start';
+  if (historical) { title = '正在查看历史需求版本'; note = '历史内容只读。修改需求和再次规划会创建新的版本，原记录保留。'; action = '查看当前需求'; kind = 'source'; }
+  else if (['awaiting_spec', 'awaiting_review'].includes(run?.status) && run.planningIssue) {
+    title = '规划还有信息需要确认'; note = '逐题填写，提交后模型会自动核对是否还需要补充。'; action = '查看问题'; kind = 'review';
+  } else if (run?.status === 'awaiting_spec') {
+    title = specClarificationPending(run) ? '下一步：补充需求信息' : '下一步：核对并确认规格';
+    note = specClarificationPending(run) ? '回答当前问题并保存，再根据回答整理规格。已保存的回答会保留。' : '核对功能规则与验收，保存修订后再确认；确认前不会生成开发计划。';
+    action = '处理规格'; kind = 'review';
+  } else if (run?.status === 'awaiting_review') {
+    title = '下一步：核对开发计划'; note = '任务图和编辑放在“开发任务”。保存修订后仍需确认计划，才能导出文档。'; action = '核对计划'; kind = 'review';
+  } else if (run?.status === 'failed') {
+    const failed = run.stages?.find(stage => stage.status === 'failed');
+    const failure = failed?.id === 'spec' ? run.specificationFailure : ['tasks', 'architecture'].includes(failed?.id) ? run.engineeringFailure : null;
+    title = `${failed?.title || '本次规划'}未完成`;
+    note = String(failure?.message || failed?.error || '查看失败原因，已有输入与历史会保留。').slice(0, 180);
+    action = run.planningIssue ? '查看问题' : '查看失败与处理'; kind = 'failure';
+  } else if (run?.status === 'succeeded') {
+    title = '规划文档已生成'; note = '可以查看任务与文档。真实代码执行和验收在独立工作区，规划完成不代表业务软件已验收。'; action = '查看文档'; kind = 'artifacts';
+    if (run.engineeringPlan && plannedPanel && executionContext().planningStatus === 'confirmed') {
+      const [, , , , , preparation, coding, testing, delivery] = steps;
+      const next = delivery.state === 'done' ? delivery : preparation.state !== 'done' ? preparation
+        : ['working', 'failed', 'waiting'].includes(testing.state) ? testing : coding;
+      kind = `delivery:${next.id}`;
+      ({ title, note, action } = ({
+        verification: { title: '准备验收清单', note: '确认这次开发要通过哪些接口和浏览器检查，再开始编写代码。', action: '打开验收清单' },
+        coding: { title: '编写代码', note: next.detail || next.text, action: '查看开发' },
+        testing: { title: '测试与审查', note: next.detail || next.text, action: '查看检查结果' },
+        delivery: { title: '当前版本已通过验收', note: '可以查看软件预览和源码交付。', action: '查看交付' },
+      })[next.id]);
+      const failure = plannedPanel.workflowProgress();
+      if (next.state === 'failed' && failure.failureHelp) {
+        title = failure.failureHelp.title;
+        note = `${failure.failureHelp.detail} ${failure.failureHelp.nextStep}`;
+        if (failure.canReviseChecklist) { kind = 'reviseChecklist'; action = '准备清单修订'; }
+      }
+      $('#run-status').textContent = '规划已确认';
+      $('#run-progress').textContent = `${steps.filter(step => step.state === 'done').length} / ${steps.length} 个步骤已完成`;
+    }
+  } else if (run?.status === 'running') {
+    const active = run.stages?.filter(stage => stage.status === 'running').map(stage => stage.title).join('、');
+    title = active ? `正在${active}` : '规划正在推进'; note = '可以切换工作区查看内容。进度与失败原因由后端实际结果更新。'; action = '查看规划过程'; kind = 'process';
+  } else if (run?.status === 'paused') {
+    title = '规划已暂停'; note = '查看已完成阶段和暂停状态，确认后可继续推进。'; action = '查看暂停状态'; kind = 'process';
+  }
+  context.dataset.status = run?.status || 'idle';
+  $('#workspace-context-title').textContent = title; $('#workspace-context-note').textContent = note;
+  const button = $('[data-workspace-next]'); button.textContent = action; button.dataset.nextKind = kind;
+  button.disabled = !state.project || state.busy || state.selectionPending;
+  const preparation = steps.find(step => step.id === 'verification');
+  const failure = plannedPanel?.workflowProgress().failureHelp;
+  $('#execution-next-hint').textContent = failure?.nextStep ?? (preparation?.state === 'done' ? '可以开始开发，执行后在这里核对测试和交付。' : '先准备并确认接口与浏览器验收清单。');
+  renderGuide(steps);
+}
+function focusWorkspaceTarget(target) {
+  if (!target || !target.getClientRects().length) return;
+  if (!target.matches('button, summary, input, select, textarea, a[href]')) target.setAttribute('tabindex', '-1');
+  target.scrollIntoView({ block: 'nearest' });
+  target.focus({ preventScroll: true });
+}
+function openDeliveryStage(stage) {
+  if (state.selectionPending || !state.project) return;
+  const run = state.run;
+  if (stage === 'source') { $('#source-button').click(); return; }
+  if (stage === 'spec') { locateWorkspaceProblem({ source: 'planning', stageId: 'spec', target: '#stage-inspector' }); return; }
+  if (stage === 'plan' && run?.tasks?.length) { simulatedTasks.showPlan(); workspaceLayout.show('tasks'); focusWorkspaceTarget($('#records-body')); return; }
+  if (stage === 'plan') { locateWorkspaceProblem({ source: 'planning', stageId: run?.stages?.find(item => ['architecture', 'tasks', 'review'].includes(item.id) && item.status === 'failed')?.id || 'tasks', target: '#stage-inspector' }); return; }
+  if (stage === 'spec-approval' || stage === 'plan-approval') {
+    workspaceLayout.show('plan');
+    if (stage === 'spec-approval' && specClarificationPending() && planningIssue.open()) { renderControls(); return; }
+    if (stage === 'spec-approval' && run?.approvals?.spec?.revision && run.status !== 'awaiting_spec') { showArtifact('spec.md'); focusWorkspaceTarget($('#records-body')); return; }
+    focusWorkspaceTarget($('#review-heading') || $('#stage-inspector'));
+    return;
+  }
+  workspaceLayout.show('execution');
+  const verification = $('#verification-plans-section');
+  verification.open = stage === 'verification' && !verification.hidden;
+  if (stage === 'verification') focusWorkspaceTarget(!verification.hidden ? $('summary', verification) : $('#verification-plans-unavailable'));
+  else focusWorkspaceTarget(plannedPanel?.focusStage(stage) || $('#execution-tools > summary'));
+}
+function locateWorkspaceProblem({ source = 'planning', stageId, target } = {}) {
+  if (guided) changeView(false);
+  const views = { source: 'source', execution: 'execution', planned: 'execution', verification: 'execution', simulation: 'tasks', tasks: 'tasks' };
+  workspaceLayout.show(views[source] || 'plan');
+  if (stageId) { state.stageId = stageId; renderWorkflow(); renderInspector(); }
+  if (source === 'planning') $('#workflow-details').open = true;
+  if (['planning', 'review'].includes(source) && (!stageId || stageId === state.run?.planningIssue?.stageId) && planningIssue.open()) {
+    $('#spec-repair-host').hidden = true;
+    if (issueCoversSpecQuestions()) $('#review-banner').hidden = true;
+    return;
+  }
+  if (source === 'simulation') $('#simulation-tools').open = true;
+  if (source === 'verification') $('#verification-plans-section').open = true;
+  if (source === 'execution') $('#execution-tools').open = true;
+  let element = typeof target === 'string' ? $(target) : target;
+  if (!element?.isConnected) {
+    const local = source === 'source' ? $('#source-changes-host') : source === 'execution' ? $('#execution-panel-host') : source === 'planned' ? $('#planned-execution-host') : source === 'verification' ? $('#verification-plans-host') : source === 'simulation' ? $('#simulation-panel-host') : stageId === 'spec' && !$('#spec-repair-host').hidden ? $('#spec-repair-host') : $('#stage-inspector');
+    element = [...local.querySelectorAll('[role="alert"]')].find(item => item.getClientRects().length) || local;
+  }
+  element.setAttribute('tabindex', '-1'); element.scrollIntoView({ block: 'nearest' }); element.focus({ preventScroll: true });
+}
+function handleWorkspaceNext() {
+  const kind = $('[data-workspace-next]').dataset.nextKind;
+  if (kind === 'reviseChecklist') { void plannedPanel?.guideAct('revise-checklist'); return; }
+  if (kind?.startsWith('delivery:')) { openDeliveryStage(kind.slice('delivery:'.length)); return; }
+  if (kind === 'source') { workspaceLayout.show('source'); return; }
+  if (kind === 'artifacts') { showArtifact('task.md'); return; }
+  if (kind === 'failure') { locateWorkspaceProblem({ source: 'planning', stageId: state.run?.stages.find(stage => stage.status === 'failed')?.id }); return; }
+  workspaceLayout.show('plan');
+  if (kind === 'review' && state.run?.planningIssue) { locateWorkspaceProblem({ source: 'planning', stageId: state.run.planningIssue.stageId }); return; }
+  if (kind === 'process') { $('#workflow-details').open = true; $('#stage-inspector').setAttribute('tabindex', '-1'); $('#stage-inspector').focus({ preventScroll: true }); }
+  else if (kind === 'review') { const heading = $('#review-heading'); heading?.setAttribute('tabindex', '-1'); heading?.scrollIntoView({ block: 'nearest' }); heading?.focus({ preventScroll: true }); }
+  else $('#start-run').focus({ preventScroll: true });
+}
+async function prepareChecklistRevision(executionId) {
+  if (!state.run || historicalRun() || state.busy || state.selectionPending || !/^[A-Za-z0-9_-]{1,128}$/u.test(executionId)) return;
+  const { projectId, runId, specRevision, planRevision } = executionContext();
+  const url = `${basePath()}/development-executions/${encodeURIComponent(executionId)}/revise-checklist`;
+  setBusy(true); clearError(); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
+  let prepared = false;
+  try {
+    const { run } = await plannedApi(url, { method: 'POST', body: '{}' });
+    if (epoch !== state.epoch || state.project?.id !== projectId || state.run?.id !== runId) return;
+    if (run?.id !== runId || run.specRevision !== specRevision || !run.planRevision || run.planRevision === planRevision) {
+      throw new Error('修订结果还没有确认，刷新后可查看当前方案。');
+    }
+    updateRun(run); renderHeader(); workspaceLayout.show('plan'); prepared = true;
+    toast('已保存方案修订。核对并确认方案后，系统会准备新的验收清单。');
+  } catch (error) { if (epoch === state.epoch) showError(error, 'planned'); }
+  finally { if (epoch === state.epoch) { setBusy(false); if (prepared) changeView(true); schedulePoll(); } }
+}
 const planningReview = createPlanningReview({
-  container: $('#review-banner'), getState: () => ({ ...state, run: historicalRun() ? { ...state.run, sourceSuperseded: true } : state.run, busy: state.busy || state.selectionPending }), submit: reviewAction,
+  container: $('#review-banner'), getState: () => ({ ...state, run: historicalRun() ? { ...state.run, sourceSuperseded: true } : state.run,
+    busy: state.busy || state.selectionPending, taskEditorOpen: $('#task-edit-dialog').open }), submit: reviewAction,
   refresh: async () => {
     const id = state.run?.id; const epoch = state.epoch;
     const { run } = await api(basePath());
     if (id === state.run?.id && epoch === state.epoch) { updateRun(run); schedulePoll(); }
   },
-  showArtifact: (name) => { showArtifact(name); $('#records-body').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); },
+  showArtifact,
   addFeature: openFeatureEditor,
+  inspectIssue: () => locateWorkspaceProblem({ source: 'review' }),
   onPlanDraft: () => { if (state.tab === 'tasks') renderRecords(); },
+  onPlanRevised: () => { workspaceLayout.closeEditor({ restoreFocus: false }); workspaceLayout.show('plan'); },
   toast,
 });
 function openSourceEditor() {
   const section = $('#source-changes-section');
   if (!section || section.hidden) { toast('当前项目没有可提交的原始需求修改入口。'); return; }
-  section.open = true;
-  section.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+  workspaceLayout.show('source'); section.open = true;
+  sourceChanges.closeFeature({ focus: false });
+  $('.source-changes textarea.sc-source')?.scrollIntoView({ block: 'center' });
 }
 async function openFeatureEditor() {
   if (!state.project || state.selectionPending) return;
-  openSourceEditor();
+  workspaceLayout.show('source');
   await sourceChanges.openFeature();
+  $('.source-changes .sc-feature')?.scrollIntoView({ block: 'start' });
 }
 const specRepair = createSpecRepair({
   container: $('#spec-repair-host'), getState: () => ({ run: historicalRun() ? { ...state.run, sourceSuperseded: true } : state.run, busy: state.busy || state.selectionPending }),
@@ -213,10 +538,21 @@ const specRepair = createSpecRepair({
     if (id === state.run?.id && epoch === state.epoch) { updateRun(run); schedulePoll(); }
   }, toast, openSourceEditor,
 });
+const planningIssue = createPlanningIssue({
+  container: $('#planning-issue-host'),
+  getState: () => ({ run: historicalRun() ? null : state.run, busy: state.busy || state.selectionPending,
+    canEdit: !state.health?.teamAccess?.enabled || state.actorRole === 'owner' }),
+  submit: reviewAction,
+});
 
 function renderProjects() {
   $('#project-count').textContent = state.projects.length;
-  $('#project-list').innerHTML = state.projects.length ? state.projects.map((project) => `<div class="project-row"><button class="project-item ${project.id === state.project?.id ? 'active' : ''}" data-project="${escape(project.id)}" aria-current="${project.id === state.project?.id ? 'page' : 'false'}"><svg class="project-icon" viewBox="0 0 20 22" aria-hidden="true"><path d="M3 2h9l5 5v13H3Z"/><path d="M12 2v6h5M6 12h8M6 16h5"/></svg><span class="project-info"><span class="project-name">${escape(project.name)}</span><span class="project-meta">${escape(project.lastRunStatus ? STATUS[project.lastRunStatus] || project.lastRunStatus : '尚未编排')} / ${project.runCount || 0} 次运行</span></span><span class="project-state-dot ${escape(project.lastRunStatus || '')}"></span></button><button type="button" class="project-delete" data-delete-project="${escape(project.id)}" aria-label="删除项目：${escape(project.name)}" title="删除项目">×</button></div>`).join('') : '<div class="empty-projects">尚无项目<br>从一份需求文档开始</div>';
+  $('#project-list').innerHTML = state.projects.length ? state.projects.map(project => {
+    const status = project.lastRunStatus;
+    const label = guided && status === 'succeeded' ? '规划已确认' : status ? STATUS[status] || status : '尚未编排';
+    const active = project.id === state.project?.id;
+    return `<div class="project-row"><button class="project-item ${active ? 'active' : ''}" data-project="${escape(project.id)}" aria-current="${active ? 'page' : 'false'}"><svg class="project-icon" viewBox="0 0 20 22" aria-hidden="true"><path d="M3 2h9l5 5v13H3Z"/><path d="M12 2v6h5M6 12h8M6 16h5"/></svg><span class="project-info"><span class="project-name">${escape(project.name)}</span><span class="project-meta">${escape(label)}${guided ? '' : ` / ${project.runCount || 0} 次运行`}</span></span><span class="project-state-dot ${escape(status || '')}"></span></button><button type="button" class="project-delete" data-delete-project="${escape(project.id)}" aria-label="删除项目：${escape(project.name)}" title="删除项目">×</button></div>`;
+  }).join('') : '<div class="empty-projects">尚无项目<br>从一份需求文档开始</div>';
 }
 function renderHeader() {
   $('#project-title').textContent = state.project?.name || '需求编排工作台';
@@ -233,27 +569,41 @@ function renderControls() {
   const run = state.run;
   const modelNotice = $('#planning-model-notice'), modelBudget = state.health?.modelPlanning;
   modelNotice.hidden = run?.mode !== 'model' && $('#mode-select').value !== 'model';
-  const unlimitedEngineering = modelBudget?.engineeringCallLimit === false
+  const unlimitedEngineering = modelBudget?.engineeringCallLimit === false && modelBudget.engineeringMaxCalls === null;
+  const unlimitedSpecification = modelBudget?.specificationCallLimit === false && modelBudget.specificationMaxCalls === null;
+  const knownBudget = (unlimitedEngineering || modelBudget?.engineeringCallLimit === true && Number.isSafeInteger(modelBudget.engineeringMaxCalls) && modelBudget.engineeringMaxCalls > 0 && modelBudget.engineeringMaxCalls <= 20)
     && Number.isSafeInteger(modelBudget?.engineeringTimeoutMs) && modelBudget.engineeringTimeoutMs > 0
     && Number.isSafeInteger(modelBudget?.engineeringTotalTimeoutMs) && modelBudget.engineeringTotalTimeoutMs > 0;
-  const knownBudget = unlimitedEngineering || Number.isSafeInteger(modelBudget?.engineeringMaxCalls) && modelBudget.engineeringMaxCalls > 0
-    && Number.isSafeInteger(modelBudget?.engineeringTimeoutMs) && modelBudget.engineeringTimeoutMs > 0;
-  const knownSpecBudget = Number.isSafeInteger(modelBudget?.specificationMaxCalls) && modelBudget.specificationMaxCalls > 0
+  const knownSpecBudget = (unlimitedSpecification || Number.isSafeInteger(modelBudget?.specificationMaxCalls) && modelBudget.specificationMaxCalls > 0 && modelBudget.specificationMaxCalls <= 20)
     && Number.isSafeInteger(modelBudget?.specificationTimeoutMs) && modelBudget.specificationTimeoutMs > 0;
-  modelNotice.textContent = `${run?.mode === 'model' && run.workflowVersion !== 2 ? '当前显示旧版运行，按原流程仅整理规格。' : ''}新版模型运行会发送需求以整理规格；确认规格后，还会请求工程设计并产生用量。${knownSpecBudget ? `每次运行规格整理最多尝试 ${modelBudget.specificationMaxCalls} 次，单次最多 ${modelBudget.specificationTimeoutMs / 1000} 秒。` : '当前服务未提供规格调用预算，请重启本地服务并刷新核对。'}${knownBudget ? unlimitedEngineering ? `工程设计不设调用次数上限，单次最多 ${modelBudget.engineeringTimeoutMs / 1000} 秒，本次总时长最多 ${Math.round(modelBudget.engineeringTotalTimeoutMs / 60000)} 分钟；自动修正会在通过、重复同一错误、总时长用尽或你停止时结束。` : `每次运行工程设计最多尝试 ${modelBudget.engineeringMaxCalls} 次，单次最多 ${modelBudget.engineeringTimeoutMs / 1000} 秒。` : '工程设计预算尚未获取，请刷新核对。'}架构与任务共用一次设计请求，结果仍需你审阅。`;
+  const specLimitText = !knownSpecBudget ? '规格调用次数未知' : unlimitedSpecification ? '规格调用次数不限' : `规格最多调用 ${modelBudget.specificationMaxCalls} 次`;
+  const engineeringLimitText = !knownBudget ? '工程调用次数未知' : unlimitedEngineering ? '工程调用次数不限' : `工程最多调用 ${modelBudget.engineeringMaxCalls} 次`;
+  modelNotice.textContent = `整理规格以及确认规格后的工程设计会产生模型用量。${specLimitText}。${engineeringLimitText}。`;
+  if (knownSpecBudget) modelNotice.textContent += `单次整理规格最多 ${modelBudget.specificationTimeoutMs / 1000} 秒。`;
+  if (knownBudget) modelNotice.textContent += `单次工程设计最多 ${modelBudget.engineeringTimeoutMs / 1000} 秒，${unlimitedEngineering ? '每轮自动修正' : '总时长'}最多 ${Math.round(modelBudget.engineeringTotalTimeoutMs / 60000)} 分钟。`;
   const specification = run?.specificationHistory?.at(-1);
   const frozenSpecification = run?.specificationBudget;
-  if (run?.mode === 'model' && knownSpecBudget && Number.isSafeInteger(frozenSpecification?.maxCalls) && frozenSpecification.maxCalls > 0
+  if (run?.mode === 'model' && knownSpecBudget && !unlimitedSpecification && Number.isSafeInteger(frozenSpecification?.maxCalls) && frozenSpecification.maxCalls > 0
     && Number.isSafeInteger(frozenSpecification.timeoutMs) && frozenSpecification.timeoutMs > 0) modelNotice.textContent += ` 当前运行规格整理上限：${Math.min(modelBudget.specificationMaxCalls, frozenSpecification.maxCalls)} 次、每次 ${Math.min(modelBudget.specificationTimeoutMs, frozenSpecification.timeoutMs) / 1000} 秒；已尝试 ${Number.isSafeInteger(run.specificationCalls) ? run.specificationCalls : '未知'} 次。`;
   if (specification) modelNotice.textContent += ` 最近规格模型调用：${({ running: '处理中', succeeded: '规格已整理', failed: '失败', interrupted: '已中断' })[specification.status] || '状态未知'}；输入 ${Number.isSafeInteger(specification.usage?.inputTokens) ? specification.usage.inputTokens : '未知'}、输出 ${Number.isSafeInteger(specification.usage?.outputTokens) ? specification.usage.outputTokens : '未知'} token。`;
   else if (run?.mode === 'model' && run.stages?.some(stage => stage.id === 'spec' && stage.attempt > 0)) modelNotice.textContent += ' 这次规格整理没有可核对的用量记录，用量为未知。';
   if (run?.specificationRevalidations?.at(-1)?.attemptId === specification?.id) modelNotice.textContent += ' 此响应已免费重新校验并恢复为待确认规格；原失败用量记录保留，恢复未新增模型调用。';
   const design = run?.engineeringHistory?.at(-1);
+  const frozenEngineering = run?.engineeringBudget;
+  if (run?.mode === 'model' && knownBudget && !unlimitedEngineering && Number.isSafeInteger(frozenEngineering?.maxCalls)) modelNotice.textContent += ` 当前运行工程上限：${Math.min(modelBudget.engineeringMaxCalls, frozenEngineering.maxCalls)} 次；已预留 ${Number.isSafeInteger(run.engineeringCalls) ? run.engineeringCalls : '未知'} 次，修订和重启不重置。`;
+  const explanation = run?.planningIssueHistory?.at(-1);
+  if (explanation) modelNotice.textContent += ` 最近问题说明：输入 ${explanation.usage?.inputTokens ?? '未知'}、输出 ${explanation.usage?.outputTokens ?? '未知'} token。`;
+  const planningPending = [...(state.project?.runs ?? []), ...(run ? [run] : [])].some(item => [...(item.specificationHistory ?? []), ...(item.engineeringHistory ?? []), ...(item.planningIssueHistory ?? [])].some(attempt => attempt.coordinationRequired && !attempt.coordination?.resolved));
+  if (planningPending) modelNotice.textContent += ' 前次规划请求或私有回执仍待核对，不能重复发起模型、发布新输入或删除项目；本地结束不表示远端已停。';
   if (design) modelNotice.textContent += ` 最近设计：${({ running: '处理中', succeeded: '草案已生成', failed: '失败', interrupted: '已中断' })[design.status] || '状态未知'}；输入 ${Number.isSafeInteger(design.usage?.inputTokens) ? design.usage.inputTokens : '未知'}、输出 ${Number.isSafeInteger(design.usage?.outputTokens) ? design.usage.outputTokens : '未知'} token。`;
+  $('.workspace-budget').hidden = modelNotice.hidden;
+  const charge = $('#planning-charge-notice');
+  charge.hidden = $('#mode-select').value !== 'model';
+  charge.textContent = `模型模式会产生用量。${specLimitText}。${engineeringLimitText}。`;
   const historical = historicalRun(run), active = !historical && ACTIVE.has(run?.status);
   const changing = state.busy || state.selectionPending;
-  $$('[data-delete-project]').forEach(button => { button.disabled = changing; });
-  $('#start-run').disabled = !state.project || changing || active || ($('#mode-select').value === 'model' && (!knownSpecBudget || !knownBudget));
+  $$('[data-delete-project]').forEach(button => { button.disabled = changing || planningPending && button.dataset.deleteProject === state.project?.id; });
+  $('#start-run').disabled = !state.project || changing || active || planningPending || ($('#mode-select').value === 'model' && (!knownSpecBudget || !knownBudget));
   $('#start-run span').textContent = run ? '再次编排' : '开始编排';
   $('#mode-select').disabled = changing || active;
   $('#failure-select').disabled = changing || active;
@@ -273,7 +623,11 @@ function renderControls() {
   $('#workflow-subtitle').textContent = run ? `${run.mode === 'model' ? '模型规划' : '本地规则规划'}　运行 ${run.id.slice(-8)}${run.workflowVersion === 2 ? '　两次人工确认' : '　旧版流程'}` : '六个阶段，两次确认，保留每版依据';
   $('#workflow-confirmation-legend').textContent = run && run.workflowVersion !== 2 ? '旧版流程：导出前确认' : '先确认规格，再确认计划';
   $('#source-history-notice').hidden = !historical;
-  planningReview.render(); specRepair.render(); syncSourceChanges();
+  planningReview.render(); specRepair.render();
+  const issueOpen = planningIssue.render();
+  if (issueOpen) $('#spec-repair-host').hidden = true;
+  if (issueCoversSpecQuestions(run) && (issueOpen || run.planningIssue.qa?.length === 0 || run.planningIssue.qa?.some(item => item.previousAnswer))) $('#review-banner').hidden = true;
+  syncSourceChanges();
   $('#event-count').textContent = run?.events?.length || 0;
   $('#task-count').textContent = run?.tasks?.length || 0;
   $('#artifact-count').textContent = run?.artifacts?.length || 0;
@@ -284,7 +638,7 @@ function renderWorkflow() {
   const html = `<svg class="flow-edges" viewBox="0 0 1000 292" preserveAspectRatio="none" aria-hidden="true"><defs>${markers}</defs>${edge('intake', 'spec', 'M165 149H200')}${edge('spec', 'architecture', 'M350 149H375V69H400')}${edge('spec', 'tasks', 'M350 149H375V229H400')}${edge('architecture', 'review', 'M550 69H590V149H620')}${edge('tasks', 'review', 'M550 229H590V149')}${edge('review', 'export', 'M770 149H820')}</svg>${STAGES.map((fallback, i) => {
     const stage = stageOf(fallback.id) || { ...fallback, status: 'pending', attempt: 0 };
     const specWaiting = fallback.id === 'spec' && specClarificationPending();
-    const waiting = specWaiting ? '等待补充需求' : fallback.id === 'export' && state.run?.status === 'awaiting_review' ? '等待计划确认' : ['architecture', 'tasks'].includes(fallback.id) && state.run?.status === 'awaiting_spec' ? state.run.spec?.clarificationRequired ? '等待补充需求' : '等待规格确认' : '';
+    const waiting = specWaiting ? '等待补充需求' : fallback.id === 'export' && state.run?.status === 'awaiting_review' ? '等待计划确认' : ['architecture', 'tasks'].includes(fallback.id) && state.run?.status === 'awaiting_spec' ? specClarificationPending() ? '等待补充需求' : '等待规格确认' : '';
     const visualStatus = specWaiting ? 'awaiting_spec' : stage.status;
     const completed = stage.status === 'succeeded' && !specWaiting;
     return `<button class="flow-node ${escape(visualStatus)} ${waiting ? 'awaiting-confirmation' : ''} ${state.stageId === stage.id ? 'selected' : ''}" style="--x:${fallback.x}%;--y:${fallback.y}px" data-stage="${escape(stage.id)}" data-focus-key="stage-${escape(stage.id)}" aria-pressed="${state.stageId === stage.id}" aria-label="${escape(stage.title)}，${escape(waiting || STATUS[stage.status] || stage.status)}"><span class="node-top"><span class="node-number">${String(i + 1).padStart(2, '0')}</span><span class="node-status-dot">${completed ? '✓' : ''}</span></span><h3>${escape(stage.title)}</h3><span class="node-meta">${escape(waiting || STATUS[stage.status] || stage.status)}${stage.attempt > 1 ? ` / 第 ${stage.attempt} 次` : ''}</span></button>`;
@@ -299,14 +653,15 @@ function renderInspector() {
   const visualStatus = specWaiting ? 'awaiting_spec' : stage.status;
   const visualLabel = specWaiting ? '等待补充需求' : STATUS[stage.status] || stage.status;
   const outputHtml = specWaiting ? '等待补充后生成最终规格' : artifacts.length ? artifacts.map((artifact) => `<button class="inspector-artifact-link" data-artifact="${escape(artifact.name)}" data-focus-key="inspector-${escape(artifact.name)}">${escape(artifact.name)}</button>`).join('') : escape(fallback.output);
-  const note = state.run?.status === 'awaiting_spec' && ['spec', 'architecture', 'tasks'].includes(stage.id) ? state.run.spec?.clarificationRequired ? '需求范围尚不明确。请在下方回答问题，再点击“根据回答整理规格”。' : '请在下方答复待确认问题并保存修订；确认规格后才会生成架构和任务。' : stage.id === 'export' && state.run?.status === 'awaiting_review' ? `检查下方计划后，点击“${state.run?.workflowVersion === 2 ? '确认计划并导出' : '确认并导出'}”继续。` : stage.status === 'blocked' ? '前置阶段尚未成功。解决失败并重试后，编排器会重新检查依赖。' : stage.status === 'succeeded' ? '本阶段结果已保存。后续重试会保留成功分支。' : '每个阶段成功后发布产物；下游只读取已成功的结果。';
+  const note = state.run?.status === 'awaiting_spec' && ['spec', 'architecture', 'tasks'].includes(stage.id) ? specClarificationPending() ? '打开「查看问题」处理待确认的信息。' : '确认规格后才会生成架构和任务。' : stage.id === 'export' && state.run?.status === 'awaiting_review' ? `检查下方计划后，点击“${state.run?.workflowVersion === 2 ? '确认计划并导出' : '确认并导出'}”继续。` : stage.status === 'blocked' ? '前置阶段尚未成功。解决失败并重试后，编排器会重新检查依赖。' : stage.status === 'succeeded' ? '本阶段结果已保存。后续重试会保留成功分支。' : '每个阶段成功后发布产物；下游只读取已成功的结果。';
   const failure = stage.id === 'spec' ? state.run?.specificationFailure : ['architecture', 'tasks'].includes(stage.id) ? state.run?.engineeringFailure : null;
   const failureDetail = failure?.detail && failure.detail !== failure.message ? ` ${failure.detail}` : '';
   const failureText = failure ? `${failure.message}${failureDetail} ${failure.nextStep}` : stage.error;
   const retryDisabled = state.busy || failure?.canRetry === false;
+  const retryLabel = failure?.pending ? '前次请求待核对' : failure?.canRetry === false ? failure.remaining === 0 ? '调用次数已用尽' : '工程总时长已用尽' : '重试此阶段';
   const recovery = failure?.canRevalidate ? `<button class="button button-primary" ${stage.id === 'spec' ? `data-revalidate-spec="${escape(failure.attemptId)}"` : 'data-revalidate-engineering'} ${state.busy ? 'disabled' : ''}>${stage.id === 'spec' ? '重新校验已保存响应（不调用模型）' : '重新校验保存的工程草案（不调用模型）'}</button>` : '';
   const localRecovery = failure?.canUseLocal ? `<button class="button button-outline" data-use-local-engineering ${state.busy ? 'disabled' : ''}>改用本地规则生成架构与任务（不调用模型）</button>` : '';
-  const html = `<div class="inspector-eyebrow"><span>阶段详情</span><span class="status-tag status-${escape(visualStatus)}">${escape(visualLabel)}</span></div><h3 class="inspector-title">${escape(stage.title)}</h3><p class="inspector-description">${escape(fallback.description)}</p><dl class="inspector-info"><dt>前置依赖</dt><dd>${stage.dependsOn.length ? stage.dependsOn.map((id) => escape(stageTitle(id))).join('、') : '无，可直接启动'}</dd><dt>尝试次数</dt><dd>${stage.attempt || '尚未执行'}</dd><dt>执行用时</dt><dd>${duration(stage)}</dd><dt>输出产物</dt><dd>${outputHtml}</dd></dl>${stage.error ? `<div class="stage-error">${escape(failureText)}${recovery}${localRecovery}${state.run?.status === 'failed' && stage.status === 'failed' ? `<button class="button button-outline" data-retry="${escape(stage.id)}" data-focus-key="retry-${escape(stage.id)}" ${retryDisabled ? 'disabled' : ''}>${failure?.canRetry === false ? stage.id === 'spec' ? '调用次数已用尽' : '工程总时长已用尽' : '重试此阶段'}</button>` : ''}</div>` : ''}<p class="inspector-note">${escape(note)}</p>`;
+  const html = `<div class="inspector-eyebrow"><span>阶段详情</span><span class="status-tag status-${escape(visualStatus)}">${escape(visualLabel)}</span></div><h3 class="inspector-title">${escape(stage.title)}</h3><p class="inspector-description">${escape(fallback.description)}</p><dl class="inspector-info"><dt>前置依赖</dt><dd>${stage.dependsOn.length ? stage.dependsOn.map((id) => escape(stageTitle(id))).join('、') : '无，可直接启动'}</dd><dt>尝试次数</dt><dd>${stage.attempt || '尚未执行'}</dd><dt>执行用时</dt><dd>${duration(stage)}</dd><dt>输出产物</dt><dd>${outputHtml}</dd></dl>${stage.error ? `<div class="stage-error">${escape(failureText)}${recovery}${localRecovery}${state.run?.status === 'failed' && stage.status === 'failed' ? `<button class="button button-outline" data-retry="${escape(stage.id)}" data-focus-key="retry-${escape(stage.id)}" ${retryDisabled ? 'disabled' : ''}>${escape(retryLabel)}</button>` : ''}</div>` : ''}<p class="inspector-note">${escape(note)}</p>`;
   replacePreservingFocus($('#stage-inspector'), html);
   if (historicalRun()) $$('[data-retry], [data-revalidate-spec], [data-revalidate-engineering], [data-use-local-engineering]', $('#stage-inspector')).forEach(button => { button.disabled = true; });
 }
@@ -333,8 +688,11 @@ function taskLayout(tasks) {
 }
 function renderTasks() {
   const simulation = simulatedTasks.selection(), preview = simulation ? null : planningReview.taskDraft();
-  const editable = !simulation && !historicalRun() && state.run?.workflowVersion === 2 && state.run.status === 'awaiting_review';
-  const toolbar = `<div class="task-change-toolbar"><div><strong>修改任务与添加功能</strong><p>${preview ? '图中显示未保存草稿：蓝色标记为已改任务，橙色标记为需要一起核对的下游。' : editable ? '点选图中任务后直接修改。新增业务功能会进入需求变更与重新规划。' : '当前计划只读。新增或调整业务功能，请通过新需求版本重新规划。'}</p></div><div><button type="button" class="button button-outline" data-edit-selected-task ${!editable || state.busy || state.selectionPending ? 'disabled' : ''}>修改此任务</button><button type="button" class="button button-primary" data-add-feature ${!state.project || state.busy || state.selectionPending ? 'disabled' : ''}>新增功能</button></div></div>`;
+  const owner = !state.health?.teamAccess?.enabled || state.actorRole === 'owner';
+  const editable = owner && !simulation && !historicalRun() && canEditPlanTasks(state.run);
+  const note = preview ? '蓝色是改动的任务，橙色是需要一起核对的下游任务。' : !owner ? '当前账户只能查看任务。' : simulation ? '正在查看模拟记录。请返回开发任务图修改计划。'
+    : historicalRun() ? '历史需求版本只读。' : editable && state.run.status === 'succeeded' ? '修改后保存为新计划版本，再重新确认计划和验收清单。' : editable ? '选中任务即可修改。' : '计划生成并进入审阅后可以修改任务。';
+  const toolbar = `<div class="task-change-toolbar"><div><strong>开发任务</strong><p>${note}</p></div><div>${simulation ? '<button type="button" class="button button-outline" data-return-task-plan>返回任务计划</button>' : ''}<button type="button" class="button button-outline" data-edit-selected-task ${!editable || state.busy || state.selectionPending ? 'disabled' : ''}>修改此任务</button><button type="button" class="button button-primary" data-add-feature ${!owner || !state.project || state.busy || state.selectionPending ? 'disabled' : ''}>新增功能</button></div></div>`;
   return toolbar + renderTaskWorkspace();
 }
 function renderTaskWorkspace() {
@@ -408,7 +766,7 @@ function renderArtifacts() {
 }
 function renderRecords() {
   for (const button of $$('[data-tab]')) button.setAttribute('aria-selected', String(button.dataset.tab === state.tab));
-  $('#records-body').setAttribute('aria-labelledby', `tab-${state.tab}`);
+  $('#records-body').setAttribute('aria-labelledby', state.tab === 'tasks' ? 'records-tab-tasks' : `tab-${state.tab}`);
   $('#records-hint').textContent = ({ events: '执行状态与操作记录', tasks: '待实施计划与独立模拟运行（非真实验收）', artifacts: '可阅读、可交接的项目产物' })[state.tab];
   const oldEvents = $('.event-list'); const followEvents = !oldEvents || oldEvents.scrollHeight - oldEvents.scrollTop - oldEvents.clientHeight < 45;
   const savedScroll = {};
@@ -417,10 +775,10 @@ function renderRecords() {
   for (const [name, pos] of Object.entries(savedScroll)) { const element = $(`.${name}`); if (element) { element.scrollLeft = pos.x; element.scrollTop = pos.y; } }
   if (state.tab === 'events' && followEvents && $('.event-list')) $('.event-list').scrollTop = $('.event-list').scrollHeight;
 }
-function renderRun() { renderControls(); renderWorkflow(); renderInspector(); renderRecords(); syncExecutionPanel(); syncSimulatedTasks(); }
+function renderRun() { renderControls(); renderWorkflow(); renderInspector(); renderRecords(); syncExecutionPanel(); syncSimulatedTasks(); workspaceLayout.sync(); renderDeliveryProgress(); notices.syncContext(); notices.failure(state.run); }
 function renderAll() { renderProjects(); renderHeader(); renderRun(); }
 
-function setBusy(value) { state.busy = value; renderControls(); $('#create-project-button').disabled = value; $('#create-project-button').textContent = value ? '正在创建…' : '创建项目'; $$('[data-close-dialog]', $('#project-dialog')).forEach((button) => { button.disabled = value; }); }
+function setBusy(value) { state.busy = value; renderControls(); workspaceLayout.sync(); renderWorkspaceContext(); $('#create-project-button').disabled = value; $('#create-project-button').textContent = value ? '正在创建…' : '创建项目'; $$('[data-close-dialog]', $('#project-dialog')).forEach((button) => { button.disabled = value; }); }
 function rememberSelection() {
   try { sessionStorage.setItem('taskflow-selection', JSON.stringify({ projectId: state.project?.id, runId: state.run?.id, taskId: state.taskId })); } catch { /* The current view remains usable without session storage. */ }
 }
@@ -492,6 +850,7 @@ async function selectRun(id) {
 async function startRun(expectedSource) {
   if (!state.project || state.busy || state.selectionPending || (!historicalRun() && ACTIVE.has(state.run?.status))) return;
   if ($('#start-run').disabled) return;
+  workspaceLayout.show('plan');
   clearError(); setBusy(true); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   state.selectionPending = true; syncExecutionPanel();
   try {
@@ -535,7 +894,7 @@ function openProjectDialog({ sample = false, revise = false } = {}) {
   $('#selected-file').hidden = true; $('#source-input').hidden = false; $('#docx-note').hidden = true; $('#import-error').hidden = true;
   if (revise && state.project) { $('#project-name-input').value = `${state.project.name} 新版本`; $('#source-input').value = selectedSource().content; }
   if (sample) loadSample();
-  $('#project-dialog').showModal(); if (!sample && !revise) $('#project-name-input').focus();
+  $('#project-dialog').showModal(); if (!sample && !revise) $(guided ? '#source-input' : '#project-name-input').focus();
 }
 function loadSample() {
   state.importFile = null; state.filename = 'issue-tracker.md';
@@ -566,13 +925,15 @@ async function createProject(event) {
     const payload = { name: $('#project-name-input').value.trim() || undefined, filename: state.filename };
     if (state.importFile) payload.fileBase64 = await fileBase64(state.importFile); else payload.content = content;
     const { project } = await api('/api/projects', { method: 'POST', body: JSON.stringify(payload) });
-    $('#project-dialog').close(); await refreshProjects(); await selectProject(project.id); toast('项目已创建，点击“开始编排”生成开发计划');
+    $('#project-dialog').close(); await refreshProjects(); await selectProject(project.id);
+    toast(guided ? '需求已保存，可以开始整理。' : '项目已创建，点击“开始编排”生成开发计划');
   } catch (error) { $('#import-error').textContent = error.message; $('#import-error').hidden = false; }
   finally { setBusy(false); }
 }
-function showArtifact(name) { state.artifactName = name; state.tab = 'artifacts'; renderRecords(); }
+function showArtifact(name) { workspaceLayout.show('tasks'); state.artifactName = name; state.tab = 'artifacts'; renderRecords(); }
 
 $('#new-project').addEventListener('click', () => openProjectDialog());
+$('#workspace-view-toggle').addEventListener('click', () => changeView(!guided));
 $('#onboarding-import').addEventListener('click', () => openProjectDialog());
 $('#onboarding-sample').addEventListener('click', () => openProjectDialog({ sample: true }));
 $('#load-sample').addEventListener('click', loadSample);
@@ -580,15 +941,25 @@ $('#project-form').addEventListener('submit', createProject);
 $('#file-input').addEventListener('change', (event) => importFile(event.target.files[0]));
 $('#clear-file').addEventListener('click', resetFile);
 $('#start-run').addEventListener('click', () => { void startRun(); });
+$('[data-workspace-next]').addEventListener('click', handleWorkspaceNext);
+$('#delivery-steps').addEventListener('click', event => {
+  const step = event.target.closest('[data-delivery-step]');
+  if (step) openDeliveryStage(step.dataset.deliveryStep);
+});
+$('#task-edit-dialog').addEventListener('close', () => { if (!$('#task-edit-dialog').open) planningReview.render(); });
 $('#pause-button').addEventListener('click', () => runAction(state.run?.status === 'paused' ? 'resume' : 'pause'));
 $('#run-select').addEventListener('change', (event) => selectRun(event.target.value));
-$('#dismiss-error').addEventListener('click', clearError);
 $('#help-button').addEventListener('click', () => $('#help-dialog').showModal());
 $('#source-button').addEventListener('click', () => { if (!state.project) return; $('#source-title').textContent = selectedSource().filename; $('#source-content').textContent = selectedSource().content; $('#source-dialog').showModal(); });
-$('#revise-source').addEventListener('click', () => { $('#source-dialog').close(); const section = $('#source-changes-section'); section.open = true; section.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); });
+$('#revise-source').addEventListener('click', () => { $('#source-dialog').close(); openSourceEditor(); });
 $('#project-dialog').addEventListener('cancel', (event) => { if (state.busy) event.preventDefault(); });
+document.addEventListener('click', event => {
+  const action = event.target.closest('[data-simulation-action]');
+  if (action && !action.disabled) notices.clear({ source: 'simulation' });
+}, true);
 document.addEventListener('click', (event) => {
-  const editTask = event.target.closest('[data-edit-selected-task]'); if (editTask && !editTask.disabled) { planningReview.openTask(state.taskId); return; }
+  if (event.target.closest('[data-return-task-plan]')) { simulatedTasks.showPlan(); focusWorkspaceTarget($('[data-edit-selected-task]')); return; }
+  const editTask = event.target.closest('[data-edit-selected-task]'); if (editTask && !editTask.disabled) { workspaceLayout.openEditor(); if (!planningReview.openTask(state.taskId)) workspaceLayout.closeEditor(); return; }
   const addFeature = event.target.closest('[data-add-feature]'); if (addFeature && !addFeature.disabled) { void openFeatureEditor().catch(showError); return; }
   const close = event.target.closest('[data-close-dialog]'); if (close) close.closest('dialog')?.close();
   const project = event.target.closest('[data-project]'); if (project && !state.busy) selectProject(project.dataset.project);
@@ -618,8 +989,16 @@ async function initialize() {
   clearError();
   renderAll();
   try {
-    const [{ model, ...health }, { projects }] = await Promise.all([api('/api/health'), api('/api/projects')]);
-    state.health = { ...health, model }; state.projects = projects;
+    const { model, ...health } = await api('/api/health'); state.health = { ...health, model };
+    if (health.teamAccess?.enabled) {
+      const session = await api('/api/team/session');
+      if (!session.user) { window.location.replace('/team.html'); return; }
+      state.actorRole = session.user.role;
+      $('#team-link').hidden = false; $('#team-link').textContent = `${session.user.name}（${({ owner: '负责人', reviewer: '评审者', observer: '观察者' })[session.user.role] || '账号'}）`;
+      $('#team-link').title = $('#team-link').textContent;
+    } else $('#team-link').hidden = true;
+    const { projects } = await api('/api/projects'); state.projects = projects;
+    syncExecutionPanel();
     $('#connection-status').className = 'connection-status connected'; $('#connection-status').innerHTML = '<span></span>服务已连接';
     const modelOption = $('#mode-select option[value=model]'); modelOption.disabled = !model?.configured; modelOption.textContent = model?.configured ? `模型模式（${model.model || '已配置'}）` : '模型模式（未配置）';
     renderProjects();

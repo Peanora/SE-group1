@@ -66,6 +66,15 @@ async function waitFor(service, predicate, timeout = 3000) {
   while (Date.now() < deadline) { const result = await service.list(ids); if (predicate(result)) return result; await new Promise(resolve => setTimeout(resolve, 10)); }
   assert.fail('controller state did not settle');
 }
+async function waitControlledBoundary(read, advance = null) {
+  const deadline = performance.now() + 5000;
+  for (;;) {
+    const value = await read(); if (value) return value;
+    assert.ok(performance.now() < deadline, 'controlled fixture boundary was not reached');
+    await new Promise(resolve => setImmediate(resolve));
+    advance?.();
+  }
+}
 // Fabricated trusted-adapter receipts exercise gate wiring only; none represent real business acceptance.
 function acceptedRecord(entry) {
   const binding = { ...entry.options.binding, attemptId: entry.record.attemptId, candidateCommit: 'a'.repeat(40), sourceHash: hash(files),
@@ -739,14 +748,21 @@ test('a core result returned after the shared deadline cannot publish a late acc
 
 test('non-cooperative admission drains without releasing the slot, then preserves unknown source evidence and never dispatches Review', async t => {
   for (const cancel of [false, true]) {
-    const f = await recheckFixture(t); await setRecheckTimeout(f, cancel ? 15000 : 50); const entered = deferred(), release = deferred(); let signal;
-    f.state.inspectHook = async options => { signal = options.signal; entered.resolve(); return release.promise; };
-    const { execution } = await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' }); await entered.promise;
+    const f = await recheckFixture(t); await setRecheckTimeout(f, cancel ? 15000 : 50); const release = deferred(); let signal;
+    // Freeze the same admission budget until the intended inspector is entered.
+    // Full-suite disk scheduling must not silently turn this into a pre-inspection timeout.
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+    try {
+    f.state.inspectHook = async options => { signal = options.signal; return release.promise; };
+    const { execution } = await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' });
+    await waitControlledBoundary(() => signal);
     if (cancel) await f.service.action({ ...ids, executionId: execution.id, action: 'cancel' });
-    await new Promise(resolve => signal.aborted ? resolve() : signal.addEventListener('abort', resolve, { once: true }));
+    else t.mock.timers.tick(50);
+    assert.equal(signal.aborted, true);
     const draining = await f.service.list(ids); assert.ok(['cancel_requested', 'stopping'].includes(draining.executions[0].status));
     assert.equal(draining.capabilities.canStart, false); assert.equal(f.state.rechecks.length, 0);
-    const result = await waitFor(f.service, value => value.executions[0].status === 'reconciliation_required', 7500);
+    const result = await waitControlledBoundary(async () => { const value = await f.service.list(ids); return value.executions[0].status === 'reconciliation_required' && value; }, () => t.mock.timers.tick(10));
+    assert.equal(result.executions[0].budget.timeoutMs, cancel ? 15000 : 50);
     assert.equal(result.executions[0].taskAccepted, false); assert.equal(result.executions[0].reviewCalls, 0); assert.equal(f.state.rechecks.length, 0);
     assert.equal(result.capabilities.canStart, false); await assert.rejects(f.service.start(startInput), { code: 'execution_active' });
     const db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite')), evidence = JSON.parse(db.prepare('SELECT record FROM source_history WHERE execution_id=?').get(execution.id).record);
@@ -756,13 +772,14 @@ test('non-cooperative admission drains without releasing the slot, then preserve
     assert.ok(!JSON.stringify(result).includes(f.rootDir));
     if (!cancel) {
       release.reject(Object.assign(new Error('late unknown Git stop'), { result: { pid: 919191, terminationConfirmed: false, controlDirectory: 'C:/private/late-admission' }, probeDirectory: 'C:/private/late-probe' }));
-      for (let i = 0; i < 100 && db.prepare('SELECT COUNT(*) count FROM source_history WHERE execution_id=?').get(execution.id).count < 2; i++) await new Promise(resolve => setTimeout(resolve, 5));
+      await waitControlledBoundary(() => db.prepare('SELECT COUNT(*) count FROM source_history WHERE execution_id=?').get(execution.id).count >= 2);
       const late = db.prepare('SELECT record FROM source_history WHERE execution_id=?').all(execution.id).map(item => JSON.parse(item.record)).find(item => item.result?.pid === 919191);
       assert.equal(late.result.controlDirectory, 'C:/private/late-admission'); assert.equal(late.probeDirectory, 'C:/private/late-probe');
     }
     db.close(); await f.service.shutdown();
     if (cancel) release.resolve({}); // A response after shutdown must not publish or mutate the next controller.
     const next = await f.open(); assert.equal((await next.list(ids)).executions[0].status, 'reconciliation_required'); assert.equal((await next.list(ids)).capabilities.canStart, false);
+    } finally { release.resolve({}); t.mock.timers.reset(); }
   }
 });
 
@@ -1134,19 +1151,25 @@ test('unchanged repair source, missing lineage and unclosed original issues cann
 
 test('repair cancellation, current-source invalidation and the shared admission deadline win before late code or success', async t => {
   for (const kind of ['cancel_admission', 'deadline', 'late_cancel', 'current']) {
-    const f = await repairFixture(t), entered = deferred(), release = deferred();
-    if (kind === 'deadline') { await f.service.shutdown(); f.service = await f.open({ budget: { maxCalls: 1, maxReviewCalls: 1, timeoutMs: 25 } }); }
-    if (['cancel_admission', 'deadline'].includes(kind)) f.state.inspectHook = async (_options, value) => { entered.resolve(); if (kind === 'deadline') await new Promise(resolve => setTimeout(resolve, 100)); else await release.promise; return value(); };
+    const f = await repairFixture(t), release = deferred(); let inspectionEntered = false;
+    if (kind === 'deadline') { await f.service.shutdown(); f.service = await f.open({ budget: { maxCalls: 1, maxReviewCalls: 1, timeoutMs: 25 } }); t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() }); }
+    try {
+    if (['cancel_admission', 'deadline'].includes(kind)) f.state.inspectHook = async (_options, value) => { inspectionEntered = true; await release.promise; return value(); };
     const { execution } = await f.service.action({ ...startInput, executionId: f.state.findingId, action: 'repair' });
     if (['cancel_admission', 'deadline'].includes(kind)) {
-      await entered.promise; if (kind === 'cancel_admission') { await f.service.action({ ...ids, executionId: execution.id, action: 'cancel' }); release.resolve(); }
-      const result = await waitFor(f.service, value => value.executions[0].status === (kind === 'deadline' ? 'timed_out' : 'stopped'));
+      await waitControlledBoundary(() => inspectionEntered);
+      if (kind === 'cancel_admission') await f.service.action({ ...ids, executionId: execution.id, action: 'cancel' }); else t.mock.timers.tick(25);
+      release.resolve();
+      const result = kind === 'deadline' ? await waitControlledBoundary(async () => { const value = await f.service.list(ids); return value.executions[0].status === 'timed_out' && value; })
+        : await waitFor(f.service, value => value.executions[0].status === 'stopped');
       assert.equal(f.state.repairs.length, 0); assert.equal(result.executions[0].calls, 0);
+      if (kind === 'deadline') assert.equal(result.executions[0].budget.timeoutMs, 25);
     } else {
       const entry = await waitRepair(f); f.state.manualRepairCancel = true;
       if (kind === 'late_cancel') await f.service.action({ ...ids, executionId: execution.id, action: 'cancel' }); else f.state.planning.project.currentSourceRevision = '0'.repeat(64);
       await entry.pass(); const result = await waitFor(f.service, value => ['stopped', 'superseded'].includes(value.executions[0].status)); assert.equal(result.executions[0].taskAccepted, false);
     }
+    } finally { release.resolve(); if (kind === 'deadline') t.mock.timers.reset(); }
   }
 });
 

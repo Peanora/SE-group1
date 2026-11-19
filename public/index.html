@@ -8,6 +8,8 @@
   <title>Taskflow · 需求编排台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%23315deb'/%3E%3Cpath d='M10 11h20M20 11v18m-8-8h16' stroke='white' stroke-width='3' fill='none'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/workspace.css">
+  <link rel="stylesheet" href="/guided-workspace.css">
   <script type="module" src="/app.js"></script>
 </head>
 <body>
@@ -29,7 +31,7 @@
   <div class="app-shell">
     <header class="topbar">
       <div class="breadcrumb"><span>工作台</span><span aria-hidden="true">/</span><strong id="breadcrumb-project">新项目</strong></div>
-      <div class="topbar-right"><span class="connection-status" id="connection-status"><span></span>正在连接服务</span><button class="icon-button" id="refresh-button" aria-label="刷新工作区" title="刷新工作区"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.4 6M20 5v6h-6"/></svg></button></div>
+      <div class="topbar-right"><a id="team-link" href="/team.html" hidden>团队账号</a><button type="button" id="workspace-view-toggle" class="text-button">查看技术详情</button><span class="connection-status" id="connection-status"><span></span>正在连接服务</span><button class="icon-button" id="refresh-button" aria-label="刷新工作区" title="刷新工作区"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.4 6M20 5v6h-6"/></svg></button></div>
     </header>
 
     <main id="main" class="workspace">
@@ -39,51 +41,130 @@
         <div class="heading-actions"><label class="visually-hidden" for="run-select">选择运行记录</label><select id="run-select" disabled><option>尚无运行记录</option></select><button class="button button-outline" id="source-button" disabled>查看需求</button></div>
       </section>
 
-      <p class="field-note" id="platform-default-notice">当前统一按浏览器网页应用规划，Windows通过浏览器使用。技术方案由平台提供，无需填写；不生成原生桌面安装包。</p>
+      <section id="guided-workspace" aria-label="项目进度">
+        <ol data-guide-steps aria-label="项目步骤" hidden></ol>
+        <div data-guide-surface aria-live="polite"></div>
+      </section>
+
+      <details class="workspace-scope"><summary>平台范围与使用说明</summary><p class="field-note" id="platform-default-notice">当前统一按浏览器网页应用规划，Windows通过浏览器使用。技术方案由平台提供，无需填写；不生成原生桌面安装包。</p></details>
       <section id="onboarding" class="onboarding" aria-labelledby="onboarding-title">
         <div class="document-illustration" aria-hidden="true"><svg viewBox="0 0 64 76"><path d="M12 2h28l14 15v55H12Z"/><path d="M40 2v17h14M22 32h22M22 43h22M22 54h14"/></svg><span>.md</span></div>
         <div class="onboarding-copy"><h2 id="onboarding-title">从一份软件需求开始</h2><p>上传文档或粘贴文字。先核对并确认规格，再审阅开发计划，确认后导出文档。</p><div class="onboarding-actions"><button class="button button-primary" id="onboarding-import">导入需求文档</button><button class="text-button" id="onboarding-sample">载入示例需求</button></div></div>
         <div class="onboarding-formats"><strong>支持 Markdown、TXT、Word</strong><span>本地规则模式无需配置密钥</span></div>
       </section>
 
+      <section class="workspace-run-tools" aria-label="规划运行控制">
+        <div class="workflow-controls"><label class="visually-hidden" for="mode-select">规划模式</label><select id="mode-select"><option value="local">本地规则模式</option><option value="model" disabled>模型模式（未配置）</option></select><button class="button button-outline" id="pause-button" hidden>暂停</button><button class="button button-primary" id="start-run" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 8 6-8 6Z"/></svg><span>开始编排</span></button><a class="button button-primary" id="download-bundle" hidden>下载文档包</a></div>
+        <p id="planning-charge-notice" class="workspace-charge-notice" hidden></p>
+        <details class="workspace-budget"><summary>模型预算与用量详情</summary><p id="planning-model-notice" role="status" hidden></p></details>
+      </section>
+      <section id="workspace-context" class="workspace-context" aria-label="当前进度与下一步">
+        <div><span id="run-status" class="status-tag status-idle">尚未开始</span><span id="run-progress">导入需求后开始</span><h2 id="workspace-context-title">先导入一份软件需求</h2><p id="workspace-context-note">选择项目后，在这里查看当前步骤和需要处理的问题。</p></div>
+        <button type="button" class="button button-primary" id="workspace-next-root" data-workspace-next>处理当前步骤</button>
+      </section>
+      <section id="delivery-workflow" class="delivery-workflow" aria-labelledby="delivery-workflow-heading" hidden>
+        <h2 id="delivery-workflow-heading">项目全流程</h2>
+        <ol id="delivery-steps"></ol>
+      </section>
+      <nav id="workspace-nav" class="workspace-nav" role="tablist" aria-label="项目工作区">
+        <button type="button" id="workspace-tab-plan" role="tab" data-workspace-view="plan" aria-controls="workspace-plan" aria-selected="true">规划与确认</button>
+        <button type="button" id="tab-tasks" role="tab" data-workspace-view="tasks" aria-controls="workspace-tasks" aria-selected="false">开发任务 <span id="task-count">0</span></button>
+        <button type="button" id="workspace-tab-source" role="tab" data-workspace-view="source" aria-controls="workspace-source" aria-selected="false">需求与功能</button>
+        <button type="button" id="workspace-tab-execution" role="tab" data-workspace-view="execution" aria-controls="workspace-execution" aria-selected="false">代码与验收</button>
+      </nav>
+      <div id="workspace-panels" class="workspace-panels">
+      <section id="workspace-plan" class="workspace-panel" data-workspace-panel="plan" role="tabpanel" aria-labelledby="workspace-tab-plan" tabindex="-1">
       <section class="flow-panel" aria-labelledby="workflow-heading">
         <header class="panel-toolbar">
           <div class="panel-title"><span class="section-symbol" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="2" y="8" width="6" height="8" rx="2"/><rect x="16" y="2" width="6" height="7" rx="2"/><rect x="16" y="15" width="6" height="7" rx="2"/><path d="M8 12h4V6h4M12 12v7h4"/></svg></span><div><h2 id="workflow-heading">流程编排</h2><span id="workflow-subtitle">六个阶段，一份可追踪的开发计划</span></div></div>
-          <div class="workflow-controls"><label class="visually-hidden" for="mode-select">规划模式</label><select id="mode-select"><option value="local">本地规则模式</option><option value="model" disabled>模型模式（未配置）</option></select><button class="button button-outline" id="pause-button" hidden>暂停</button><button class="button button-primary" id="start-run" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 8 6-8 6Z"/></svg><span>开始编排</span></button><a class="button button-primary" id="download-bundle" hidden>下载文档包</a></div>
         </header>
-        <div class="run-status-line"><div class="run-status-left"><span class="status-tag status-idle" id="run-status">尚未开始</span><span id="run-progress">导入需求后开始</span></div><details class="demo-options"><summary>演示选项</summary><div class="demo-options-content"><label for="failure-select">注入一次性故障</label><select id="failure-select"><option value="">关闭</option><option value="tasks">任务拆解阶段</option><option value="architecture">架构设计阶段</option><option value="review">计划校验阶段</option></select><p>仅用于展示失败与重试。再次尝试该阶段时恢复正常。</p></div></details></div>
-        <p id="planning-model-notice" role="status" hidden style="margin:0;padding:0 24px 12px;color:var(--muted)"></p>
         <p id="source-history-notice" role="status" hidden style="margin:0;padding:0 24px 12px;color:var(--muted)">此运行保留历史需求与审批记录，已停止推进。请基于当前需求重新编排并确认规格和计划；历史检查不会自动用于新版本。</p>
+        <details id="workflow-details" class="workspace-process" open><summary>查看规划过程与阶段详情</summary>
         <div class="flow-workspace">
           <div class="flow-canvas"><div class="canvas-label">工作流依赖图 <span>点击节点查看详情</span></div><div class="workflow-graph-scroll"><div id="workflow-graph" class="workflow-graph" aria-label="规划工作流"></div></div><div class="canvas-footer"><span><i class="legend-dot legend-parallel"></i>规格确认后，架构与任务可并行生成</span><span><i class="legend-dot legend-review"></i><span id="workflow-confirmation-legend">先确认规格，再确认计划</span></span></div></div>
           <aside id="stage-inspector" class="stage-inspector" aria-label="阶段详情"></aside>
         </div>
-        <section id="review-banner" class="review-banner" aria-labelledby="review-heading" hidden></section>
+        <details class="demo-options"><summary>演示选项</summary><div class="demo-options-content"><label for="failure-select">注入一次性故障</label><select id="failure-select"><option value="">关闭</option><option value="tasks">任务拆解阶段</option><option value="architecture">架构设计阶段</option><option value="review">计划校验阶段</option></select><p>仅用于展示失败与重试。再次尝试该阶段时恢复正常。</p></div></details>
+        </details>
+        <section id="planning-issue-host" class="planning-issue" aria-labelledby="planning-issue-heading" hidden>
+          <h3 id="planning-issue-heading" tabindex="-1">查看问题</h3>
+          <p data-issue-message></p>
+          <div class="planning-issue-draft" data-issue-draft hidden>
+            <h4 data-issue-draft-title></h4>
+            <p data-issue-draft-description></p>
+            <p data-issue-draft-quote-row>模型尝试引用 <q data-issue-draft-quote></q></p>
+          </div>
+          <div class="planning-issue-explanation">
+            <p data-issue-explanation hidden></p>
+            <button type="button" class="button button-outline" data-issue-retry hidden>重试生成问题</button>
+          </div>
+          <details hidden><summary>上次保存的补充</summary><p data-issue-previous></p></details>
+          <form hidden>
+            <ol data-issue-fields></ol>
+            <div class="spec-repair-actions">
+              <button type="button" class="button button-outline" data-issue-save>保存草稿</button>
+              <button type="submit" class="button button-primary" data-issue-continue>提交本轮回答</button>
+            </div>
+          </form>
+          <button type="button" class="button button-primary" data-issue-recover hidden>用已保存的回答重新整理</button>
+          <p data-issue-status role="status"></p>
+        </section>
+        <div id="review-home"><section id="review-banner" class="review-banner" aria-labelledby="review-heading" hidden></section></div>
         <section id="spec-repair-host" class="spec-repair" aria-labelledby="spec-repair-heading" hidden></section>
       </section>
 
-      <section class="records-panel" aria-label="运行详情">
-        <header class="records-toolbar"><div class="tabs" role="tablist" aria-label="查看运行内容"><button role="tab" id="tab-events" data-tab="events" aria-selected="true" aria-controls="records-body">执行记录 <span id="event-count">0</span></button><button role="tab" id="tab-tasks" data-tab="tasks" aria-selected="false" aria-controls="records-body">开发任务 <span id="task-count">0</span></button><button role="tab" id="tab-artifacts" data-tab="artifacts" aria-selected="false" aria-controls="records-body">生成文档 <span id="artifact-count">0</span></button></div><span class="records-hint" id="records-hint">执行状态与操作记录</span></header>
-        <div id="simulation-panel-host" class="simulation-panel" hidden></div>
-        <div id="records-body" class="records-body" role="tabpanel" aria-labelledby="tab-events"></div>
       </section>
+      <section id="workspace-tasks" class="workspace-panel" data-workspace-panel="tasks" role="tabpanel" aria-labelledby="tab-tasks" tabindex="-1" hidden>
+      <section class="records-panel" aria-label="运行详情">
+        <header class="records-toolbar"><div class="tabs" role="tablist" aria-label="查看运行内容"><button role="tab" id="records-tab-tasks" data-tab="tasks" aria-selected="true" aria-controls="records-body">任务图</button><button role="tab" id="tab-artifacts" data-tab="artifacts" aria-selected="false" aria-controls="records-body">生成文档 <span id="artifact-count">0</span></button><button role="tab" id="tab-events" data-tab="events" aria-selected="false" aria-controls="records-body">执行记录 <span id="event-count">0</span></button></div><span class="records-hint" id="records-hint">任务、文档与运行依据</span></header>
+        <div id="records-body" class="records-body" role="tabpanel" aria-labelledby="records-tab-tasks"></div>
+      </section>
+      <details id="simulation-tools" class="workspace-secondary"><summary>模拟编排（可选）</summary><div id="simulation-panel-host" class="simulation-panel" hidden></div></details>
+      </section>
+      <section id="workspace-source" class="workspace-panel" data-workspace-panel="source" role="tabpanel" aria-labelledby="workspace-tab-source" tabindex="-1" hidden>
+      <div class="workspace-section-heading"><div><h2>需求与功能</h2><p>在同一处填写、预览、保存和应用需求。旧版本会保留。</p></div><button type="button" class="text-button" data-workspace-back>返回上一工作区</button></div>
       <details id="source-changes-section" class="source-change-entry" hidden><summary>修改当前项目需求</summary><div id="source-changes-host"></div></details>
+      </section>
+      <section id="workspace-execution" class="workspace-panel" data-workspace-panel="execution" role="tabpanel" aria-labelledby="workspace-tab-execution" tabindex="-1" hidden>
+      <div class="workspace-section-heading"><div><h2>代码与验收</h2><p id="execution-next-hint">先准备验收清单，再开始开发。</p></div></div>
+      <details id="verification-plans-section" class="workspace-secondary" hidden><summary>准备验收清单</summary><div id="verification-plans-host"></div></details>
+      <section id="planned-execution-section" hidden><div id="planned-execution-host"></div></section>
+      <details id="execution-tools" class="workspace-secondary"><summary>其他工具与参考项目</summary>
+      <section id="project-evolution-section" hidden><div id="project-evolution-host"></div></section>
       <div id="execution-panel-host"></div>
-      <footer class="workspace-footer"><span>Taskflow 需求编排台</span><span>查看规划、代码与独立检查依据</span></footer>
+      </details>
+      <p id="verification-plans-unavailable" hidden>当前服务未开放验收清单。</p>
+      </section>
+      </div>
     </main>
   </div>
+
+  <dialog id="task-edit-dialog" class="task-edit-dialog" aria-labelledby="task-edit-heading"><header class="task-edit-header"><div><span>当前开发计划</span><h2 id="task-edit-heading">编辑开发任务</h2></div><button type="button" class="icon-button" data-close-task-editor aria-label="关闭任务编辑">×</button></header><div id="task-edit-host" class="task-edit-body"></div><footer class="task-edit-footer"><span>修改先保存，再单独确认；关闭会保留草稿。</span><button type="button" class="button button-outline" data-close-task-editor>返回任务图</button></footer></dialog>
 
   <dialog id="project-dialog" class="project-dialog" aria-labelledby="import-title">
     <form id="project-form">
       <header class="dialog-header"><div><p class="page-context">新的需求快照</p><h2 id="import-title">新建软件项目</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="关闭"><span class="close-symbol">×</span></button></header>
-      <div class="dialog-body"><label class="field-label" for="project-name-input">项目名称</label><input id="project-name-input" name="name" type="text" maxlength="100" placeholder="例如：工单协作系统" autocomplete="off"><div id="drop-zone" class="drop-zone"><input id="file-input" class="visually-hidden" type="file" accept=".md,.txt,.docx"><label for="file-input"><span class="upload-symbol" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5h16v-5"/></svg></span><strong>点击选择或拖入需求文档</strong><span>Markdown / TXT / DOCX，最大 3 MB</span></label></div><div id="selected-file" class="selected-file" hidden><span id="selected-file-name"></span><button type="button" id="clear-file" class="text-button">移除</button></div><div class="editor-label"><label class="field-label" for="source-input">需求正文</label><button type="button" id="load-sample" class="text-button">载入示例</button></div><textarea id="source-input" rows="11" maxlength="100000" placeholder="粘贴需求文档，写清项目目标、用户角色、功能要求与约束。&#10;&#10;也可以先载入示例，体验完整的编排流程。"></textarea><p id="docx-note" class="field-note" hidden>Word 正文将在创建项目时提取。若需修改内容，请先移除文件，改用粘贴文本。</p><p class="field-note">可以先写一句项目想法。模型模式下信息不足时，会列出问题供你补充，回答后再整理规格。每次导入保留独立需求快照。</p><p id="import-error" class="inline-error" role="alert" hidden></p></div>
+      <div class="dialog-body"><label class="field-label" for="project-name-input">项目名称（选填）</label><input id="project-name-input" name="name" type="text" maxlength="100" placeholder="例如：工单协作系统" autocomplete="off"><div class="editor-label"><label class="field-label" for="source-input">你想做什么？</label><button type="button" id="load-sample" class="text-button">载入示例</button></div><textarea id="source-input" rows="6" maxlength="100000" placeholder="例如：我想做个小组便笺网页，成员能记录待办，也能给便笺加标签。"></textarea><div id="drop-zone" class="drop-zone"><input id="file-input" class="visually-hidden" type="file" accept=".md,.txt,.docx"><label for="file-input"><span class="upload-symbol" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5h16v-5"/></svg></span><strong>上传或拖入已有文档</strong><span>Word、Markdown、TXT，最大 3 MB</span></label></div><div id="selected-file" class="selected-file" hidden><span id="selected-file-name"></span><button type="button" id="clear-file" class="text-button">移除</button></div><p id="docx-note" class="field-note" hidden>Word 正文将在创建项目时提取。若需修改内容，请先移除文件，改用粘贴文本。</p><p id="import-error" class="inline-error" role="alert" hidden></p></div>
       <footer class="dialog-footer"><button type="button" class="button button-outline" data-close-dialog>取消</button><button type="submit" class="button button-primary" id="create-project-button">创建项目</button></footer>
     </form>
   </dialog>
 
   <dialog id="source-dialog" class="source-dialog" aria-labelledby="source-title"><header class="dialog-header"><div><p class="page-context">所选运行的需求快照</p><h2 id="source-title">需求文档</h2></div><button class="icon-button" data-close-dialog aria-label="关闭"><span class="close-symbol">×</span></button></header><div class="source-dialog-body"><pre id="source-content"></pre></div><footer class="dialog-footer"><button class="button button-outline" data-close-dialog>关闭</button><button class="button button-primary" id="revise-source">修改当前项目需求</button></footer></dialog>
 
-  <dialog id="help-dialog" class="help-dialog" aria-labelledby="help-title"><header class="dialog-header"><h2 id="help-title">如何使用需求编排台</h2><button class="icon-button" data-close-dialog aria-label="关闭"><span class="close-symbol">×</span></button></header><div class="dialog-body help-content"><ol><li><strong>导入软件需求。</strong>上传 Markdown、TXT、Word，或直接粘贴正文。首次体验可以载入工单系统示例。</li><li><strong>开始编排。</strong>本地规则模式无需密钥，按文档结构提取需求并生成计划。模型模式需在服务端配置。</li><li><strong>观察执行。</strong>点击流程节点查看依赖、状态与日志；可在阶段边界暂停，或在运行失败后重试失败节点。</li><li><strong>确认规格。</strong>核对需求和验收条件，逐项回答待确认问题并保存修订。确认规格后，编排器才生成架构和开发计划。</li><li><strong>确认开发计划。</strong>核对任务、依赖和需求来源；修改后保存并重新确认。退回修改须填写意见。确认计划后导出 Markdown 文档包。</li></ol><p>规划工作流节点表示文档生成过程。“开发任务”是待实施计划。规格和计划均确认后，可在下方明确选择固定图书借阅参考项目，按显示的预算启动受控编码和独立检查；这不代表任意上传业务已实现。软件通过验收后才提供本地预览和源码下载，规划文档包仍单独保留。</p><h3>规划模式</h3><p>本地规则模式适合结构清晰的需求，结果需要人工审阅。要启用模型模式，可在项目 <code>.env</code> 配置 <code>LLM_BASE_URL</code>、<code>LLM_MODEL</code> 和 <code>LLM_API_KEY</code>，再重启服务。密钥只留在服务端。</p></div><footer class="dialog-footer"><button class="button button-primary" data-close-dialog>开始使用</button></footer></dialog>
+  <dialog id="help-dialog" class="help-dialog" aria-labelledby="help-title">
+    <header class="dialog-header"><h2 id="help-title">从想法到可试用软件</h2><button class="icon-button" data-close-dialog aria-label="关闭"><span class="close-symbol">×</span></button></header>
+    <div class="dialog-body help-content">
+      <ol>
+        <li><strong>说需求。</strong>写一句话或上传文档。系统有问题时，按你的想法回答。</li>
+        <li><strong>看方案。</strong>核对要做的功能和开发安排，再确认。</li>
+        <li><strong>确认怎么验收。</strong>看看每项功能要达到什么效果，认可清单。</li>
+        <li><strong>开发与测试。</strong>查看模型用量后开始。结果出来后，页面会显示下一步。</li>
+        <li><strong>预览与下载。</strong>当前版本通过后，可以先试用，再拿到源码。</li>
+      </ol>
+      <p>查看任务图、历史和日志时，可切换到「查看技术详情」。</p>
+    </div>
+    <footer class="dialog-footer"><button class="button button-primary" data-close-dialog>返回工作台</button></footer>
+  </dialog>
   <div id="toast" class="toast" role="status" hidden></div>
 </body>
 </html>
