@@ -84,7 +84,7 @@ async function assertOnlyView(page, view) {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
 }
 
-test('checklist repair in technical workspace returns to the revised plan for normal confirmation', { timeout: 45000 }, async t => {
+test('homepage checklist repair returns to the revised plan for normal confirmation', { timeout: 45000 }, async t => {
   const { app, project, run, page, url } = await fixture(t, 390);
   await app.orchestrator.action(project.id, run.id, { action: 'approve_plan', revision: run.planRevision, specRevision: run.specRevision });
   await until(() => run.status === 'succeeded' && !app.orchestrator.state(run).driving, '计划已确认');
@@ -115,8 +115,10 @@ test('checklist repair in technical workspace returns to the revised plan for no
   await banner.getByText(execution.failureHelp.title, { exact: true }).waitFor();
   await banner.getByText(execution.failureHelp.nextStep).waitFor();
   await banner.getByRole('button', { name: '准备清单修订', exact: true }).click();
-  await page.getByRole('heading', { name: '核对开发方案', exact: true }).waitFor();
-  assert.equal(await page.getByRole('button', { name: '确认开发方案', exact: true }).isVisible(), true);
+  const review = page.locator('#workspace-plan #review-heading');
+  await review.getByText('开发计划已生成，请确认后导出', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '确认计划并导出', exact: true }).isVisible(), true);
+  assert.equal(await page.locator('[data-delivery-step="plan-approval"]').getAttribute('data-state'), 'waiting');
   assert.deepEqual(submitted, { method: 'POST', body: {} });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
 });

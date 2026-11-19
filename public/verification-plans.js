@@ -22,7 +22,7 @@ const httpStepOverflow = detail => Number.isSafeInteger(detail?.httpSteps) && Nu
   ? `这份草案有 ${detail.httpSteps} 个接口步骤，上限是 ${detail.maxHttpSteps} 个。` : '';
 
 /** HTTP test definitions only. Server facts never become software acceptance in this component. */
-export function createVerificationPlans({ api, getContext, onError = () => {}, onUpdate = () => {}, onApproved = () => {}, failureRecovery = false, canEdit = () => true, isGuided = () => false }) {
+export function createVerificationPlans({ api, getContext, onError = () => {}, onUpdate = () => {}, onApproved = () => {}, failureRecovery = false, canEdit = () => true, autoRepairOnPropose = false }) {
   if (typeof api !== 'function' || typeof getContext !== 'function') throw new TypeError('测试提案面板需要api和运行上下文。');
   let root, refs, mounted = false, destroyed = false, timer, epoch = 0, readId = 0, action = null, pending = null;
   let context = contextValue(null), key = '', data = null, fresh = false, loading = false, error = '', errorKind = '', notice = '', consentKey = '';
@@ -77,57 +77,6 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
       return { state: 'waiting', blocked: true, text: '正在核对当前进度' };
     }
     return { state: 'waiting', text: '待准备清单' };
-  }
-  function guide() {
-    const progress = workflowProgress();
-    if (!fresh || contextKey(contextValue(getContext())) !== key) {
-      return { text: progress.text, ...(progress.state === 'working' ? { working: true, workingText: progress.text } : {}) };
-    }
-    const ready = jointDraft(), latest = currentRows().at(-1);
-    const failed = ['failed', 'timed_out', 'cancelled', 'rejected', 'reconciliation_required'].includes(latest?.status);
-    const working = Boolean(action || pending || progress.state === 'working' || automaticRepairId === latest?.id && hasRecovery(latest) && !diagnosticFor(latest)
-      || counterDraft(latest) && !ready && !diagnosticFor(latest));
-    const repairable = !working && (hasRecovery(latest) || counterDraft(latest)) && latest.id === selected()?.id && canImport() && Boolean(diagnosticFor(latest)?.suggestedRepair);
-    const budget = data?.capabilities?.budget;
-    const canGenerate = !working && validCost();
-    const currentDiagnosis = diagnosticFor(latest);
-    const recoveryReason = loginRecoveries.get(sessionKey(context));
-    const importAllowed = !working && canImport();
-    const recoveryNeeded = !ready && !working && (recoveryReason || !canGenerate && (failed || importAllowed));
-    const detail = [currentDiagnosis?.message, httpStepOverflow(currentDiagnosis), recoveryReason, data?.capabilities?.reason].filter(Boolean).join(' ');
-    return { ...progress, working, failed, repairable, canGenerate,
-      canOpenRecovery: Boolean(recoveryNeeded && importAllowed && hasRecovery(latest) && latest.id === selected()?.id && currentDiagnosis?.canLoad),
-      canImport: importAllowed,
-      recoveryUnavailable: Boolean(recoveryReason),
-      ...(canGenerate ? { cost: `使用 ${data.capabilities.model}，当前还可生成 ${budget.remainingAttempts} 次。` } : {}),
-      ...(ready && !working ? { draft: { id: ready.id, canApprove: canEdit() && !pending, http: ready.proposal.steps.length, browser: ready.proposal.browser.steps.length,
-        requirements: [...new Set(ready.proposal.steps.flatMap(step => step.requirementIds ?? []))] } } : {}),
-      ...(recoveryNeeded ? { text: '这次还没有可用的验收清单',
-        detail: detail || '打开详情查看失败记录和可继续的操作。' } : {}),
-      ...(working && progress.state === 'working' ? { workingText: progress.text } : {}) };
-  }
-  function guideAct(kind) {
-    const current = guide();
-    if (kind === 'propose' && current.canGenerate) {
-      refs.consent.checked = true;
-      return perform(kind, { automaticRepair: true });
-    }
-    if (kind === 'quickRepair' && current.repairable) return perform(kind);
-    if (kind === 'openImport' && current.canImport) {
-      refs.importDetails.open = true;
-      refs.importJSON.focus();
-      return;
-    }
-    if (kind === 'openRecovery' && current.canOpenRecovery) return openRecovery();
-    if (kind !== 'approve' || !current.draft?.canApprove) return;
-    saved.selectedId = current.draft.id;
-    chooseRow();
-    if (!draft || dirtyDefinition(selected())) {
-      report(new Error('这份清单有尚未保存的编辑。请打开清单详情查看。'));
-      return;
-    }
-    if (!draft.feedback.trim()) draft.feedback = '已在引导流程中核对当前验收范围。';
-    return perform('approve');
   }
   function validCost() {
     const cap = data?.capabilities, budget = cap?.budget;
@@ -248,7 +197,7 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     state.setAttribute('role', 'status'); errorBox.setAttribute('role', 'alert'); noticeBox.setAttribute('role', 'status'); root.append(refreshButton, state, errorBox, noticeBox);
     const body = node('div'), cost = node('p', '', 'vp-note'), consent = node('input'); consent.type = 'checkbox';
     const consentLabel = node('label', null, 'vp-consent'); consentLabel.append(consent, node('span', '我已核对当前模型、HTTP结构范围及尝试预算，同意生成新测试提案产生用量。'));
-    const propose = button('生成独立测试提案', () => { void perform('propose'); }, true); body.append(cost, consentLabel, propose);
+    const propose = button('生成独立测试提案', () => { void perform('propose', { automaticRepair: autoRepairOnPropose }); }, true); body.append(cost, consentLabel, propose);
     const importDetails = node('details'), importJSON = node('textarea', null, 'vp-json'), importFeedback = node('textarea'), importButton = button('保存为待审阅定义', () => { void perform('import'); });
     importJSON.maxLength = 262144; importJSON.spellcheck = false; importFeedback.maxLength = 5000;
     importDetails.append(node('summary', '导入已有测试定义（不调用模型）'), node('p', '将已有定义保存为人工草稿，保留原模型尝试与费用。导入后仍须单独审阅和认可，尚未运行测试。'), field('待导入测试定义 JSON', importJSON), field('导入依据（必填，最多5000字）', importFeedback), importButton); body.append(importDetails);
@@ -288,9 +237,8 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     refs.importJSON.disabled = refs.importFeedback.disabled = !!action || !canImport(); refs.importButton.disabled = !allowed('import');
     const list = rows(), listSignature = JSON.stringify(list.map(row => [row.id, row.status, row.revision]));
     if (refs.select.dataset.signature !== listSignature) { refs.select.replaceChildren(); for (const row of list) { const option = node('option', `${STATUSES[row.status] ?? '未知状态'} · ${row.origin === 'manual' ? `人工定义记录${count(row.attempt)}` : `第${count(row.attempt)}次`} · ${row.id}`); option.value = row.id; refs.select.append(option); } refs.select.dataset.signature = listSignature; }
-    const preferred = isGuided() && !action && !pending && !draft?.touched ? jointDraft() ?? currentRows().at(-1) : null;
-    if (!list.some(row => row.id === saved.selectedId) || preferred && preferred.id !== saved.selectedId) {
-      saved.selectedId = (preferred ?? list.at(-1))?.id ?? ''; saved.loadedKey = ''; draft = null;
+    if (!list.some(row => row.id === saved.selectedId)) {
+      saved.selectedId = (jointDraft() ?? list.at(-1))?.id ?? ''; saved.loadedKey = ''; draft = null;
     }
     refs.select.value = saved.selectedId; refs.select.disabled = !!action || !list.length;
     const row = selected(); refs.detail.hidden = !row; loadDiagnostic(row); if (!row) return; chooseRow();
@@ -401,6 +349,6 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
       else notice = '操作结果未确认，编辑内容已保留。请刷新核对后再决定下一步；不会自动重发。'; } }
     finally { if (isCurrent(token) && action === token) { action = null; persist(); render(); finishAutomaticRepair(); onUpdate(); schedule(); } else if (!destroyed && syncContext()) { render(); void refresh(); } }
   }
-  return { async mount(element) { if (destroyed) return false; if (!element?.append) throw new TypeError('测试提案面板需要挂载元素。'); if (!mounted) { mounted = true; build(element); } return refresh(); }, refresh, workflowProgress, guide, guideAct,
+  return { async mount(element) { if (destroyed) return false; if (!element?.append) throw new TypeError('测试提案面板需要挂载元素。'); if (!mounted) { mounted = true; build(element); } return refresh(); }, refresh, workflowProgress,
     destroy() { if (destroyed) return; persist(); destroyed = true; epoch++; readId++; clearTimeout(timer); action = null; pending = null; root?.remove(); } };
 }

@@ -23,7 +23,7 @@ function previewURL(value) {
 }
 
 /** Only backend current/accepted facts grant actions; POST responses never grant a pass. */
-export function createPlannedExecutionPanel({ api, getContext, onError = () => {}, onFailure = () => {}, onUpdate = () => {}, openVerification, reviseChecklist, canReviseChecklist = () => true, isGuided = () => false }) {
+export function createPlannedExecutionPanel({ api, getContext, onError = () => {}, onFailure = () => {}, onUpdate = () => {}, openVerification, reviseChecklist, canReviseChecklist = () => true }) {
   if (typeof api !== 'function' || typeof getContext !== 'function') throw new TypeError('规划开发面板需要api和当前规划上下文。');
   let root, refs, destroyed = false, mounted = false, timer, epoch = 0, readSerial = 0, action = null, pending = null;
   let context = contextOf(null), key = '', data = null, proposals = null, fresh = false, loading = false, error = '', notice = '', consentKey = '';
@@ -104,70 +104,9 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     return { execution, failureHelp: failureHelp(execution), canReviseChecklist: mayReviseChecklist(execution), accepted: Boolean(accepted(execution)), hasDefinition: definitions().length > 0,
       canStart: Boolean(data?.capabilities?.canStart), reason: data?.capabilities?.reason || '' };
   }
-  function summarizeFailure(execution) {
-    if (execution?.error) return execution.error;
-    const firstPageError = execution?.checks?.browser?.find(check => check.passed === false && typeof check.actual === 'string' && check.actual.startsWith('{'));
-    if (!firstPageError) return '';
-    try {
-      const { operation, expected, guardFailures } = JSON.parse(firstPageError.actual);
-      if (operation === 'goto' && (guardFailures?.console_error || guardFailures?.page_error)) {
-        return /^\/login(?:\.html)?(?:\?|$)/u.test(expected) ? '浏览器打开登录页时遇到页面错误。' : '浏览器打开页面时遇到运行错误。';
-      }
-    } catch { /* The full observation is still available in technical details. */ }
-    return '';
-  }
-  function guide() {
-    if (!refs || !fresh || keyOf(contextOf(getContext())) !== key) return {};
-    const execution = latestExecution(), progress = workflowProgress(), cap = data?.capabilities, budget = cap?.budget;
-    const active = Boolean(action || pending || execution?.active);
-    const locked = active || loading || previewsBlock();
-    const selected = execution?.id === selectedId;
-    const validStart = !locked && validBudget() && confirmed() && Boolean(selectedDefinition()) && !checklistBlocksDefinition();
-    const canRepair = Boolean(validStart && selected && execution?.actions?.canRepair && selectedDefinition()?.id === execution.proposalId
-      && selectedDefinition()?.revision === execution.revision);
-    const flow = execution?.workflow, reworkCount = flow?.reworkCount ?? 0;
-    const checkingDelivery = execution?.status === 'accepted' && !progress.accepted;
-    const held = ['paused', 'pause_requested', 'paused_recovery_ready', 'recovery_requested', 'cancel_requested', 'reconciliation_required'].includes(execution?.status);
-    const failed = ['failed', 'stopped', 'timed_out'].includes(execution?.status);
-    const failedStage = ['testing', 'self_check'].includes(flow?.stage) ? 'testing' : flow?.stage;
-    const stage = progress.accepted ? 'delivery' : failed ? failedStage ?? (execution?.checks ? 'testing' : 'coding')
-      : flow?.reviewPending ? 'review' : flow?.testing || flow?.selfCheck || ['validating', 'self_check'].includes(execution?.status) ? 'testing' : 'coding';
-    const reworking = reworkCount > 0 && active && !held && stage === 'coding';
-    const taskCount = execution?.tasks?.length ?? 0;
-    const completedTasks = execution?.tasks?.filter(task => task.status === 'completed').length ?? 0;
-    const stopDetail = execution?.status === 'timed_out' ? '本次开发时间已用完。你可以打开记录看最后完成了什么。'
-      : execution?.status === 'stopped' ? '本次开发已停止，记录和已生成的代码已保留。'
-        : flow?.errorCode === 'unchanged_candidate' ? '这轮返工没有产生代码改动。你可以查看上次检查遇到的问题。'
-          : summarizeFailure(execution) || (stage === 'review' ? '最后一版仍有审查问题待解决。' : stage === 'testing' ? '最后一版还有测试没通过。' : '这次没有生成可继续检查的版本。');
-    const help = progress.failureHelp;
-    return { accepted: progress.accepted, active, canStart: validStart, canRepair, failed, stage, reworkCount, checkingDelivery,
-      failureAction: help?.action, nextStep: help?.nextStep, canReviseChecklist: progress.canReviseChecklist,
-      held, taskCount, completedTasks,
-      canStop: selected && mayCancel(execution), canResume: selected && mayTaskControl(execution, 'resume'), canRecover: selected && mayRecover(execution),
-      title: held ? STATES[execution.status] : reworking ? '正在自动返工' : stage === 'review' ? '正在独立审查' : stage === 'testing' ? '正在运行测试'
-        : execution?.status === 'generating' ? '正在写代码' : execution?.status === 'proposal_rejected' ? '正在调整实现' : '正在准备开发',
-      detail: held ? help?.detail || '你的需求和本次进度已保留。' : reworking ? `${({ review: '审查发现了需要修改的问题', proposal: '这一轮代码草稿需要调整' })[flow?.cause] ?? '测试发现了需要修改的问题'}。改完会重新测试和审查。`
-        : stage === 'review' ? '功能和页面测试已通过。审查会核对代码有没有遗漏。'
-          : stage === 'testing' ? '系统正在打开软件、操作页面并检查功能。'
-            : active ? '代码准备好后，会自动开始测试。' : cap?.canStart ? '' : '正在核对启动开发的条件。',
-      failureTitle: help?.title ?? (execution?.status === 'timed_out' ? '这次开发超时了' : execution?.status === 'stopped' ? '这次开发已停止'
-        : execution?.checks?.http?.length || execution?.checks?.browser?.length ? '这一版没有通过检查' : '这次开发未完成'),
-      failureDetail: help?.detail || stopDetail,
-      ...(validStart ? { cost: `包含自动返工，本次最多调用模型 ${budget.attemptModelCalls ?? budget.maxCalls + budget.maxReviewCalls} 次。` } : {}),
-      previewHref: selected ? previewLink(execution) : null, canPreview: selected && mayPreview(execution), canStopPreview: selected && mayStopPreview(execution),
-      downloadHref: selected && mayDownload(execution) ? `${base()}/${encodeURIComponent(execution.id)}/download` : null };
-  }
-  function guideAct(kind) {
-    const status = guide();
-    if (kind === 'revise-checklist') {
-      const item = latestExecution();
-      if (mayReviseChecklist(item)) return reviseChecklist(item.id);
-      return;
-    }
-    if (!({ start: status.canStart, repair: status.canRepair, preview: status.canPreview, 'stop-preview': status.canStopPreview,
-      cancel: status.canStop, resume: status.canResume, recover: status.canRecover })[kind]) return;
-    if (kind === 'start' || kind === 'repair') refs.consent.checked = true;
-    return perform(kind);
+  function reviseCurrentChecklist() {
+    const { execution, canReviseChecklist } = workflowProgress();
+    if (canReviseChecklist) return reviseChecklist(execution.id);
   }
   function focusStage(stage) {
     if (!refs) return null;
@@ -302,7 +241,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     refs.recordSelect.hidden = Boolean(openVerification) && !rows().length;
     proposalId = options(refs.definitionSelect, candidates.map(item => ({ id: item.id, label: `${item.proposal.name || item.id} · ${item.revision.slice(0, 12)}` })), proposalId, '尚无当前认可的联合验收定义');
     const latest = latestExecution();
-    const preferredExecution = !action && !pending && (isGuided() || !selectedId && latest?.createdAt) ? latest?.id : null;
+    const preferredExecution = !action && !pending && !selectedId && latest?.createdAt ? latest?.id : null;
     selectedId = options(refs.executionSelect, rows().filter(scoped).map(item => ({ id: item.id, label: `${STATES[item.status] || '未知状态'} · ${item.id}` })), preferredExecution ?? selectedId, '尚无执行记录'); refs.executionSelect.disabled = !!action || !rows().filter(scoped).length;
     const signature = keyOf([key, cap?.contractRevision, cap?.model, cap?.budget, proposalId, selectedDefinition()?.revision, selectedId, row()?.candidateCommit, row()?.revision, row()?.actions?.canRepair]);
     if (signature !== consentKey) { consentKey = signature; refs.consent.checked = false; }
@@ -411,6 +350,6 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     } catch (failure) { if (currentToken(token) && action === token) { fresh = false; report(failure); notice = '操作结果未确认，选择已保留。请刷新核对后再决定下一步；不会自动重复收费请求。'; } }
     finally { if (currentToken(token) && action === token) { action = null; render(); onUpdate(); schedule(); } else if (!destroyed && syncContext()) { render(); void refresh(); } }
   }
-  return { async mount(host) { if (destroyed || mounted || !host?.append) throw new Error('规划开发面板只能挂载一次。'); mounted = true; build(host); return refresh(); }, refresh, workflowProgress, focusStage, guide, guideAct,
+  return { async mount(host) { if (destroyed || mounted || !host?.append) throw new Error('规划开发面板只能挂载一次。'); mounted = true; build(host); return refresh(); }, refresh, workflowProgress, focusStage, reviseCurrentChecklist,
     destroy() { if (destroyed) return; remember(); destroyed = true; mounted = false; epoch++; readSerial++; action = null; pending = null; previewRead = null; clearTimeout(timer); root?.remove(); refs = null; eventNodes.clear(); taskNodes.clear(); graphNodes.clear(); savedSelections.clear(); notified.clear(); } };
 }

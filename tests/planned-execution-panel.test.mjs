@@ -15,9 +15,8 @@ function execution(extra = {}) { return { id: 'execution-1', projectId: context.
   events: [{ sequence: 1, at: '2026-11-17T00:00:00Z', status: 'generating', message: marker }], error: null, accepted: false, actions: { canCancel: true, canDownload: false },
   checks: { self: [{ id: 'self', expected: '200', actual: '200', passed: true }], http: [], browser: [{ id: 'browser', name: marker, expected: marker, actual: marker, passed: false }], review: 'changes_requested', issues: [{ id: 'blocking', severity: 'blocking', status: 'open', message: marker }] }, modelCalls: [{ role: 'coding', kind: 'model', attempt: 1, model: marker, usage: { inputTokens: null, outputTokens: 8 }, finishReason: 'stop', receiptConfirmed: true, receiptHash: C }], ...extra }; }
 function fixture() { return { dev: { capabilities: { canStart: true, contractRevision: D, model: { name: 'controlled-fixture-model' }, budget: { maxCalls: 3, maxReviewCalls: 3, timeoutMs: 600000, maxAttempts: 3, totalModelCalls: 0, remainingModelCalls: 18, remainingAttempts: 3 }, reason: null }, executions: [] }, definitions: { coverage: 'structural_only', proposals: [proposal()] } }; }
-const harness = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"><style>body{margin:0;background:#f5f7fb;font:14px sans-serif}main{max-width:1100px;margin:24px auto;padding:0 16px}</style></head><body><main><div id="guide" hidden><div data-guide-steps></div><div data-guide-surface></div></div><div id="panel"></div></main><script type="module">
+const harness = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"><style>body{margin:0;background:#f5f7fb;font:14px sans-serif}main{max-width:1100px;margin:24px auto;padding:0 16px}</style></head><body><main><div id="panel"></div></main><script type="module">
 import {createPlannedExecutionPanel} from '/planned-execution.js';
-import {createGuidedWorkspace} from '/guided-workspace.js';
 window.ctx=${JSON.stringify(context)};window.initial=${JSON.stringify(fixture())};window.template=${JSON.stringify(execution()).replaceAll('<', '\\u003c')};
 window.states={a:structuredClone(window.initial),b:structuredClone(window.initial)};
 for(const p of window.states.b.definitions.proposals){p.projectId='project-b';p.runId='run-b';p.binding.projectId='project-b';p.binding.runId='run-b';}
@@ -39,13 +38,10 @@ const api=(url,options={})=>{
 };
 window.revisions=[];
 window.panel=createPlannedExecutionPanel({api,getContext:()=>window.ctx,reviseChecklist:id=>window.revisions.push(id),onError:e=>{window.errors.push(e.message);if(window.mode.observerThrow)throw new Error('observer');},onFailure:value=>{window.failures.push(structuredClone(value));if(window.mode.observerReject)return Promise.reject(new Error('observer rejected'));}});
-const guide=createGuidedWorkspace(document.querySelector('#guide'),{isVisible:()=>true,act:action=>{if(action==='reviseChecklist')window.panel.guideAct('revise-checklist');}});
-window.showGuide=()=>guide.render({project:{id:window.ctx.projectId},run:{id:window.ctx.runId,status:'succeeded',engineeringPlan:{}},canEdit:true,
- verification:{},development:window.panel.guide(),steps:['source','spec','spec-approval','plan','plan-approval','verification','coding','testing','delivery'].map(id=>({id,state:id==='testing'?'failed':id==='delivery'?'waiting':'done'}))});
 await window.panel.mount(document.querySelector('#panel'));window.ready=true;
 </script></body></html>`;
 let browser, server, origin;
-before(async () => { const names = ['/planned-execution.js', '/guided-workspace.js']; const modules = new Map(await Promise.all(names.map(async name => [name, await readFile(new URL(`../public${name}`, import.meta.url))]))); server = http.createServer((request, response) => { const js = modules.get(request.url); response.writeHead(200, { 'content-type': js ? 'text/javascript' : 'text/html; charset=utf-8' }); response.end(js || harness); }); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); origin = `http://127.0.0.1:${server.address().port}`; browser = await chromium.launch({ channel: 'msedge', headless: true }); });
+before(async () => { const module = await readFile(new URL('../public/planned-execution.js', import.meta.url)); server = http.createServer((request, response) => { const js = request.url === '/planned-execution.js' ? module : null; response.writeHead(200, { 'content-type': js ? 'text/javascript' : 'text/html; charset=utf-8' }); response.end(js || harness); }); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); origin = `http://127.0.0.1:${server.address().port}`; browser = await chromium.launch({ channel: 'msedge', headless: true }); });
 after(async () => { await browser?.close(); if (server) await new Promise(resolve => server.close(resolve)); });
 async function pageFor(t, width = 1440) { const page = await browser.newPage({ viewport: { width, height: width === 390 ? 844 : 1000 } }), errors = []; page.on('pageerror', value => errors.push(value.message)); page.on('console', value => { if (value.type() === 'error') errors.push(value.text()); }); t.after(async () => { await page.close(); assert.deepEqual(errors, []); }); await page.goto(origin); await page.waitForFunction(() => window.ready); return page; }
 const start = page => page.getByRole('button', { name: '按当前规划开始开发', exact: true });
@@ -74,7 +70,7 @@ test('unlimited plans keep per-execution confirmation and accept only the explic
   assert.equal(await page.evaluate(() => window.requests.some(request => request.method === 'POST')), false);
 });
 
-test('checklist blocker shows exact reason, next action and no coding retry on both workspace surfaces', async t => {
+test('checklist blocker shows the reason and enables revision while blocking coding retries', async t => {
   const page = await pageFor(t, 390);
   const value = { ...failedRow, failureHelp: { action: 'review_checklist', title: '验收缺少登录步骤',
     detail: '浏览器打开聊天页前，测试没有让该账号登录。', nextStep: '准备清单修订，然后确认新的验收清单。' } };
@@ -83,16 +79,15 @@ test('checklist blocker shows exact reason, next action and no coding retry on b
     Object.assign(window.states.a.dev.capabilities.budget, budget);
   }, { value, budget: unlimitedBudget });
   await refresh(page);
-  await page.evaluate(() => window.showGuide());
-  for (const surface of [page.locator('#guide'), page.locator('.planned-execution')]) {
-    await surface.getByText(value.failureHelp.title, { exact: true }).waitFor();
-    await surface.getByText(value.failureHelp.detail, { exact: true }).waitFor();
-    await surface.getByText(value.failureHelp.nextStep).waitFor();
-    await surface.getByRole('button', { name: '准备清单修订', exact: true }).click();
-  }
-  assert.deepEqual(await page.evaluate(() => window.revisions), [value.id, value.id]);
+  const panel = page.locator('.planned-execution');
+  await panel.getByText(value.failureHelp.title, { exact: true }).waitFor();
+  await panel.getByText(value.failureHelp.detail, { exact: true }).waitFor();
+  await panel.getByText(value.failureHelp.nextStep, { exact: true }).waitFor();
+  assert.equal(await consent(page).isDisabled(), true);
   assert.equal(await start(page).isDisabled(), true);
-  assert.equal(await page.locator('#guide [data-guide-action="repairBuild"]').count(), 0);
+  assert.equal(await repair(page).isDisabled(), true);
+  await panel.getByRole('button', { name: '准备清单修订', exact: true }).click();
+  assert.deepEqual(await page.evaluate(() => window.revisions), [value.id]);
   assert.equal(await page.evaluate(() => window.requests.some(request => request.method === 'POST')), false);
 });
 

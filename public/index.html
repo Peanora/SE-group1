@@ -9,7 +9,6 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%23315deb'/%3E%3Cpath d='M10 11h20M20 11v18m-8-8h16' stroke='white' stroke-width='3' fill='none'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/workspace.css">
-  <link rel="stylesheet" href="/guided-workspace.css">
   <script type="module" src="/app.js"></script>
 </head>
 <body>
@@ -31,7 +30,7 @@
   <div class="app-shell">
     <header class="topbar">
       <div class="breadcrumb"><span>工作台</span><span aria-hidden="true">/</span><strong id="breadcrumb-project">新项目</strong></div>
-      <div class="topbar-right"><a id="team-link" href="/team.html" hidden>团队账号</a><button type="button" id="workspace-view-toggle" class="text-button">查看技术详情</button><span class="connection-status" id="connection-status"><span></span>正在连接服务</span><button class="icon-button" id="refresh-button" aria-label="刷新工作区" title="刷新工作区"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.4 6M20 5v6h-6"/></svg></button></div>
+      <div class="topbar-right"><a id="team-link" href="/team.html" hidden>团队账号</a><span class="connection-status" id="connection-status"><span></span>正在连接服务</span><button class="icon-button" id="refresh-button" aria-label="刷新工作区" title="刷新工作区"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.4 6M20 5v6h-6"/></svg></button></div>
     </header>
 
     <main id="main" class="workspace">
@@ -41,9 +40,9 @@
         <div class="heading-actions"><label class="visually-hidden" for="run-select">选择运行记录</label><select id="run-select" disabled><option>尚无运行记录</option></select><button class="button button-outline" id="source-button" disabled>查看需求</button></div>
       </section>
 
-      <section id="guided-workspace" aria-label="项目进度">
-        <ol data-guide-steps aria-label="项目步骤" hidden></ol>
-        <div data-guide-surface aria-live="polite"></div>
+      <section id="delivery-workflow" class="delivery-workflow" aria-labelledby="delivery-workflow-heading">
+        <h2 id="delivery-workflow-heading">项目流程图</h2>
+        <ol id="delivery-steps"></ol>
       </section>
 
       <details class="workspace-scope"><summary>平台范围与使用说明</summary><p class="field-note" id="platform-default-notice">当前统一按浏览器网页应用规划，Windows通过浏览器使用。技术方案由平台提供，无需填写；不生成原生桌面安装包。</p></details>
@@ -61,10 +60,6 @@
       <section id="workspace-context" class="workspace-context" aria-label="当前进度与下一步">
         <div><span id="run-status" class="status-tag status-idle">尚未开始</span><span id="run-progress">导入需求后开始</span><h2 id="workspace-context-title">先导入一份软件需求</h2><p id="workspace-context-note">选择项目后，在这里查看当前步骤和需要处理的问题。</p></div>
         <button type="button" class="button button-primary" id="workspace-next-root" data-workspace-next>处理当前步骤</button>
-      </section>
-      <section id="delivery-workflow" class="delivery-workflow" aria-labelledby="delivery-workflow-heading" hidden>
-        <h2 id="delivery-workflow-heading">项目全流程</h2>
-        <ol id="delivery-steps"></ol>
       </section>
       <nav id="workspace-nav" class="workspace-nav" role="tablist" aria-label="项目工作区">
         <button type="button" id="workspace-tab-plan" role="tab" data-workspace-view="plan" aria-controls="workspace-plan" aria-selected="true">规划与确认</button>
@@ -161,7 +156,7 @@
         <li><strong>开发与测试。</strong>查看模型用量后开始。结果出来后，页面会显示下一步。</li>
         <li><strong>预览与下载。</strong>当前版本通过后，可以先试用，再拿到源码。</li>
       </ol>
-      <p>查看任务图、历史和日志时，可切换到「查看技术详情」。</p>
+      <p>点击首页流程图的节点可打开对应工作区。任务图、文档和日志在「开发任务」中查看。</p>
     </div>
     <footer class="dialog-footer"><button class="button button-primary" data-close-dialog>返回工作台</button></footer>
   </dialog>

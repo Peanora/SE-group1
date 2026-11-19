@@ -56,16 +56,21 @@ export function deliverySteps({ project, run, historical, verification, developm
     const taskCount = item.tasks?.length ?? 0;
     const taskProgress = taskCount ? `${item.tasks.filter(task => task.status === 'completed').length}/${taskCount} 项已集成` : '';
     const failures = TERMINAL_FAILURES.has(item.status);
-    const currentCheck = item.status === 'validating' || item.tasks?.some(task => ['self_check', 'validating'].includes(task.stage) && task.status !== 'completed');
+    const writing = item.active && ['generating', 'proposal_rejected'].includes(item.status);
+    const workflow = item.workflow;
+    const currentCheck = !writing && (workflow?.reviewPending || workflow?.testing || workflow?.selfCheck || ['self_check', 'validating'].includes(item.status)
+      || item.tasks?.some(task => ['self_check', 'validating'].includes(task.stage) && task.status !== 'completed'));
     const checks = checkSummary(item.checks);
-    coding = step('coding', '编写代码', passed || !taskCount && item.candidateCommit ? 'done' : failures ? 'failed' : 'working',
-      passed || !taskCount && item.candidateCommit ? '候选已生成' : EXECUTION_STATES[item.status] || '查看执行记录', taskProgress);
+    const candidateReady = passed || !writing && !taskCount && item.candidateCommit;
+    const rework = workflow?.reworkCount > 0 ? `已安排 ${workflow.reworkCount} 次自动返工` : '';
+    coding = step('coding', '编写代码', candidateReady ? 'done' : failures ? 'failed' : 'working',
+      candidateReady ? '候选已生成' : EXECUTION_STATES[item.status] || '查看执行记录', [taskProgress, rework].filter(Boolean).join(' · '));
     if (passed) {
       testing = step('testing', '测试与审查', 'done', '验收通过', checks);
       delivery = step('delivery', '交付', 'done', item.preview?.state === 'running' ? '预览运行中' : '可预览与下载');
     } else if (failures && (item.checks || taskCount && item.tasks.some(task => task.status === 'failed' && task.checks))) {
       testing = step('testing', '测试与审查', 'failed', '验收未通过', checks || '查看检查结果');
-    } else if (currentCheck) testing = step('testing', '测试与审查', 'working', '正在检查候选', checks);
+    } else if (currentCheck) testing = step('testing', '测试与审查', 'working', workflow?.reviewPending ? '正在独立审查' : '正在检查候选', checks);
     else if (item.checks) testing = step('testing', '测试与审查', 'waiting', '等待最终结论', checks);
   } else if (planApproved && !historical && preparation.state === 'done') {
     coding = step('coding', '编写代码', 'waiting', development?.canStart ? '待开始开发' : '暂未就绪', development?.canStart ? '' : development?.reason);
