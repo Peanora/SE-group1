@@ -11,6 +11,7 @@ import { SimulatedTaskService } from './lib/simulated-tasks.mjs';
 import { createLocalExecutionSubject } from './lib/team-access.mjs';
 import { createVerificationRecovery } from './lib/verification-recovery.mjs';
 import { loginContinuationDraft, loginRevisionNote, loginRevisionTask, previousLoginPlan } from './lib/verification-login-continuation.mjs';
+import { reconcileEndedPreviews } from './lib/preview-output-recovery.mjs';
 import { repeatedCounterSteps } from './public/verification-draft.js';
 
 import { DEFAULT_STACK, PLATFORM_DEFAULTS } from './lib/platform-defaults.mjs';
@@ -105,6 +106,7 @@ export async function createApp(options = {}) {
   catch (cause) { await Promise.allSettled([orchestrator.shutdown(), executionService?.shutdown()]); throw cause; }
   orchestrator.assertSimulationIdle = projectId => simulationService.assertIdle(projectId);
   const verificationRoot = path.resolve(options.verificationPlanningRootDir ?? path.join(store.directory, 'verification-planning'));
+  const plannedRoot = path.resolve(options.plannedExecutionRootDir ?? path.join(store.directory, 'planned-executions'));
   const verificationRecovery = createVerificationRecovery({ root: verificationRoot, getPlanning: (projectId, runId) => store.getPersistedRun(projectId, runId) });
   let sourceChangeService, verificationPlanningService, plannedExecutionService, teamAccess, localReleasesService, plannedDatasetService, evolutionService;
   try {
@@ -113,10 +115,14 @@ export async function createApp(options = {}) {
       getPlanning: async (projectId, runId) => store.getPersistedRun(projectId, runId),
       getPlanningSync: (projectId, runId) => store.getPersistedRun(projectId, runId),
     });
+    if (options.plannedExecutionService === undefined) await reconcileEndedPreviews(path.join(plannedRoot, 'previews'));
     plannedExecutionService = options.plannedExecutionService === null ? null : options.plannedExecutionService ?? await (await import('./lib/planned-execution-service.mjs')).createPlannedExecutionService({
-      rootDir: path.resolve(options.plannedExecutionRootDir ?? path.join(store.directory, 'planned-executions')), verificationService: verificationPlanningService,
+      rootDir: plannedRoot, verificationService: verificationPlanningService,
       getPlanningSync: (projectId, runId) => store.getPersistedRun(projectId, runId),
-      dependencies: { hasExternalActivity: projectId => !!localReleasesService?.hasActivity(projectId) || !!evolutionService?.hasActivity(projectId) || !!plannedDatasetService?.hasActivity(projectId),
+      dependencies: {
+        // Interactive browsing transfers more approved assets than one scripted acceptance.
+        startPreviewRuntime: async input => (await import('./lib/web-runtime.mjs')).startWebRuntime({ ...input, maxOutputBytes: 4 * 1024 * 1024 }),
+        hasExternalActivity: projectId => !!localReleasesService?.hasActivity(projectId) || !!evolutionService?.hasActivity(projectId) || !!plannedDatasetService?.hasActivity(projectId),
         requiresExecutionSubject: () => !!teamAccess },
       withCheckpoint: (projectId, work) => orchestrator.withProjectCheckpoint(projectId, () => {
         if (typeof executionService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '无法核对已有代码执行状态，暂不能开始研发。');
@@ -125,7 +131,6 @@ export async function createApp(options = {}) {
     });
     const localLifecycleEnabled = options.localLifecycleEnabled ?? (typeof plannedExecutionService?.authorizeAcceptedSource === 'function' && typeof verificationPlanningService?.assertApprovedDefinition === 'function');
     if (localLifecycleEnabled) {
-      const plannedRoot = path.resolve(options.plannedExecutionRootDir ?? path.join(store.directory, 'planned-executions'));
       const lifecycleCheckpoint = (projectId, work) => orchestrator.withProjectCheckpoint(projectId, () => {
         if (![executionService, verificationPlanningService, plannedExecutionService].every(service => typeof service?.withProjectCheckpoint === 'function')) throw new HttpError(409, '当前服务无法核对本机业务版本的安全检查点。');
         return executionService.withProjectCheckpoint(projectId, () => verificationPlanningService.withProjectCheckpoint(projectId, () => plannedExecutionService.withProjectCheckpoint(projectId, work)));
