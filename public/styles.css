@@ -56,3 +56,36 @@ dialog{padding:0;border:1px solid #dce4f0;border-radius:13px;box-shadow:0 28px 9
 .spec-repair-actions{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin-top:6px}
 .spec-repair-actions .text-button{margin-left:auto}
 @media(max-width:760px){.spec-repair{padding:18px 15px}.spec-repair-meta{grid-template-columns:1fr;gap:8px}.spec-repair-fields{grid-template-columns:1fr}.spec-repair-actions{display:grid;grid-template-columns:1fr}.spec-repair-actions .text-button{margin-left:0;min-height:38px}.spec-repair-actions .button{min-height:40px;font-size:12px}}
+
+/* 当前进度卡：状态由后端驱动，用户一眼看到进度、当前动作与下一步。 */
+.status-card{--tone:#315deb;--tone-tint:#eef2ff;background:#fff;border:1px solid var(--line);border-left:4px solid var(--tone);border-radius:var(--radius);padding:20px 24px;margin-bottom:16px;box-shadow:0 2px 10px #1a335208}
+.status-card.tone-attention{--tone:#c98a1e;--tone-tint:#fff6e5}.status-card.tone-problem{--tone:#c64752;--tone-tint:#fff0f1}.status-card.tone-done{--tone:#16846a;--tone-tint:#eaf7f2}.status-card.tone-muted{--tone:#8493a9;--tone-tint:#f0f3f7}.status-card.tone-idle{--tone:#315deb;--tone-tint:#eef2ff}
+.status-card-main{display:flex;align-items:center;justify-content:space-between;gap:24px}
+.status-card-heading{min-width:0;flex:1}
+.status-card-eyebrow{display:inline-block;font-size:11px;font-weight:500;color:var(--tone);background:var(--tone-tint);border-radius:4px;padding:3px 9px;margin-bottom:9px}
+.status-card-title{display:block;font-size:18px;font-weight:600;color:var(--text);line-height:1.5;margin:0 0 5px}
+.status-card-detail{font-size:12px;color:#61728c;line-height:1.8;margin:0;max-width:92ch}
+.status-card-action{flex:none}
+.status-steps{display:flex;flex-wrap:wrap;gap:0 6px;list-style:none;margin:18px 0 0;padding:16px 0 0;border-top:1px solid #edf1f6}
+.status-step{display:flex;align-items:center;gap:7px;font-size:11px;color:#93a0b2;padding:5px 10px 5px 0;white-space:nowrap;cursor:pointer}
+.status-step:not(:last-child):after{content:"";width:20px;height:1px;background:#dde4ee;margin-left:6px}
+.status-step-dot{display:inline-grid;place-items:center;width:19px;height:19px;border-radius:50%;border:1.5px solid #cfd8e5;color:#fff;font-size:10px;font-weight:600;flex:none}
+.status-step.done{color:#16846a}.status-step.done .status-step-dot{background:#16846a;border-color:#16846a}
+.status-step.current{color:#315deb;font-weight:600}.status-step.current .status-step-dot{border-color:#315deb;background:#fff;box-shadow:0 0 0 3px #315deb22}
+.status-step.error{color:#c64752;font-weight:600}.status-step.error .status-step-dot{background:#c64752;border-color:#c64752}
+.status-step:hover .status-step-dot{border-color:#315deb}
+.context-note{margin:0 0 16px;font-size:11px;color:#8794a8}
+.context-note>summary{cursor:pointer;padding:4px 0;color:#7d8da6}
+.context-note>summary:hover{color:var(--blue)}
+.context-note .field-note{margin-top:6px}
+@media(max-width:760px){.status-card{padding:16px 15px}.status-card-main{flex-direction:column;align-items:flex-start;gap:14px}.status-card-title{font-size:16px}.status-card-action,.status-card-action .button{width:100%}.status-steps{gap:4px 0}.status-step{font-size:10px;padding:4px 6px 4px 0}.status-step:not(:last-child):after{width:10px;margin-left:4px}}
+
+/* 页面导航：把流程拆成独立页面，点标签切换而不是同页堆叠。 */
+.breadcrumb #breadcrumb-view{color:var(--blue);font-weight:500}
+.view-nav{display:flex;gap:4px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:5px;margin-bottom:16px;overflow-x:auto;scrollbar-width:thin}
+.view-tab{flex:0 0 auto;padding:9px 16px;border:0;border-radius:7px;background:transparent;color:#6b7a90;font-size:12px;font-weight:500;white-space:nowrap}
+.view-tab:hover{background:var(--canvas);color:var(--text)}
+.view-tab.active{background:var(--blue);color:#fff;box-shadow:0 2px 6px #315deb33}
+.view-tab:focus-visible{outline:3px solid #94aaf3;outline-offset:2px}
+.view[data-view="source"],.view[data-view="execution"]{min-height:120px}
+@media(max-width:760px){.view-nav{gap:3px;padding:4px}.view-tab{padding:8px 12px;font-size:11px}}

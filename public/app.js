@@ -8,6 +8,35 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const escape = (value = '') => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const state = { health: null, projects: [], project: null, run: null, stageId: 'spec', taskId: null, artifactName: 'task.md', tab: 'events', raw: false, busy: false, epoch: 0, selectionPending: false, pollTimer: null, feedback: '', importFile: null, filename: 'requirements.md' };
+const VIEWS = ['plan', 'review', 'records', 'source', 'execution'];
+const VIEW_LABELS = { plan: '规划总览', review: '规格 / 计划确认', records: '运行记录', source: '需求变更', execution: '代码执行与验收' };
+function currentView() {
+  const raw = location.hash.replace(/^#\/?/, '').split(/[?&]/)[0];
+  return VIEWS.includes(raw) ? raw : 'plan';
+}
+function navigate(view) {
+  const target = VIEWS.includes(view) ? view : 'plan';
+  if (currentView() === target) { applyView(true); return; }
+  location.hash = `/${target}`;
+}
+function applyView(scroll = false) {
+  const view = currentView();
+  $$('#view-nav [data-view]').forEach((button) => {
+    const active = button.dataset.view === view;
+    button.classList.toggle('active', active);
+    if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
+  });
+  const crumb = $('#breadcrumb-view');
+  if (crumb) crumb.textContent = VIEW_LABELS[view];
+  if (scroll) {
+    const target = $(`.view[data-view="${view}"]`);
+    if (target) {
+      const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      target.scrollIntoView({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
+    }
+  }
+}
+window.addEventListener('hashchange', () => applyView(true));
 let executionContextKey = '';
 let sourceContextKey = '';
 let simulationContextKey = '';
@@ -43,7 +72,7 @@ const sourceChanges = createSourceChanges({ api: sourceApi, getContext: () => ({
   onReplan: ({ projectId, revision, generation }) => {
     if (state.selectionPending || projectId !== state.project?.id || revision !== state.project.currentSourceRevision || generation !== state.project.sourceGeneration) throw new Error('需求版本已变化，请刷新核对后再重新规划。');
     if ($('#start-run').disabled) throw new Error('当前不能启动规划，请先核对已有运行状态、规划模式和预算提示。');
-    $('.flow-panel').scrollIntoView({ block: 'start' });
+    navigate('plan');
     return startRun({ revision, generation });
   },
   onError: error => showError(error) });
@@ -189,7 +218,7 @@ const planningReview = createPlanningReview({
     const { run } = await api(basePath());
     if (id === state.run?.id && epoch === state.epoch) { updateRun(run); schedulePoll(); }
   },
-  showArtifact: (name) => { showArtifact(name); $('#records-body').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); },
+  showArtifact: (name) => { showArtifact(name); navigate('records'); },
   addFeature: openFeatureEditor,
   onPlanDraft: () => { if (state.tab === 'tasks') renderRecords(); },
   toast,
@@ -198,7 +227,7 @@ function openSourceEditor() {
   const section = $('#source-changes-section');
   if (!section || section.hidden) { toast('当前项目没有可提交的原始需求修改入口。'); return; }
   section.open = true;
-  section.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+  navigate('source');
 }
 async function openFeatureEditor() {
   if (!state.project || state.selectionPending) return;
@@ -278,6 +307,73 @@ function renderControls() {
   $('#task-count').textContent = run?.tasks?.length || 0;
   $('#artifact-count').textContent = run?.artifacts?.length || 0;
 }
+function focusStage(run = state.run) {
+  if (!run) return null;
+  if (specClarificationPending(run)) return 'spec';
+  if (run.status === 'awaiting_spec' || run.status === 'awaiting_review') {
+    const last = [...(run.stages || [])].reverse().find(stage => stage.status === 'succeeded');
+    return last?.id || 'spec';
+  }
+  const failed = (run.stages || []).find(stage => stage.status === 'failed');
+  if (failed) return failed.id;
+  const running = (run.stages || []).find(stage => stage.status === 'running');
+  if (running) return running.id;
+  const firstPending = (run.stages || []).find(stage => stage.status === 'pending' || stage.status === 'blocked');
+  return firstPending?.id || 'export';
+}
+
+function statusGuidance() {
+  if (!state.project) return { tone: 'idle', title: '从一份需求开始', detail: '新建项目并导入软件需求文档，系统会把需求整理成规格和开发计划。', action: 'new' };
+  if (!state.run) return { tone: 'idle', title: '需求已就绪，等待编排', detail: '点击“开始编排”，系统会先整理规格，再由你分两次确认规格与计划。', action: 'start' };
+  const run = state.run, historical = historicalRun(run);
+  if (historical) return { tone: 'muted', title: '正在查看历史运行（只读）', detail: '这一版沿用当时的需求。要继续当前需求，请重新编排并重新确认规格与计划。', action: 'none' };
+  if (specClarificationPending(run)) return { tone: 'attention', title: '需要你补充需求信息', detail: '系统还无法确定具体功能，请在下方逐项回答问题，再点“根据回答整理规格”。', action: 'review' };
+  if (run.status === 'awaiting_spec') return { tone: 'attention', title: '请确认规格，之后才会生成计划', detail: '规格已整理完成。请在下方核对需求与验收条件、答复待确认问题，然后点“确认规格并继续”。', action: 'review' };
+  if (run.status === 'awaiting_review') return { tone: 'attention', title: '请确认开发计划', detail: '任务与依赖已生成。请在下方核对任务和验收条件，确认后即可导出交接文档。', action: 'review' };
+  if (run.status === 'running') return { tone: 'progress', title: `正在执行：${stageTitle(focusStage(run))}`, detail: '各阶段按依赖推进，点击流程节点可查看日志和产物；进度由后端状态实时更新。', action: 'none' };
+  if (run.status === 'paused') return { tone: 'muted', title: '编排已暂停', detail: '当前阶段结束后暂停推进。点击流程工具栏的“恢复执行”继续。', action: 'none' };
+  if (run.status === 'failed') {
+    const failed = (run.stages || []).find(stage => stage.status === 'failed');
+    return { tone: 'problem', title: `执行失败：${failed ? stageTitle(failed.id) : '某个阶段'}`, detail: '点击失败节点查看原因与下一步，可从该阶段重试，成功分支会保留。', action: 'none' };
+  }
+  if (run.status === 'succeeded') return { tone: 'done', title: '规划完成，可下载交接文档', detail: '规格、架构、任务与计划均已确认导出。需要受控编码验证时，到“代码执行与验收”面板按提示操作。', action: 'download' };
+  return { tone: 'muted', title: `运行${runStatusLabel(run)}`, detail: '点击下方流程节点查看各阶段详情，或按工具栏提示继续。', action: 'none' };
+}
+
+function renderStatusCard() {
+  const card = $('#status-card');
+  if (!card) return;
+  const run = state.run;
+  const guide = statusGuidance();
+  const focus = focusStage(run);
+  const clarificationPending = specClarificationPending(run);
+  const waitingForUser = run && !historicalRun(run) && (run.status === 'awaiting_spec' || run.status === 'awaiting_review' || clarificationPending);
+  const focusId = focusStage(run);
+  const completed = run?.stages?.filter(stage => stage.status === 'succeeded' && !(clarificationPending && stage.id === 'spec') && !(waitingForUser && stage.id === focusId)).length || 0;
+  const total = run?.stages?.length || STAGES.length;
+  const waiting = run && !historicalRun(run) && (run.status === 'awaiting_spec' || run.status === 'awaiting_review' || clarificationPending);
+  const steps = STAGES.map((stage) => {
+    const live = stageOf(stage.id);
+    let stepState = 'todo';
+    const isFocus = waiting && focus === stage.id;
+    if (isFocus) stepState = 'current';
+    else if (live?.status === 'succeeded' && !(clarificationPending && stage.id === 'spec')) stepState = 'done';
+    else if (live?.status === 'failed') stepState = 'error';
+    else if (focus === stage.id && run && !historicalRun(run)) stepState = 'current';
+    const label = stage.id === 'spec' && clarificationPending ? '等待补充需求' : stage.id === 'export' && run?.status === 'awaiting_review' ? '等待计划确认' : isFocus ? `待确认 · ${stage.title}` : stage.title;
+    return `<li class="status-step ${stepState}" data-stage-step="${escape(stage.id)}"><span class="status-step-dot" aria-hidden="true">${stepState === 'done' ? '✓' : stepState === 'error' ? '!' : ''}</span><span>${escape(label)}</span></li>`;
+  }).join('');
+  let actionHtml = '';
+  if (guide.action === 'new') actionHtml = '<button type="button" class="button button-primary" data-status-action="new">新建项目</button>';
+  else if (guide.action === 'start') actionHtml = `<button type="button" class="button button-primary" data-status-action="start" ${$('#start-run').disabled ? 'disabled' : ''}>开始编排</button>`;
+  else if (guide.action === 'review') actionHtml = '<button type="button" class="button button-primary" data-status-action="review">去确认</button>';
+  else if (guide.action === 'download' && run?.status === 'succeeded') actionHtml = `<a class="button button-primary" href="${basePath()}/download" download>下载文档包</a>`;
+  const progressText = run ? `${completed} / ${total} 个阶段完成` : '尚未开始';
+  card.hidden = false;
+  card.className = `status-card tone-${guide.tone}`;
+  card.innerHTML = `<div class="status-card-main"><div class="status-card-heading"><span class="status-card-eyebrow">当前进度 · ${escape(progressText)}</span><strong class="status-card-title">${escape(guide.title)}</strong><p class="status-card-detail">${escape(guide.detail)}</p></div>${actionHtml ? `<div class="status-card-action">${actionHtml}</div>` : ''}</div><ol class="status-steps">${steps}</ol>`;
+}
+
 function renderWorkflow() {
   const edge = (from, to, path) => `<path class="flow-edge ${escape(stageOf(to)?.status || 'pending')}" d="${path}" marker-end="url(#arrow-${escape(stageOf(to)?.status || 'pending')})"/>`;
   const markers = ['pending', 'running', 'succeeded', 'failed', 'blocked'].map((status) => `<marker id="arrow-${status}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L8 4L0 8Z" fill="${({ running: '#6480e5', succeeded: '#7aaea1', failed: '#d4a4ac', blocked: '#d4a4ac' })[status] || '#c4cfdf'}"/></marker>`).join('');
@@ -417,10 +513,10 @@ function renderRecords() {
   for (const [name, pos] of Object.entries(savedScroll)) { const element = $(`.${name}`); if (element) { element.scrollLeft = pos.x; element.scrollTop = pos.y; } }
   if (state.tab === 'events' && followEvents && $('.event-list')) $('.event-list').scrollTop = $('.event-list').scrollHeight;
 }
-function renderRun() { renderControls(); renderWorkflow(); renderInspector(); renderRecords(); syncExecutionPanel(); syncSimulatedTasks(); }
-function renderAll() { renderProjects(); renderHeader(); renderRun(); }
+function renderRun() { renderControls(); renderStatusCard(); renderWorkflow(); renderInspector(); renderRecords(); syncExecutionPanel(); syncSimulatedTasks(); }
+function renderAll() { renderProjects(); renderHeader(); renderRun(); applyView(); }
 
-function setBusy(value) { state.busy = value; renderControls(); $('#create-project-button').disabled = value; $('#create-project-button').textContent = value ? '正在创建…' : '创建项目'; $$('[data-close-dialog]', $('#project-dialog')).forEach((button) => { button.disabled = value; }); }
+function setBusy(value) { state.busy = value; renderControls(); renderStatusCard(); $('#create-project-button').disabled = value; $('#create-project-button').textContent = value ? '正在创建…' : '创建项目'; $$('[data-close-dialog]', $('#project-dialog')).forEach((button) => { button.disabled = value; }); }
 function rememberSelection() {
   try { sessionStorage.setItem('taskflow-selection', JSON.stringify({ projectId: state.project?.id, runId: state.run?.id, taskId: state.taskId })); } catch { /* The current view remains usable without session storage. */ }
 }
@@ -570,7 +666,7 @@ async function createProject(event) {
   } catch (error) { $('#import-error').textContent = error.message; $('#import-error').hidden = false; }
   finally { setBusy(false); }
 }
-function showArtifact(name) { state.artifactName = name; state.tab = 'artifacts'; renderRecords(); }
+function showArtifact(name) { state.artifactName = name; state.tab = 'artifacts'; renderRecords(); navigate('records'); }
 
 $('#new-project').addEventListener('click', () => openProjectDialog());
 $('#onboarding-import').addEventListener('click', () => openProjectDialog());
@@ -585,9 +681,21 @@ $('#run-select').addEventListener('change', (event) => selectRun(event.target.va
 $('#dismiss-error').addEventListener('click', clearError);
 $('#help-button').addEventListener('click', () => $('#help-dialog').showModal());
 $('#source-button').addEventListener('click', () => { if (!state.project) return; $('#source-title').textContent = selectedSource().filename; $('#source-content').textContent = selectedSource().content; $('#source-dialog').showModal(); });
-$('#revise-source').addEventListener('click', () => { $('#source-dialog').close(); const section = $('#source-changes-section'); section.open = true; section.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); });
+$('#revise-source').addEventListener('click', () => { $('#source-dialog').close(); openSourceEditor(); });
 $('#project-dialog').addEventListener('cancel', (event) => { if (state.busy) event.preventDefault(); });
 document.addEventListener('click', (event) => {
+  const statusAction = event.target.closest('[data-status-action]');
+  if (statusAction && !statusAction.disabled) {
+    const kind = statusAction.dataset.statusAction;
+    if (kind === 'new') { openProjectDialog(); return; }
+    if (kind === 'start') { void startRun(); return; }
+    if (kind === 'review') { navigate('review'); return; }
+    return;
+  }
+  const statusStep = event.target.closest('[data-stage-step]');
+  if (statusStep) { state.stageId = statusStep.dataset.stageStep; navigate('plan'); renderWorkflow(); renderInspector(); return; }
+  const viewTab = event.target.closest('#view-nav [data-view]');
+  if (viewTab) { navigate(viewTab.dataset.view); return; }
   const editTask = event.target.closest('[data-edit-selected-task]'); if (editTask && !editTask.disabled) { planningReview.openTask(state.taskId); return; }
   const addFeature = event.target.closest('[data-add-feature]'); if (addFeature && !addFeature.disabled) { void openFeatureEditor().catch(showError); return; }
   const close = event.target.closest('[data-close-dialog]'); if (close) close.closest('dialog')?.close();
