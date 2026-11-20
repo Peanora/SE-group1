@@ -4,7 +4,7 @@
 
 依据工作区的 `team-delivery-plan.md` 第 4 人要求，补齐固定源码审查、按原问题编号复核、阻塞交付、异常诊断和预约候补演示。
 
-本轮刷新远端后，`main` 为 `171aaa6`，包含旧版固定图书执行流程。计划引用的预约清单、规划驱动执行器及原生 Review v2 位于 `codex/automatic-login-checklist` 的 `2a9d791`，该分支比 main 多 4 个提交。本轮在此版本检查集成行为，个人分支为 `codex/李文宇-code-review`。以 main 比较会包含这 4 个既有提交的差异。本轮模块改动可单独审阅并合入预约基线，也可在该基线进入 main 后调整 PR 目标。
+本轮刷新远端后，`main` 为 `171aaa6`，包含旧版固定图书执行流程。计划引用的预约清单、规划驱动执行器及原生 Review v2 位于 `codex/automatic-login-checklist` 的 `2a9d791`，该分支比 main 多 4 个提交。本轮在此版本检查集成行为，个人分支为 `codex/code-review`。用户已确认采用这一开发基线。PR 目标为 `codex/automatic-login-checklist`，本轮模块改动可按该基线单独审阅，后续 main 集成由总负责人安排。
 
 ## 修改范围与完成条件
 
@@ -65,4 +65,4 @@ node --test --test-reporter=tap tests/project-review-model.test.mjs tests/review
 
 ## 提交信息
 
-个人分支为 `codex/李文宇-code-review`，PR 标题使用 `李文宇 - 完成第4人代码审查模块`。本轮实现基于前述预约依赖分支，团队确定合入顺序后可以选择向该依赖分支提交，或等依赖进入 main 后向 main 提交。PR 正文应注明基线依赖及本轮实际验证范围。
+个人分支为 `codex/code-review`，PR 标题使用 `李文宇 - 完成第4人代码审查模块`。PR 请求将该分支合入 `codex/automatic-login-checklist`，正文开头说明预约执行器与验收样例的基线依赖，并列出本模块改动、自测结果和已知限制，供总负责人安排后续 main 集成。
