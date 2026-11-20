@@ -277,3 +277,28 @@ test('a late repair response after A-B-A cannot disturb a newer paid repair or g
   await page.evaluate(() => window.release(1)); await page.waitForFunction(() => document.querySelector('.pe-notice')?.textContent.includes('新的修复执行'));
   assert.equal(await download(page).count(), 0); assert.equal(await page.locator('.pe-result').getAttribute('data-accepted'), 'false'); assert.equal(await page.evaluate(() => window.requests.filter(request => request.method === 'POST').length), 2);
 });
+
+test('review detail keeps the original commit and resolved issue history readable on desktop and narrow screens', async t => {
+  for (const width of [1280, 390]) {
+    const page = await pageFor(t, width);
+    const original = { id: 'ISSUE-fifo', severity: 'blocking', status: 'open', file: 'src/promote.mjs', line: 3,
+      message: marker, evidence: 'const head = queued.find(byId);' };
+    const history = [
+      { candidateCommit: '1'.repeat(40), sourceHash: A, status: 'completed', issues: [original], resolutions: [] },
+      { candidateCommit: '2'.repeat(40), sourceHash: B, status: 'completed', issues: [{ ...original, status: 'resolved' }],
+        resolutions: [{ id: original.id, status: 'resolved', reason: 'sequence 最小的 queued 项才是队首' }] },
+    ];
+    await page.evaluate(({ value, history }) => { window.states.a.dev.executions = [{ ...value, reviewHistory: history }]; }, { value: failedRow, history });
+    await refresh(page);
+    const detail = page.locator('details').filter({ has: page.getByText('Review与阻塞问题', { exact: true }) });
+    await detail.locator('summary').click();
+    const rendered = JSON.parse(await detail.locator('pre').textContent());
+    assert.deepEqual(rendered.history, history);
+    assert.equal(await detail.locator('img, script').count(), 0);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    assert.equal(await download(page).count(), 0);
+    await refresh(page);
+    assert.equal(await detail.getAttribute('open'), '');
+    assert.deepEqual(JSON.parse(await detail.locator('pre').textContent()).history, history);
+  }
+});

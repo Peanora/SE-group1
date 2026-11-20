@@ -66,6 +66,27 @@ test('all ancestor blocking survives a later coding-only failure without a new R
   assert.deepEqual(data.previousIssues.map(issue => issue.id), [parent.issue.id]); assert.ok(data.provenance.sourceModelReceiptHashes.includes(parent.record.modelCalls[0].receiptHash));
 });
 
+test('a legacy duplicated blocking finding remains one open obligation when its source is reused', async t => {
+  const f = await fixture(t), source = await f.create({ blocking: true });
+  const version = source.record.versions[0], call = source.record.modelCalls.at(-1);
+  const receipt = JSON.parse(await readFile(call.receiptPath, 'utf8'));
+  const opinion = JSON.parse(receipt.content);
+  opinion.issues.push({ ...opinion.issues[0] });
+  version.acceptance.review.issues = opinion.issues;
+  version.acceptance.issues.push({ ...source.issue });
+  receipt.content = JSON.stringify(opinion);
+  const bytes = JSON.stringify(receipt);
+  await writeFile(call.receiptPath, bytes);
+  call.receiptHash = hash(bytes);
+  await source.save();
+  const historical = assertPlannedSource(await source.inspect(), binding, writablePaths);
+  assert.deepEqual(historical.previousIssues.map(({ id, status }) => [id, status]), [[source.issue.id, 'open']]);
+
+  source.record.reviewHistoryVersion = 2;
+  await source.save();
+  await assert.rejects(source.inspect());
+});
+
 test('the stored parent report fingerprint cannot be replaced by another self-consistent source claim', async t => {
   const f = await fixture(t), parent = await f.create({ blocking: true }), child = await f.create({ initial: parent, acceptance: false, suffix: 'child' });
   child.record.initialSource = { ...child.record.initialSource, sourceReportHash: '0'.repeat(64) }; await child.save(); await assert.rejects(child.inspect());

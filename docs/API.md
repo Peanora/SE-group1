@@ -2,6 +2,16 @@
 
 规划预览保持最长三分钟的本机运行时限。工作台启动时会核对已记录输出超限、进程终止且源码完整的预览停止结果，恢复活动槽并保留原停止证据。停止未知的记录仍待协调。规划预览的交互输出总量由工作台配置为 4 MiB，独立验收和已验收源码的版本绑定沿用原规则。
 
+## 代码审查历史与诊断
+
+规划开发执行的公开记录新增 `reviewHistory`。每项包含 `taskId`、`attemptId`、`attempt`、`candidateCommit`、`sourceHash`、`status`、`summary`、`issues`、`resolutions`、`errors`、`error` 和 `diagnostic`。整体执行包含各候选版本，任务图执行还包含各任务的历史尝试，同一任务按尝试先后展示。原始意见保留 `originCommit`，复核结果带原问题 `id`、`checkedCommit` 和复核原因。工作台现有的 Review 详情展示这些历史，服务重启后可继续读取。
+
+`modelCalls` 的审查调用附带 `id`、`candidateCommit` 及可选的受控 `reviewRejection`，后者只公开 `version`、`reason`、`field` 及可选 `position`。同一候选格式重试成功后，最初被拒绝的原因仍能在模型调用详情中读取。每个新提交按原 ID 重新复核全部历史阻塞问题，当前提交的关闭结论只适用于该提交。
+
+新原生审查对同一文件、行号和问题说明的重复意见返回 `duplicate_issue` 诊断，`field` 指向对应的 `issues[i]`。已有问题应通过 `resolutions` 按原编号复核。缺少复核、未知编号和重复复核都拒绝结论。原有正常停止、回执保存及预算规则决定是否允许同一候选格式重试。耗尽格式重试或审查未完成时，验收记录标记 `incomplete`，保留历史阻塞并禁止交付。
+
+独立预约演示入口为 `node scripts/review-reservations.mjs --fixture`，使用同一原生适配器校验和问题编号逻辑。`--model` 显式选择真实模型。演示报告记录 `kind`、固定 Git 提交、源码哈希、规则、问题、复核及完成状态，每个提交单独保存 JSON。
+
 ## 登录验收清单自动接续
 
 当前计划确认后，`GET /api/projects/:projectId/runs/:runId/verification-plans` 的 `capabilities.canRecoverLogin` 表示负责人可以尝试接续专用的登录清单修订。旧认可清单、实际浏览器失败和当前计划的对应关系在保存前重新核对。

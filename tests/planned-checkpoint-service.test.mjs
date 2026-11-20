@@ -35,7 +35,7 @@ if (!process.env.TASKFLOW_CHECKPOINT_SERVICE_CHILD) {
   test('checkpoint service integration preserves real original brands and SQLite/Git while mocking external execution only', () => {
     const env = { ...process.env, TASKFLOW_CHECKPOINT_SERVICE_CHILD: '1' }; delete env.NODE_TEST_CONTEXT;
     for (const key of Object.keys(env)) if (/^LLM_/iu.test(key)) delete env[key];
-    const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', import.meta.filename], { env, encoding: 'utf8', timeout: 120000, maxBuffer: 12 * 1024 * 1024, windowsHide: true });
+    const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', '--test-reporter=tap', import.meta.filename], { env, encoding: 'utf8', timeout: 120000, maxBuffer: 12 * 1024 * 1024, windowsHide: true });
     assert.equal(result.status, 0, result.stdout + result.stderr); assert.match(result.stdout, /# fail 0/u);
   });
 } else {

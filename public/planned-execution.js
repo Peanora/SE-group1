@@ -351,7 +351,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     for (const [id, view] of taskNodes) if (!currentTasks.has(id)) { view.card.remove(); taskNodes.delete(id); }
     renderGraph(item); renderCommands(item);
     setText(refs.binding, { binding: item.binding, budget: item.budget, baseCommit: item.baseCommit, candidateCommit: item.candidateCommit, proposalId: item.proposalId, revision: item.revision }); setText(refs.diff, item.diff || '尚无代码差异。');
-    setText(refs.checks, { self: item.checks?.self ?? null, http: item.checks?.http ?? null, browser: item.checks?.browser ?? null }); setText(refs.review, { status: item.checks?.review ?? '尚未检查', issues: item.checks?.issues ?? [] }); setText(refs.calls, item.modelCalls ?? []);
+    setText(refs.checks, { self: item.checks?.self ?? null, http: item.checks?.http ?? null, browser: item.checks?.browser ?? null }); setText(refs.review, { status: item.checks?.review ?? '尚未检查', issues: item.checks?.issues ?? [], history: item.reviewHistory ?? [] }); setText(refs.calls, item.modelCalls ?? []);
     const present = new Set(); for (const [index, event] of (Array.isArray(item.events) ? item.events : []).entries()) { const id = `${item.id}:${event.sequence ?? index}`; present.add(id); let eventNode = eventNodes.get(id); if (!eventNode) { const li = node('li'), time = node('time'), message = node('span'); li.append(time, message); refs.list.append(li); eventNode = { li, time, message }; eventNodes.set(id, eventNode); } setText(eventNode.time, `#${event.sequence ?? index + 1} ${event.at || '时间未知'}`); setText(eventNode.message, event.message); }
     for (const [id, eventNode] of eventNodes) if (!present.has(id)) { eventNode.li.remove(); eventNodes.delete(id); }
   }
