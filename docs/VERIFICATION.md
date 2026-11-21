@@ -1,5 +1,23 @@
 # 首版验证记录
 
+## 2026-11-21 网页多角色与 API 配置
+
+基准 `631e2e055ff9a9400035e981908fbaf41f901b30`。用户原有 `docs/tasks/team-delivery-plan.md` 改动保留。实现记录见 [本轮任务](tasks/agent-api-settings.md)。模型调用仅发往本机夹具，未使用真实供应商密钥或付费 API。所有测试使用临时数据目录。
+
+- 最终 `npm run check`：264 个脚本语法通过。
+- `node --test tests/agent-settings.test.mjs tests/agent-settings-http.test.mjs`：14/14。多 API/五角色配置、CAS、密钥保留/清除/密文落盘、重启、链接拒绝、当前及历史凭据脱敏、本机来源与团队负责人权限；真实 HTTP 规格请求在换配置后保持原请求。
+- `node --test tests/agent-settings-browser.test.mjs tests/planned-preview-panel.test.mjs`：16/16。实际 Edge 桌面/390px，真实配置 API 的增删改和角色分配，密码不回填、不进浏览器 storage，冲突保留草稿、焦点、无横向溢出及控制台错误。截图为 `output/agent-api/settings-desktop.png`、`settings-mobile.png`，交互摘要为 `ui-evidence.json`。
+- 路由/适配器组合 47 项：46 通过、1 项可选原生检查跳过；固定参考服务组合 93 项：91 通过、2 项可选原生检查跳过。日志为 `routing-regression.log`、`fixed-role-regression.log`（均在 `output/agent-api/`）。
+- 单独设置 `TASKFLOW_TEST_REAL_SANDBOX=1` 和本机当前 MXC 的 `EXECUTION_SANDBOX_EXE` 后，`node --test tests/agent-role-routing.test.mjs` 最终 5/5、零跳过。五个原生适配器分别请求不同本机端点；真实独立 Worker 的编码与 Review 使用不同 API，编码在途切换双角色配置后仍用原 Review 地址/模型/控制参数，独立 HTTP、桌面及手机 Edge 检查通过。已确认两份密钥不进入公开配置 hash、Worker argv 或环境。原旧路径不可用的失败保留，新安装路径的最终日志为 `native-role-routing-final.log`。
+- `node --test tests/web-execution-http.test.mjs tests/agent-settings-http.test.mjs tests/source-change-http.test.mjs` 最终 17/17，覆盖初始化失败清理、本地配置目录兼容与来源门禁。规划执行 HTTP 单独复测 8/8。
+- 首次 `npm test`：1365 项，1269 通过、10 失败、86 可选跳过，原日志 `full-tests.log` 保留；检查期间还有并行开发和测试，因此不作为最终固定代码全绿证据。发现并修复两个本轮集成问题（新私有目录的旧断言、配置初始化失败时注入服务清理），并改正三个既有测试设置/定位：任务卡描述与角色上下文都为 `p` 的选择器歧义；手动修复测试应通过 HTTP 预置失败草案，避免按钮自动修复提前完成；滚动应检查阅读点视口位置，前置流程图换行后浏览器原生锚定会改变绝对 scrollY。
+- 手动清单修复单项复测 1/1；工作台桌面/窄屏完整组 10/10。滚动诊断有/无新增侧栏链接两组均为 scrollY +19px、输入框视口位置变化 0.0625px，焦点与选区保持。测试仍要求阅读点变化不超过 2px，未修改产品或放宽业务预期。
+- 双模型费用确认面板 `node --test tests/planned-execution-panel.test.mjs tests/execution-panel.test.mjs` 最终 53/53，覆盖显示不同编码与审查模型、Review 配置变化撤销旧同意，以及旧服务无 Review 名称的兼容。日志 `dual-model-panels-verified.log`。
+- 重型 Git 诊断：原生执行核心整组串行通过，178.7秒，`git-serial-final.log` 保留此前检查点120秒包装超时与任务30秒等待超时。任务图实际约43秒完成、首个完整交付恢复用例约130秒；仅在诊断副本延长等待、保留原断言后完整通过，见 `task-service-budget-diagnostic.log`。据此将测试任务等待调90秒、检查点等待调30秒，重型多用例子进程上限调300秒；不改生产预算或业务判据。正式任务服务 wrapper 1/1（内部3/3）通过，151.3秒，日志 `task-service-final.log`。检查点子模式原10秒等待下21/22，唯一失败也为Git候选等待超时，正式新等待复验单独记录。
+- 最终正式检查点整组 wrapper 1/1（原22个子用例全部成功），146.8秒，`checkpoint-verified.log`；最终集成组合 `node --test --test-concurrency=2 tests/agent-settings.test.mjs tests/agent-settings-http.test.mjs tests/agent-role-routing.test.mjs tests/agent-settings-browser.test.mjs tests/planned-preview-panel.test.mjs tests/source-change-http.test.mjs tests/web-execution-http.test.mjs tests/planned-execution-http.test.mjs`：57 项，56 通过、1 项可选原生检查跳过、0 失败，`integration-final.log`。该原生检查已由前述显式启用的5/5专组补验。首次全量的失败项均已分别修复或经正式整组复跑关闭，未在最后再次整体运行 `npm test`，不宣称最终一次全量全绿。
+
+原本机 `.env` 的 Windows 隔离程序路径已更新为实际验证通过的当前安装版本，API 密钥及其他配置保留，不提交 `.env`。现有 4317 服务未强制停止，重启本机工作台后加载新接口；之后网页修改 API 不需重启。没有推送或公网部署，未运行两家真实付费 API 的端到端业务验收。
+
 ## 2026-11-21 角色进度和证据回归
 
 - `npm run check` 检查 257 个脚本，全部通过。

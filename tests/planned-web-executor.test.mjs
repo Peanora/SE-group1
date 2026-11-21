@@ -40,7 +40,8 @@ const task = { title: '确认资源项目', requirements: ['读取资源'], task
 if (!process.env.TASKFLOW_PLANNED_CORE_CHILD) {
   test('planned execution independent probes keep real Git and branded manifests while mocking external verification infrastructure', () => {
     const env = { ...process.env, TASKFLOW_PLANNED_CORE_CHILD: '1' }; delete env.NODE_TEST_CONTEXT;
-    const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', '--test-reporter=tap', import.meta.filename], { env, encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
+    // Real Git work across the full suite took 179s on this machine without load.
+    const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', '--test-reporter=tap', import.meta.filename], { env, encoding: 'utf8', timeout: 300000, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
     assert.equal(result.status, 0, result.stdout + result.stderr); assert.match(result.stdout, /# fail 0/u);
   });
 } else {

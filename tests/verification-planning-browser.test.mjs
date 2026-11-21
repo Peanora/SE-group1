@@ -245,7 +245,10 @@ test('failed model definition shows missing requirements and saves a separate co
 
 test('one-click repair adds a missing capture dependency and saves an unapproved whole-project draft', { timeout: 90000 }, async t => {
   const f = await fixture(t, { repairable: true });
-  const failed = await f.row((await generate(f)).id);
+  // Seed the failed proposal through HTTP: the workbench's generation button
+  // automatically repairs this fixture before a separate manual click can occur.
+  const before = await f.state();
+  const failed = await f.row((await f.request(`${f.base()}/propose`, { contractRevision: before.capabilities.contractRevision }, 202)).proposal.id);
   const endpoint = `${f.base()}/${failed.id}/repair-draft`;
   const contractRevision = (await f.state()).capabilities.contractRevision;
   assert.equal(failed.status, 'failed');

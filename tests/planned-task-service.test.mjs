@@ -17,7 +17,8 @@ import { engineeringTasks } from '../lib/engineering-planner.mjs';
 const ids = { projectId: 'dag-service-project', runId: 'dag-planning-run' }, config = { baseUrl: 'https://synthetic.invalid/v1', model: 'synthetic-task-service', apiKey: '' };
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
-async function until(read) { const deadline = Date.now() + 30000; for (;;) { const value = await read(); if (value) return value; assert.ok(Date.now() < deadline, 'task service did not reach expected state'); await new Promise(resolve => setTimeout(resolve, 20)); } }
+// Measured: the graph took 43s and the full first case 130s; these waits do not change production budgets.
+async function until(read) { const deadline = Date.now() + 90000; for (;;) { const value = await read(); if (value) return value; assert.ok(Date.now() < deadline, 'task service did not reach expected state'); await new Promise(resolve => setTimeout(resolve, 20)); } }
 function planning(unsupported = false) {
   const source = { filename: 'tasks.md', content: '实现基础、两个独立资源模块及最终集成。' };
   const spec = { title: 'Resources', summary: source.content, goals: ['实现资源'], roles: [], constraints: [], assumptions: [], questions: [], acceptanceScenarios: ['返回资源'], stack: { frontend: 'HTML/CSS/JavaScript', backend: 'Node.js', storage: 'SQLite' }, requirements: [{ id: 'R', title: '资源', description: source.content, sourceQuote: source.content, acceptance: ['返回资源'] }] };
@@ -35,7 +36,7 @@ function definition(tasks) { return { version: 1, id: 'dag-resources', name: 'Ta
 if (!process.env.TASKFLOW_TASK_SERVICE_CHILD) {
   test('task graph service retains actual full-run receipts/budget and restores only historical delivery, not parsed task brands', () => {
     const env = { ...process.env, TASKFLOW_TASK_SERVICE_CHILD: '1' }; delete env.NODE_TEST_CONTEXT; for (const key of Object.keys(env)) if (/^LLM_/iu.test(key)) delete env[key];
-    const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', '--test-reporter=tap', import.meta.filename], { env, encoding: 'utf8', timeout: 120000, windowsHide: true, maxBuffer: 6 * 1024 * 1024 });
+    const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', '--test-reporter=tap', import.meta.filename], { env, encoding: 'utf8', timeout: 300000, windowsHide: true, maxBuffer: 6 * 1024 * 1024 });
     assert.equal(result.status, 0, result.stdout + result.stderr); assert.match(result.stdout, /# fail 0/u);
   });
 } else {

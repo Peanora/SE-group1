@@ -14,7 +14,7 @@ function execution(extra = {}) { return { id: 'execution-1', projectId: context.
   binding: { ...context, sourceRevision: C, sourceGeneration: 1 }, budget: { maxCalls: 3, maxReviewCalls: 3, timeoutMs: 600000 }, candidateCommit: 'e'.repeat(40), baseCommit: 'f'.repeat(40), diff: marker, usage: { inputTokens: null, outputTokens: 8 }, totalModelCalls: 1,
   events: [{ sequence: 1, at: '2026-11-17T00:00:00Z', status: 'generating', message: marker }], error: null, accepted: false, actions: { canCancel: true, canDownload: false },
   checks: { self: [{ id: 'self', expected: '200', actual: '200', passed: true }], http: [], browser: [{ id: 'browser', name: marker, expected: marker, actual: marker, passed: false }], review: 'changes_requested', issues: [{ id: 'blocking', severity: 'blocking', status: 'open', message: marker }] }, modelCalls: [{ role: 'coding', kind: 'model', attempt: 1, model: marker, usage: { inputTokens: null, outputTokens: 8 }, finishReason: 'stop', receiptConfirmed: true, receiptHash: C }], ...extra }; }
-function fixture() { return { dev: { capabilities: { canStart: true, contractRevision: D, model: { name: 'controlled-fixture-model' }, budget: { maxCalls: 3, maxReviewCalls: 3, timeoutMs: 600000, maxAttempts: 3, totalModelCalls: 0, remainingModelCalls: 18, remainingAttempts: 3 }, reason: null }, executions: [] }, definitions: { coverage: 'structural_only', proposals: [proposal()] } }; }
+function fixture() { return { dev: { capabilities: { canStart: true, contractRevision: D, model: { name: 'controlled-fixture-model', reviewName: 'independent-review-model' }, budget: { maxCalls: 3, maxReviewCalls: 3, timeoutMs: 600000, maxAttempts: 3, totalModelCalls: 0, remainingModelCalls: 18, remainingAttempts: 3 }, reason: null }, executions: [] }, definitions: { coverage: 'structural_only', proposals: [proposal()] } }; }
 const harness = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"><style>body{margin:0;background:#f5f7fb;font:14px sans-serif}main{max-width:1100px;margin:24px auto;padding:0 16px}</style></head><body><main><div id="panel"></div></main><script type="module">
 import {createPlannedExecutionPanel} from '/planned-execution.js';
 window.ctx=${JSON.stringify(context)};window.initial=${JSON.stringify(fixture())};window.template=${JSON.stringify(execution()).replaceAll('<', '\\u003c')};
@@ -93,6 +93,7 @@ test('checklist blocker shows the reason and enables revision while blocking cod
 
 for (const width of [1440, 390]) test(`planned panel ${width}px: cost consent, exact start body, backend facts and text-only evidence`, async t => {
   const page = await pageFor(t, width); assert.equal(await start(page).isDisabled(), true); await consent(page).check(); assert.equal(await start(page).isEnabled(), true); await start(page).click();
+  assert.match(await page.locator('.planned-execution').innerText(), /编码模型：controlled-fixture-model；审查模型：independent-review-model/u);
   await page.waitForFunction(() => document.querySelector('.pe-result')?.textContent.includes('尚未获得完整验收'));
   const post = await page.evaluate(() => window.requests.find(r => r.method === 'POST')); assert.equal(post.url, '/api/projects/project-a/runs/run-a/development-executions/start'); assert.deepEqual(post.body, { proposalId: 'proposal-1', revision: A, contractRevision: D });
   assert.equal(await consent(page).isChecked(), false); assert.match(await page.locator('.planned-execution').innerText(), /输入未知/u); assert.equal(await download(page).count(), 0);
@@ -104,8 +105,8 @@ for (const width of [1440, 390]) test(`planned panel ${width}px: cost consent, e
 });
 test('changing contract, model, budget, context or proposal revision withdraws fee consent', async t => {
   const page = await pageFor(t);
-  for (const kind of ['contract', 'model', 'budget', 'revision']) {
-    await consent(page).check(); await page.evaluate(kind => { if (kind === 'contract') window.states.a.dev.capabilities.contractRevision = 'e'.repeat(64); if (kind === 'model') window.states.a.dev.capabilities.model.name += '-changed'; if (kind === 'budget') window.states.a.dev.capabilities.budget.remainingModelCalls--; if (kind === 'revision') window.states.a.definitions.proposals[0].revision = 'f'.repeat(64); }, kind); await refresh(page);
+  for (const kind of ['contract', 'model', 'review-model', 'budget', 'revision']) {
+    await consent(page).check(); await page.evaluate(kind => { if (kind === 'contract') window.states.a.dev.capabilities.contractRevision = 'e'.repeat(64); if (kind === 'model') window.states.a.dev.capabilities.model.name += '-changed'; if (kind === 'review-model') window.states.a.dev.capabilities.model.reviewName += '-changed'; if (kind === 'budget') window.states.a.dev.capabilities.budget.remainingModelCalls--; if (kind === 'revision') window.states.a.definitions.proposals[0].revision = 'f'.repeat(64); }, kind); await refresh(page);
     assert.equal(await consent(page).isChecked(), false); assert.equal(await start(page).isDisabled(), true);
   }
   await consent(page).check(); await page.evaluate(() => { window.ctx.planningStatus = 'unconfirmed'; }); await refresh(page); assert.equal(await consent(page).isChecked(), false); assert.equal(await start(page).isDisabled(), true);

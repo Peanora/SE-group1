@@ -362,6 +362,7 @@ for (const width of [1440, 390]) test(`统一工作台 ${width}px：底部操作
   const focusedBefore = await reason.evaluate(element => [document.activeElement === element, element.selectionStart, element.selectionEnd]);
   assert.deepEqual(focusedBefore, [true, 2, 6]);
   const beforeFailureScroll = await page.evaluate(() => scrollY);
+  const beforeFailureReasonY = await reason.evaluate(element => element.getBoundingClientRect().y);
   assert.ok(beforeFailureScroll > 0, '用户正在整页下方填写，不是在顶部等待错误');
   rejectModel(new Error('受控规格请求失败：请稍后重试，不改变已填写草稿。'));
   await until(() => run.status === 'failed' && !app.orchestrator.state(run).driving, '真实后端失败停点');
@@ -371,7 +372,8 @@ for (const width of [1440, 390]) test(`统一工作台 ${width}px：底部操作
   assert.match(await page.locator('#error-text').textContent(), /失败|未完成|尚未生成/);
   await assertOnlyView(page, 'source');
   assert.deepEqual(await reason.evaluate(element => [document.activeElement === element, element.selectionStart, element.selectionEnd]), [true, 2, 6], '失败不能抢输入焦点或选区');
-  assert.ok(Math.abs(await page.evaluate(() => scrollY) - beforeFailureScroll) <= 2, '后台失败不得改变正在阅读的整页位置');
+  // Native scroll anchoring may offset scrollY when the workflow above grows.
+  assert.ok(Math.abs(await reason.evaluate(element => element.getBoundingClientRect().y) - beforeFailureReasonY) <= 2, '后台失败不得改变正在阅读的输入框视口位置');
   assert.match(await source.inputValue(), /失败期间仍保留/);
   await page.waitForTimeout(4000); await assertInViewport(notice);
   const locate = notice.locator('[data-notice-locate]');

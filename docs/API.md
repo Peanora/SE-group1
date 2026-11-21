@@ -470,3 +470,12 @@ repair用于当前失败候选具有有效、完整、同代码版本的阻塞Re
 `GET /api/health`新增`verificationPlanning:{available,phase:'definition_only'}`。前端只在服务明确声明支持后挂载并轮询提案；声明缺失或禁用时保留其他工作区，显示当前未开放，而不请求旧后端没有的接口。
 
 可信内部可使用`createApp({verificationPlanningService?,verificationPlanningRootDir?})`注入；null禁用提案接口。不能确认提案检查点时禁止需求发布或项目删除，不降级绕过。服务初始化失败与close均关闭已创建的相关控制器；这些选项不通过HTTP暴露。
+## 多角色 Agent 与 API 配置
+
+`GET /api/agent-settings` 返回 `{revision,providers,roles,roleDefinitions,environment}`。仅本机工作台可访问；启用团队账号后仅负责人可读写。`providers[]` 含 `id,name,baseUrl,model,hasKey,jsonMode,thinking`，不返回密钥。`roles` 使用 `spec,engineering,verification,coding,review` 五个角色，值为服务 id 或 `env`（沿用环境配置）。`environment` 仅含默认服务的公开配置。
+
+`PUT /api/agent-settings` 接受整体 `{revision,providers,roles}`，成功返回新的脱敏视图。每个服务含 `id,name,baseUrl,model,jsonMode,thinking`，可另传 `apiKey` 与 `clearKey`。密钥省略或空白保留已有值；`clearKey:true` 显式清除。本机地址可无密钥，远程服务须有密钥。已绑定服务不能被删除。`revision` 过期返回 409，字段、地址、绑定或凭据无效返回 400，跨源或非本机请求拒绝。保存配置不请求外部模型。
+
+支持的协议为 Chat Completions，`baseUrl` 不含 `/chat/completions`，不得带账号、密码、查询或片段。`jsonMode` 为布尔值；`thinking` 为 `enabled`、`disabled` 或空白（不发送该扩展）。每个角色的新调用使用当前服务配置；开发执行在 admission 固定编码与 Review 两份配置，通过匿名 stdin 交接 Worker，不进入环境变量或公开 DTO。Worker 的配置版本同时绑定两角色公开设置，旧作业不能改模型后直接恢复。规格及工程请求逐次取快照，不宣称跨多次人工确认锁定整条规划的同一服务。
+
+私有 `DATA_DIR/agent-settings/agent-settings.json` 保存配置，密钥由同目录本机私有密钥加密；两者需一同保留以重启回读，不进入源码与规划交付包。此功能不改变软件验收结果，不提供任意新角色执行器或公网部署。

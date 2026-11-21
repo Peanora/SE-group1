@@ -239,7 +239,7 @@ export function createExecutionPanel({ api, getContext, onError = () => {}, onFa
     const profileId = updateOptions(refs.profiles, profiles.map(item => ({ id: item.id, label: item.title || item.id })), refs.profiles.value, '暂无可执行范围');
     const profile = profiles.find(item => item.id === profileId);
     refs.profileDescription.textContent = profile ? `${profile.description || '服务端尚未提供范围说明。'}（范围版本：${text(profile.contractRevision)}）` : '服务端尚未提供可执行范围。';
-    refs.model.textContent = `配置模型：${capabilities.model?.name || '名称未知，以服务端配置为准'}`;
+    refs.model.textContent = `编码模型：${capabilities.model?.name || '名称未知，以服务端配置为准'}；审查模型：${capabilities.model?.reviewName || capabilities.model?.name || '名称未知，以服务端配置为准'}`;
     refs.budget.textContent = `本轮预算：${budgetText(capabilities.budget)}`;
     refs.recheckBudget.hidden = !capabilities.recheckBudget;
     refs.recheckBudget.textContent = capabilities.recheckBudget ? `固定代码重新检查的独立预算：${budgetText(capabilities.recheckBudget)}。保留原提交，全部检查和Review重新执行，旧失败和用量保留。` : '';

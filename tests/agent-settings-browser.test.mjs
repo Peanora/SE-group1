@@ -1,0 +1,133 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { chromium } from 'playwright-core';
+import { createApp } from '../server.mjs';
+
+const roleIds = ['spec', 'engineering', 'verification', 'coding', 'review'];
+const fixtureKey = 'browser-fixture-api-key-not-real';
+const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+const endpoint = server => `http://127.0.0.1:${server.address().port}`;
+
+test('网页配置多个 API、角色分配、密钥保留和删除，在桌面及窄屏持久保存', { timeout: 60000 }, async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'tf-agent-settings-browser-'));
+  let app, browser;
+  t.after(async () => {
+    await browser?.close(); await app?.close();
+    assert.equal(path.dirname(directory), os.tmpdir());
+    await rm(directory, { recursive: true, force: true });
+  });
+  app = await createApp({ dataDir: directory, teamEnabled: false, executionService: null,
+    verificationPlanningService: null, plannedExecutionService: null, sourceChangeService: null });
+  await listen(app.server);
+  browser = await chromium.launch({ channel: 'msedge', headless: true });
+  const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', entry => { if (entry.type() === 'error') errors.push(entry.text()); });
+  await page.goto(`${endpoint(app.server)}/agent-settings.html`);
+  await page.getByRole('button', { name: '保存并应用', exact: true }).waitFor();
+  assert.equal(await page.locator('[data-agent-role]').count(), 5);
+  assert.equal(await page.getByRole('heading', { name: 'Agent 与 API', exact: true }).isVisible(), true);
+  await page.getByRole('button', { name: '添加服务', exact: true }).click();
+  let provider = page.locator('[data-provider-id]').first();
+  const providerId = await provider.getAttribute('data-provider-id');
+  await provider.getByLabel('服务名称', { exact: true }).fill('规划服务');
+  await provider.getByLabel('API 基础地址', { exact: true }).fill('https://model.invalid/v1');
+  await provider.getByLabel('模型名称', { exact: true }).fill('planner-fixture');
+  await provider.getByLabel('API 密钥', { exact: true }).fill(fixtureKey);
+  await provider.getByLabel('JSON 输出', { exact: true }).selectOption('false');
+  await provider.getByLabel('思考参数', { exact: true }).selectOption('disabled');
+  for (const role of roleIds) await page.locator(`[data-agent-role="${role}"]`).selectOption(providerId);
+  await page.getByRole('button', { name: '保存并应用', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: '配置已保存并应用' }).waitFor();
+  let response = await fetch(`${endpoint(app.server)}/api/agent-settings`), settings = await response.json();
+  assert.equal(settings.providers[0].hasKey, true);
+  assert.equal(settings.providers[0].jsonMode, false);
+  assert.equal(settings.providers[0].thinking, 'disabled');
+  assert.ok(roleIds.every(role => settings.roles[role] === providerId));
+  assert.ok(!JSON.stringify(settings).includes(fixtureKey));
+  provider = page.locator('[data-provider-id]').first();
+  await provider.locator('summary').click();
+  assert.equal(await provider.getByLabel('API 密钥', { exact: true }).inputValue(), '');
+  await provider.getByRole('button', { name: '删除服务', exact: true }).click();
+  await page.getByRole('alert').filter({ hasText: '请先在「角色分工」更换服务' }).waitFor();
+  assert.equal(await page.locator('[data-provider-id]').count(), 1);
+  await provider.getByLabel('服务名称', { exact: true }).fill('重命名的规划服务');
+  await page.getByRole('button', { name: '保存并应用', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: '配置已保存并应用' }).waitFor();
+  settings = await (await fetch(`${endpoint(app.server)}/api/agent-settings`)).json();
+  assert.equal(settings.providers[0].name, '重命名的规划服务');
+  assert.equal(settings.providers[0].hasKey, true);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload(); await page.locator('[data-agent-role="review"]').waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  assert.equal(await page.locator('[data-agent-role="coding"]').inputValue(), providerId);
+  await page.getByRole('button', { name: '添加服务', exact: true }).click();
+  provider = page.locator('[data-provider-id]').last();
+  const localId = await provider.getAttribute('data-provider-id');
+  await provider.getByLabel('服务名称', { exact: true }).fill('本机审查');
+  await provider.getByLabel('API 基础地址', { exact: true }).fill('http://127.0.0.1:5101/v1');
+  await provider.getByLabel('模型名称', { exact: true }).fill('review-fixture');
+  await provider.getByLabel('API 密钥', { exact: true }).fill('local-fixture-key-not-real');
+  await page.locator('[data-agent-role="review"]').selectOption(localId);
+  await page.getByRole('button', { name: '保存并应用', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: '配置已保存并应用' }).waitFor();
+  provider = page.locator('[data-provider-id]').last();
+  await provider.locator('summary').click();
+  await provider.getByLabel('清除已有密钥', { exact: true }).check();
+  await page.getByRole('button', { name: '保存并应用', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: '配置已保存并应用' }).waitFor();
+  settings = await (await fetch(`${endpoint(app.server)}/api/agent-settings`)).json();
+  assert.equal(settings.providers.find(item => item.id === localId).hasKey, false);
+  await page.locator('[data-agent-role="review"]').selectOption('env');
+  provider = page.locator('[data-provider-id]').last();
+  await provider.locator('summary').click();
+  await provider.getByRole('button', { name: '删除服务', exact: true }).click();
+  assert.equal(await page.locator('[data-provider-id]').count(), 1);
+  assert.equal(await page.getByRole('button', { name: '添加服务', exact: true }).evaluate(element => element === document.activeElement), true);
+  await page.getByRole('button', { name: '保存并应用', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: '配置已保存并应用' }).waitFor();
+  await page.reload(); await page.locator('[data-agent-role="review"]').waitFor();
+  assert.equal(await page.locator('[data-agent-role="review"]').inputValue(), 'env');
+  assert.equal(await page.locator('[data-provider-id]').count(), 1);
+  assert.deepEqual(await page.evaluate(() => [Object.keys(localStorage), Object.keys(sessionStorage)]), [[], []]);
+  assert.deepEqual(errors, []);
+});
+
+test('配置版本冲突保留本页草稿与密码，不以迟到保存覆盖其他页面', { timeout: 45000 }, async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'tf-agent-settings-conflict-'));
+  let app, browser;
+  t.after(async () => {
+    await browser?.close(); await app?.close();
+    assert.equal(path.dirname(directory), os.tmpdir());
+    await rm(directory, { recursive: true, force: true });
+  });
+  app = await createApp({ dataDir: directory, teamEnabled: false, executionService: null,
+    verificationPlanningService: null, plannedExecutionService: null, sourceChangeService: null });
+  await listen(app.server);
+  browser = await chromium.launch({ channel: 'msedge', headless: true });
+  const first = await browser.newPage(), second = await browser.newPage();
+  for (const page of [first, second]) {
+    await page.goto(`${endpoint(app.server)}/agent-settings.html`);
+    await page.getByRole('button', { name: '保存并应用', exact: true }).waitFor();
+    await page.getByRole('button', { name: '添加服务', exact: true }).click();
+    const provider = page.locator('[data-provider-id]').first();
+    await provider.getByLabel('服务名称', { exact: true }).fill(page === first ? '先保存' : '后保存草稿');
+    await provider.getByLabel('API 基础地址', { exact: true }).fill('https://model.invalid/v1');
+    await provider.getByLabel('模型名称', { exact: true }).fill('fixture-model');
+    await provider.getByLabel('API 密钥', { exact: true }).fill(fixtureKey);
+  }
+  await first.getByRole('button', { name: '保存并应用', exact: true }).click();
+  await first.getByRole('status').filter({ hasText: '配置已保存并应用' }).waitFor();
+  await second.getByRole('button', { name: '保存并应用', exact: true }).click();
+  await second.getByRole('alert').filter({ hasText: '当前修改仍保留' }).waitFor();
+  assert.equal(await second.getByLabel('服务名称', { exact: true }).inputValue(), '后保存草稿');
+  assert.equal(await second.getByLabel('API 密钥', { exact: true }).inputValue(), fixtureKey);
+  const settings = await (await fetch(`${endpoint(app.server)}/api/agent-settings`)).json();
+  assert.equal(settings.providers.length, 1);
+  assert.equal(settings.providers[0].name, '先保存');
+});

@@ -12,6 +12,8 @@ import { createLocalExecutionSubject } from './lib/team-access.mjs';
 import { createVerificationRecovery } from './lib/verification-recovery.mjs';
 import { loginContinuationDraft, loginRevisionNote, loginRevisionTask, previousLoginPlan } from './lib/verification-login-continuation.mjs';
 import { reconcileEndedPreviews } from './lib/preview-output-recovery.mjs';
+import { createAgentSettings } from './lib/agent-settings.mjs';
+import { createAgentPlanner } from './lib/agent-planner.mjs';
 import { repeatedCounterSteps } from './public/verification-draft.js';
 
 import { DEFAULT_STACK, PLATFORM_DEFAULTS } from './lib/platform-defaults.mjs';
@@ -21,6 +23,7 @@ const MAX_REQUEST = 6 * 1024 * 1024;
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
 const requestBodies = new WeakMap();
 const requestChecks = new WeakMap();
+const responseRedactors = new WeakMap();
 
 async function readJson(request) {
   requestChecks.get(request)?.();
@@ -41,6 +44,7 @@ async function readJson(request) {
 }
 
 function respond(response, status, body, contentType = 'application/json; charset=utf-8', headers = {}) {
+  if (contentType.startsWith('application/json') && body && typeof body === 'object' && !Buffer.isBuffer(body)) body = responseRedactors.get(response)?.(body) ?? body;
   const bytes = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body), 'utf8');
   response.writeHead(status, { 'Content-Type': contentType, 'Content-Length': bytes.length, 'Cache-Control': 'no-store', ...headers });
   response.end(bytes);
@@ -85,8 +89,11 @@ export async function loadEnv(filename = path.join(ROOT, '.env')) {
 }
 
 export async function createApp(options = {}) {
-  const planner = options.planner ?? await import('./lib/planner.mjs');
   const store = options.store ?? await new ProjectStore(options.dataDir ?? process.env.DATA_DIR ?? path.join(ROOT, 'data')).init();
+  let agentSettings;
+  try { agentSettings = await createAgentSettings({ directory: path.join(store.directory, 'agent-settings'), ...(options.agentEnvironment === undefined ? {} : { environment: options.agentEnvironment }) }); }
+  catch (cause) { try { await options.executionService?.shutdown(); } catch { cause.executionCleanupFailed = true; } throw cause; }
+  const planner = options.planner ?? createAgentPlanner(await import('./lib/planner.mjs'), agentSettings);
   const orchestrator = new Orchestrator(store, planner, { stepDelayMs: options.stepDelayMs ?? process.env.WORKFLOW_STEP_DELAY_MS ?? 350,
     ...Object.fromEntries(['engineeringMaxCalls', 'engineeringTimeoutMs', 'engineeringTotalTimeoutMs'].filter(key => options[key] !== undefined).map(key => [key, options[key]])),
     ...(options.specificationMaxCalls === undefined ? {} : { specificationMaxCalls: options.specificationMaxCalls }),
@@ -94,6 +101,7 @@ export async function createApp(options = {}) {
   const executionService = options.executionService === null ? null : options.executionService ?? await (await import('./lib/web-execution-service.mjs')).createWebExecutionService({
     rootDir: path.resolve(options.executionRootDir ?? path.join(store.directory, 'executions')),
     getPlanning: async (projectId, runId) => store.getPersistedRun(projectId, runId),
+    getConfig: () => agentSettings.resolve('coding'), getReviewConfig: () => agentSettings.resolve('review'),
   });
   try { await orchestrator.init(); }
   catch (cause) { try { await executionService?.shutdown(); } catch { cause.executionCleanupFailed = true; } throw cause; }
@@ -114,11 +122,13 @@ export async function createApp(options = {}) {
       rootDir: verificationRoot,
       getPlanning: async (projectId, runId) => store.getPersistedRun(projectId, runId),
       getPlanningSync: (projectId, runId) => store.getPersistedRun(projectId, runId),
+      getConfig: () => agentSettings.resolve('verification'),
     });
     if (options.plannedExecutionService === undefined) await reconcileEndedPreviews(path.join(plannedRoot, 'previews'));
     plannedExecutionService = options.plannedExecutionService === null ? null : options.plannedExecutionService ?? await (await import('./lib/planned-execution-service.mjs')).createPlannedExecutionService({
       rootDir: plannedRoot, verificationService: verificationPlanningService,
       getPlanningSync: (projectId, runId) => store.getPersistedRun(projectId, runId),
+      getConfig: () => agentSettings.resolve('coding'), getReviewConfig: () => agentSettings.resolve('review'),
       dependencies: {
         // Interactive browsing transfers more approved assets than one scripted acceptance.
         startPreviewRuntime: async input => (await import('./lib/web-runtime.mjs')).startWebRuntime({ ...input, maxOutputBytes: 4 * 1024 * 1024 }),
@@ -186,6 +196,7 @@ export async function createApp(options = {}) {
       catch { throw new HttpError(400, '网址编码无效。'); }
       const method = request.method;
       if (segments[0] === 'api') {
+        responseRedactors.set(response, value => agentSettings.redact(value));
         if (closing) throw new HttpError(503, '工作台正在停止，请稍后重新连接。');
         // No cross-site mutations to a local workspace. The app uses same-origin JSON.
         if (method !== 'GET' && method !== 'HEAD' && request.headers.origin) {
@@ -218,6 +229,7 @@ export async function createApp(options = {}) {
           const config = planner.getModelConfig();
           return respond(response, 200, { ok: true, teamAccess: { enabled: !!teamAccess }, verificationPlanning: { available: !!verificationPlanningService, phase: 'definition_only', failureRecovery: !!verificationPlanningService }, plannedExecution: { available: !!plannedExecutionService && !!verificationPlanningService, profile: 'planned-web-v1' }, localEvolution: { available: !!localReleasesService && !!evolutionService && !!plannedDatasetService }, platformDefaults: { ...PLATFORM_DEFAULTS, stack: { ...DEFAULT_STACK } }, model: { configured: config.configured, model: config.model ?? '' },
             engineeringRoleRevision: { available: true, version: 1 },
+            agentSettings: { available: true, version: 1 },
             engineeringRouteContractRevision: { available: true, version: 1 },
             planningIssueConversation: { available: true, version: 3 },
             modelPlanning: { engineeringMaxCalls: orchestrator.engineeringMaxCalls, engineeringCallLimit: orchestrator.engineeringMaxCalls !== null, engineeringTimeoutMs: orchestrator.engineeringTimeoutMs,
@@ -240,6 +252,13 @@ export async function createApp(options = {}) {
             if (!permitted) teamAccess.audit({ requestId, actor, action: 'request.denied', target: url.pathname.slice(0, 1000), status: 403 });
             if (!permitted) throw new HttpError(403, '当前角色只可查看；评审者可确认或驳回规格、计划、测试定义及迁移描述，开发和需求变更由负责人执行。');
           }
+        }
+        if (segments[1] === 'agent-settings' && segments.length === 2) {
+          requireLocalExecutionRequest(request, server);
+          if (teamAccess) teamAccess.requireRole(request.headers.cookie, ['owner']);
+          if (method === 'GET') return respond(response, 200, agentSettings.view());
+          if (method === 'PUT') return respond(response, 200, await agentSettings.save(await readJson(request)));
+          throw new HttpError(405, '该接口仅支持读取和保存配置。');
         }
         if (segments[1] !== 'projects') throw new HttpError(404, '未找到该接口。');
         if (segments.length === 2) {
@@ -588,7 +607,7 @@ export async function createApp(options = {}) {
     })();
     return closing;
   };
-  return { server, store, orchestrator, simulationService, executionService, sourceChangeService, verificationPlanningService, plannedExecutionService, localReleasesService, plannedDatasetService, evolutionService, teamAccess, close };
+  return { server, store, orchestrator, simulationService, executionService, sourceChangeService, verificationPlanningService, plannedExecutionService, localReleasesService, plannedDatasetService, evolutionService, teamAccess, agentSettings, close };
 }
 
 export async function startServer(options = {}) {

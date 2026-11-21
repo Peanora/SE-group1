@@ -183,7 +183,9 @@ test('invalid graph relationships are displayed as evidence without fabricated e
   const page = await pageFor(t);
   for (const tasks of [[{ id: 'A', title: marker, dependsOn: ['MISSING'], status: 'pending' }], [{ id: 'A', dependsOn: ['B'] }, { id: 'B', dependsOn: ['A'] }]]) {
     await setRow(page, execution({ executionMode: 'task_dag', tasks })); assert.equal(await page.locator('.pe-graph-scroll').isVisible(), false); assert.equal(await page.locator('.pe-graph-canvas path').count(), 0);
-    const evidence = page.locator('.pe-graph-scroll + div > details').first(); if (await evidence.getAttribute('open') === null) await evidence.locator('summary').click(); assert.equal(await evidence.locator('p').isVisible(), true); assert.match(await evidence.locator('p').innerText(), /任务 A/u);
+    const evidence = page.locator('.pe-graph-scroll + div > details').first(); if (await evidence.getAttribute('open') === null) await evidence.locator('summary').click();
+    // The task description is a direct child; the role monitor has its own paragraph.
+    const description = evidence.locator(':scope > p'); assert.equal(await description.isVisible(), true); assert.match(await description.innerText(), /任务 A/u);
   }
   assert.equal(await page.locator('img').count(), 0);
 });

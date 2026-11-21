@@ -22,7 +22,8 @@ const ids = { projectId: 'checkpoint-project', runId: 'checkpoint-run' };
 const config = { baseUrl: 'https://checkpoint.synthetic.invalid/v1', model: 'synthetic-checkpoint', apiKey: 'synthetic-checkpoint-private' };
 const sourceHash = files => createHash('sha256').update(JSON.stringify(validateProjectFiles(files))).digest('hex');
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
-async function until(read) { const end = Date.now() + 10000; for (;;) { const result = await read(); if (result) return result; assert.ok(Date.now() < end, 'checkpoint fixture timed out'); await new Promise(done => setTimeout(done, 5)); } }
+// A real Git candidate can take over 10s under concurrent local browser/Git load.
+async function until(read) { const end = Date.now() + 30000; for (;;) { const result = await read(); if (result) return result; assert.ok(Date.now() < end, 'checkpoint fixture timed out'); await new Promise(done => setTimeout(done, 5)); } }
 function proposal() { return { version: 1, id: 'resources', name: 'Resource definition', sessions: [], steps: [{ id: 'read', type: 'request', requirementIds: ['R1'], dependsOn: [], request: { id: 'resources', method: 'GET', path: '/resources', assertions: [{ id: 'status', op: 'status', value: 200 }] } }], browser: { version: 1, sessions: ['visitor'], steps: [{ id: 'home', session: 'visitor', requirementIds: ['R1'], op: 'goto', path: '/' }, { id: 'resources', session: 'visitor', requirementIds: ['R1'], op: 'visible', testId: 'resources', value: true }] } }; }
 function planning() {
   const source = { filename: 'requirements.md', content: '用户读取资源列表。' }, spec = { title: 'Resources', summary: source.content, goals: ['读取资源'], roles: [], constraints: [], assumptions: [], questions: [], acceptanceScenarios: ['返回列表'], stack: { frontend: 'HTML/CSS/JavaScript', backend: 'Node.js', storage: 'SQLite' }, requirements: [{ id: 'R1', title: '读取', description: source.content, sourceQuote: source.content, acceptance: ['返回资源'] }] };
@@ -35,7 +36,8 @@ if (!process.env.TASKFLOW_CHECKPOINT_SERVICE_CHILD) {
   test('checkpoint service integration preserves real original brands and SQLite/Git while mocking external execution only', () => {
     const env = { ...process.env, TASKFLOW_CHECKPOINT_SERVICE_CHILD: '1' }; delete env.NODE_TEST_CONTEXT;
     for (const key of Object.keys(env)) if (/^LLM_/iu.test(key)) delete env[key];
-    const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', '--test-reporter=tap', import.meta.filename], { env, encoding: 'utf8', timeout: 120000, maxBuffer: 12 * 1024 * 1024, windowsHide: true });
+    // This limit covers the whole real Git/recovery suite, not a business SLA.
+    const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', '--test-reporter=tap', import.meta.filename], { env, encoding: 'utf8', timeout: 300000, maxBuffer: 12 * 1024 * 1024, windowsHide: true });
     assert.equal(result.status, 0, result.stdout + result.stderr); assert.match(result.stdout, /# fail 0/u);
   });
 } else {

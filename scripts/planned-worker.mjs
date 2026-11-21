@@ -19,9 +19,14 @@ async function main() {
   const bootstrap = workerExact(JSON.parse(text), ['version', 'jobId', 'rootDir', 'nonce', 'executable', 'config']); text = '';
   workerNeed(bootstrap.version === 1 && bootstrap.jobId === jobId); const selectedConfig = normalizeWorkerModelConfig(bootstrap.config);
   const config = { ...selectedConfig };
+  const reviewConfig = selectedConfig.reviewConfig ? { ...selectedConfig.reviewConfig } : config;
   // Settings stay immutable, including absence; the private key remains
   // clearable on retirement/terminal cleanup and is never published.
   for (const name of ['baseUrl', 'model', 'thinking', 'jsonMode']) Object.defineProperty(config, name, { value: selectedConfig[name], enumerable: true, writable: false, configurable: false });
+  if (selectedConfig.reviewConfig) {
+    for (const name of ['baseUrl', 'model', 'thinking', 'jsonMode']) Object.defineProperty(reviewConfig, name, { value: selectedConfig.reviewConfig[name], enumerable: true, writable: false, configurable: false });
+    config.reviewConfig = reviewConfig;
+  }
   const store = openPlannedWorkerStore({ rootDir: bootstrap.rootDir, create: false }), grant = verifyWorkerAuthorization({ store, jobId });
   workerNeed(grant.deadlineAt > Date.now() && workerModelConfigRevision(config) === grant.configRevision);
   const signer = createWorkerResultSigner(), instanceId = randomUUID(), endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\taskflow-worker-${randomUUID()}` : path.join(store.jobDirectory(jobId), 'control.sock');
@@ -90,7 +95,7 @@ async function main() {
   try { resumePermit = generation > 1 ? await verifyWorkerPausedTaskResume({ store, lease, manifest, assertCurrent: current }) : undefined; }
   catch (error) {
     try { store.event(lease, { type: 'resume_validation_failed', ...(error?.result ? { process: error.result } : {}) }); store.markUnknown(jobId); } catch {}
-    try { config.apiKey = ''; } finally { closeResources(); } return;
+    try { config.apiKey = ''; reviewConfig.apiKey = ''; } finally { closeResources(); } return;
   }
   store.setStatus(lease, 'running'); store.event(lease, { type: 'registered', instanceId, generation, deadlineAt: grant.deadlineAt });
   const integrationTaskId = grant.mode === 'graph' ? inspectPlannedTaskGraph(grant.task).integrationTaskId : 'whole';
@@ -122,7 +127,7 @@ async function main() {
     }
   };
   const fetchCurrent = (...args) => { current(); return fetch(...args); };
-  const provider = wrap('coding', createProjectCodeModel({ config, fetchImpl: fetchCurrent })), reviewer = wrap('review', createProjectReviewModel({ config, fetchImpl: fetchCurrent }));
+  const provider = wrap('coding', createProjectCodeModel({ config, fetchImpl: fetchCurrent })), reviewer = wrap('review', createProjectReviewModel({ config: reviewConfig, fetchImpl: fetchCurrent }));
   const options = { outputDir, binding: grant.binding, task: grant.task, manifest, provider, reviewer, executable: bootstrap.executable, maxCalls: grant.budget.maxCalls,
     maxReviewCalls: grant.budget.maxReviewCalls, maxConcurrency: grant.budget.maxConcurrency, timeoutMs: Math.max(1, grant.deadlineAt - Date.now()), deadlineAt: grant.deadlineAt, ...(resumePermit ? { resumePermit } : {}), assertCurrent: current,
     onEvent: event => { try { store.event(lease, event); } catch {} } };
@@ -136,6 +141,6 @@ async function main() {
     else if (actual.terminationConfirmed === true) outcome = signStoppedWorkerResult({ signer, store, lease, manifest, record, graph });
     store.finish(lease, { record, ...(graph ? { graph } : {}), envelope, outcome }, { actualCalls: actual.totalModelCalls, usage: actual.usage, terminationConfirmed: actual.terminationConfirmed === true });
   } catch { finished = true; clearTimeout(timer); try { store.markUnknown(jobId); } catch {} }
-  finally { try { config.apiKey = ''; } finally { setTimeout(closeResources, 1000); } }
+  finally { try { config.apiKey = ''; reviewConfig.apiKey = ''; } finally { setTimeout(closeResources, 1000); } }
 }
 main().catch(() => { process.exitCode = 1; });

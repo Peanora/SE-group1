@@ -176,6 +176,8 @@ test('a missing-login result offers a versioned checklist repair without spendin
   const body = { contractRevision: ready.capabilities.contractRevision, planRevision };
   assert.equal((await fetch(`${plans}/recover-login`, post({ ...body, planRevision: original }))).status, 409);
   const prior = ready.proposals.find(item => item.id === failed.proposalId);
+  // Persisted success can precede the planner's final drive cleanup.
+  await until(() => f.run.status === 'succeeded' && !f.app.orchestrator.state(f.run).driving && !f.app.orchestrator.state(f.run).active.size);
   await f.app.orchestrator.withProjectCheckpoint(f.project.id, async () => {
     const attempted = await fetch(`${plans}/import`, post({ contractRevision: body.contractRevision, proposal: prior.proposal, feedback: '并发导入' }));
     assert.equal(attempted.status, 409);
