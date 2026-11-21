@@ -32,9 +32,9 @@ function fixture(overrides = {}) {
 }
 const harness = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"><link rel="stylesheet" href="/styles.css"><style>main{max-width:1100px;margin:28px auto;padding:0 16px}h1{font-size:24px}</style></head><body><main><h1>Taskflow 需求编排台</h1><div id="panel"></div></main><script type="module">
 import {createExecutionPanel} from '/execution-panel.js';
-window.context=${JSON.stringify(context)};window.errors=[];
+window.context=${JSON.stringify(context)};window.errors=[];window.failures=[];
 const api=async(path,options={})=>{const r=await fetch(path,{...options,headers:{'Content-Type':'application/json'}});const data=await r.json();if(!r.ok){const e=new Error(data.error||'请求失败');e.status=r.status;throw e;}return data;};
-window.panel=createExecutionPanel({api,getContext:()=>window.context,onError:e=>window.errors.push(e.message)});
+window.panel=createExecutionPanel({api,getContext:()=>window.context,onError:e=>window.errors.push(e.message),onFailure:failure=>{window.failures.push(structuredClone(failure));if(window.failureObserverMode==='throw')throw new Error('host notification failed');if(window.failureObserverMode==='reject')return Promise.reject(new Error('host notification rejected'));}});
 await window.panel.mount(document.querySelector('#panel'));window.panelReady=true;
 </script></body></html>`;
 
@@ -93,7 +93,7 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
     await page.evaluate(async ({ initialContext, runA, runB }) => {
       window.panel.destroy();
       const { createExecutionPanel } = await import('/execution-panel.js');
-      window.context = initialContext; window.crossRequests = []; window.crossPosts = [];
+      window.context = initialContext; window.crossRequests = []; window.crossPosts = []; window.failures = [];
       const states = { 'run-a': runA, 'run-b': runB };
       const api = (url, options = {}) => {
         const runId = url.includes('/runs/run-b/') ? 'run-b' : 'run-a', method = options.method || 'GET';
@@ -105,7 +105,7 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
           }, fail() { reject(Object.assign(new Error('旧运行操作失败，不应显示在新运行'), { status: 409 })); } });
         });
       };
-      window.panel = createExecutionPanel({ api, getContext: () => window.context, onError: error => window.errors.push(error.message) });
+      window.panel = createExecutionPanel({ api, getContext: () => window.context, onError: error => window.errors.push(error.message), onFailure: failure => window.failures.push(structuredClone(failure)) });
       await window.panel.mount(document.querySelector('#panel'));
     }, { initialContext: context, runA: fixture({ executions: [(repair ? repairRecord : recheck ? recheckRecord : execution)({ id: 'run-a-record' })] }), runB: fixture({ executions: [(repair ? repairRecord : recheck ? recheckRecord : execution)({ id: 'run-b-record' })] }) });
     return page;
@@ -387,6 +387,89 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
     }
   });
 
+  await t.test('failed execution notifications use current backend facts once, including explicit history selection', async () => {
+    const page = await pageFor();
+    state.executions = [execution({ status: 'failed', error: marker })]; await refresh(page);
+    assert.deepEqual(await page.evaluate(() => window.failures), [{ id: 'execution-1', message: marker, context: { projectId: 'project-a', runId: 'run-a' } }]);
+    const posts = requests.filter(request => request.method === 'POST').length;
+    await refresh(page); await page.waitForTimeout(3100); await refresh(page);
+    assert.equal(await page.evaluate(() => window.failures.length), 1, '重复轮询和已提示状态不能刷屏');
+    assert.equal(requests.filter(request => request.method === 'POST').length, posts, '通知不能触发执行请求');
+    state.executions[0].error = '同一记录新增的公开失败原因'; await refresh(page);
+    assert.equal(await page.evaluate(() => window.failures.length), 2);
+    for (const status of ['accepted', 'cancelled', 'stopped', 'cancel_requested', 'reconciliation_required']) {
+      state.executions = [execution({ status, error: '旧错误正文不能决定失败状态' })]; await refresh(page);
+    }
+    assert.equal(await page.evaluate(() => window.failures.length), 2, '只有真实failed才产生失败通知');
+    state.executions = [execution({ id: 'latest-accepted', status: 'accepted', taskAccepted: true }), execution({ id: 'old-failed', status: 'failed', error: '旧记录的公开失败原因' })];
+    await refresh(page); assert.equal(await page.evaluate(() => window.failures.length), 2, '最新成功不从旧失败历史误报');
+    const history = page.getByRole('combobox', { name: '执行记录', exact: true }); await history.selectOption('old-failed');
+    assert.deepEqual(await page.evaluate(() => window.failures.at(-1)), { id: 'old-failed', message: '旧记录的公开失败原因', context: { projectId: 'project-a', runId: 'run-a' } });
+    await refresh(page); assert.equal(await page.evaluate(() => window.failures.length), 3);
+    await history.selectOption('latest-accepted'); await refresh(page); assert.equal(await page.evaluate(() => window.failures.length), 3);
+    assert.equal(await page.locator('.execution-panel img, .execution-panel script').count(), 0);
+  });
+
+  await t.test('initial latest failure uses the fixed fallback and host observer errors cannot alter execution facts', async () => {
+    const page = await pageFor(); state.executions = [execution({ status: 'failed', error: null })];
+    await page.reload(); await page.waitForFunction(() => window.panelReady);
+    assert.deepEqual(await page.evaluate(() => window.failures), [{ id: 'execution-1', message: '代码执行未完成，请查看独立检查与恢复操作', context: { projectId: 'project-a', runId: 'run-a' } }]);
+    await page.evaluate(() => { window.failureObserverMode = 'throw'; });
+    state.executions[0].error = '新的公开失败原因'; await refresh(page);
+    assert.equal(await page.evaluate(() => window.failures.length), 2); assert.deepEqual(await page.evaluate(() => window.errors), []);
+    assert.equal(await page.getByRole('alert').isVisible(), false, '通知回调异常不变成执行API错误');
+    state.executions = [execution({ status: 'accepted', taskAccepted: true, actions: { canDownload: true } })]; await refresh(page);
+    assert.equal(await page.locator('.ep-result').getAttribute('data-accepted'), 'true');
+    await page.evaluate(() => { window.failureObserverMode = 'reject'; });
+    state.executions = [execution({ status: 'failed', error: '异步通知回调仍不影响真实记录' })]; await refresh(page); await page.waitForTimeout(0);
+    assert.equal(await page.evaluate(() => window.failures.length), 3); assert.deepEqual(await page.evaluate(() => window.errors), []);
+  });
+
+  await t.test('context changes reset failure deduplication but stale GET after A-B-A cannot publish', async () => {
+    const page = await pageFor(); let release;
+    state.executions = [execution({ id: 'old-failed-get', status: 'failed', error: '迟到的旧GET失败' })];
+    delayNextGet = new Promise(resolve => { release = resolve; }); const countBefore = requests.length;
+    await page.evaluate(() => { window.oldRequest = window.panel.refresh(); });
+    while (requests.length === countBefore) await new Promise(resolve => setTimeout(resolve, 5));
+    try {
+      state.executions = [execution({ id: 'accepted-b', status: 'accepted', taskAccepted: true })];
+      await page.evaluate(() => { window.context.runId = 'run-b'; }); await refresh(page);
+      state.executions = [execution({ id: 'current-a', status: 'accepted', taskAccepted: true })];
+      await page.evaluate(() => { window.context.runId = 'run-a'; }); await refresh(page);
+      release(); await page.evaluate(() => window.oldRequest);
+      assert.deepEqual(await page.evaluate(() => window.failures), []);
+      assert.equal(await page.getByRole('combobox', { name: '执行记录', exact: true }).inputValue(), 'current-a');
+      state.executions[0].status = 'failed'; state.executions[0].error = '当前A的实际失败'; await refresh(page);
+      assert.equal(await page.evaluate(() => window.failures.length), 1);
+      const failedA = structuredClone(state.executions[0]);
+      state.executions = [execution({ id: 'accepted-b', status: 'accepted', taskAccepted: true })];
+      await page.evaluate(() => { window.context.runId = 'run-b'; }); await refresh(page);
+      assert.equal(await page.evaluate(() => window.failures.length), 1);
+      state.executions = [failedA];
+      await page.evaluate(() => { window.context.runId = 'run-a'; }); await refresh(page);
+      assert.equal(await page.evaluate(() => window.failures.length), 2);
+      assert.deepEqual(await page.evaluate(() => window.failures.at(-1).context), { projectId: 'project-a', runId: 'run-a' });
+      await refresh(page); assert.equal(await page.evaluate(() => window.failures.length), 2);
+    } finally { release(); }
+  });
+
+  await t.test('late failed POST cannot notify another context or a newer action after A-B-A', async () => {
+    for (const revisit of [false, true]) {
+      const page = await pendingPostPage(); await consent(page).check(); await start(page).click();
+      await page.waitForFunction(() => window.crossPosts.length === 1);
+      await page.evaluate(async () => { window.context.runId = 'run-b'; await window.panel.refresh(); });
+      if (revisit) await page.evaluate(async () => { window.context.runId = 'run-a'; await window.panel.refresh(); });
+      const currentRun = revisit ? 'run-a' : 'run-b';
+      await consent(page).check(); await start(page).click(); await page.waitForFunction(() => window.crossPosts.length === 2);
+      await page.evaluate(async failed => { window.crossPosts[0].complete({ execution: failed }); await new Promise(resolve => setTimeout(resolve, 0)); }, execution({ id: 'stale-post-failure', status: 'failed', error: '旧POST失败不属于当前操作' }));
+      assert.deepEqual(await page.evaluate(() => window.failures), []); assert.equal(await consent(page).isDisabled(), true);
+      await page.evaluate(failed => window.crossPosts[1].complete({ execution: failed }), execution({ id: 'current-post-failure', status: 'failed', error: '当前POST的公开失败原因', actions: {} }));
+      await page.waitForFunction(() => window.failures.length === 1);
+      assert.deepEqual(await page.evaluate(() => window.failures), [{ id: 'current-post-failure', message: '当前POST的公开失败原因', context: { projectId: 'project-a', runId: currentRun } }]);
+      await refresh(page); assert.equal(await page.evaluate(() => window.failures.length), 1);
+    }
+  });
+
   await t.test('late responses cannot overwrite a newly selected planning run', async () => {
     const page = await pageFor(); let release;
     delayNextGet = new Promise(resolve => { release = resolve; });
@@ -429,10 +512,12 @@ test('execution panel uses backend facts in real Edge with a fixed platform-UI A
 
   await t.test('destroy removes the view and suppresses late results', async () => {
     const page = await pageFor(); let release;
+    state.executions = [execution({ status: 'failed', error: '销毁后的迟到失败不能通知' })];
     delayNextGet = new Promise(resolve => { release = resolve; }); const initialCount = requests.length;
     await page.evaluate(() => { window.oldRequest = window.panel.refresh(); });
     while (requests.length === initialCount) await new Promise(resolve => setTimeout(resolve, 5));
     await page.evaluate(() => window.panel.destroy()); release(); await page.evaluate(() => window.oldRequest);
     assert.equal(await page.locator('.execution-panel').count(), 0);
+    assert.deepEqual(await page.evaluate(() => window.failures), []);
   });
 });

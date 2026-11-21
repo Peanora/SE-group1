@@ -18,6 +18,10 @@
     "acceptance": "node scripts/acceptance.mjs",
     "execution:check": "node scripts/check-executor.mjs",
     "web:check": "node scripts/check-web-executor.mjs",
+    "planned:check": "node scripts/check-planned-execution.mjs",
+    "planned:verify": "node scripts/verify-planned-delivery.mjs",
+    "planned:recovery": "node scripts/check-planned-recovery.mjs",
+    "planned:tasks": "node scripts/check-planned-tasks.mjs",
     "web:verify": "node scripts/verify-web-delivery.mjs"
   },
   "dependencies": {

@@ -62,7 +62,11 @@ const apply = page => page.getByRole('button', { name: '应用为新需求版本
 const body = page => page.getByLabel('需求正文', { exact: true });
 const reason = page => page.getByLabel('变更原因', { exact: true });
 const refresh = page => page.evaluate(() => window.panel.refresh());
-async function edit(page, content = 'changed body') { await body(page).fill(content); await reason(page).fill('new requirement'); }
+async function openFullEditor(page) {
+  const editor = page.locator('.sc-full-editor');
+  if (!await editor.evaluate(element => element.open)) await editor.locator(':scope > summary').click();
+}
+async function edit(page, content = 'changed body') { await openFullEditor(page); await body(page).fill(content); await reason(page).fill('new requirement'); }
 async function saved(page) { await page.waitForFunction(() => window.states.a.changes.length > 0 && document.querySelector('.source-changes button.sc-primary')?.textContent === '保存为待应用变更'); }
 
 test('save has an exact idempotent body, pending history and text-only conservative differences', async t => {
@@ -90,6 +94,7 @@ test('400, 409 and 503 preserve input and the same-body request key; edits creat
   const page = await pageFor(t); await edit(page); let key;
   for (const status of [400, 409, 503]) {
     await page.evaluate(status => { window.mode.postStatus = status; }, status); await save(page).click(); await page.getByRole('alert').waitFor({ state: 'visible' });
+    assert.equal(await page.getByRole('alert').evaluate(element => !!element.closest('.sc-save-bar')), true, '保存失败留在当前操作区');
     const request = await page.evaluate(() => window.requests.filter(x => x.method === 'POST').at(-1)); if (key) assert.equal(request.body.requestKey, key); key = request.body.requestKey;
     assert.equal(await body(page).inputValue(), 'changed body'); assert.equal(await reason(page).inputValue(), 'new requirement'); assert.equal(await page.evaluate(() => window.states.a.current.revision), a);
   }
@@ -140,7 +145,7 @@ test('refresh and poll preserve DOM focus, selection, details and session drafts
     await body(page).evaluate(el => { el.setSelectionRange(2, 9); window.savedTextarea = el; });
     await refresh(page); await page.waitForTimeout(3100);
     const beforeReload = await body(page).evaluate(el => ({ same: el === window.savedTextarea, focus: document.activeElement === el, start: el.selectionStart, end: el.selectionEnd, text: el.value, open: [...document.querySelectorAll('.source-changes details')].map(x => x.open), overflow: document.documentElement.scrollWidth > innerWidth }));
-    assert.deepEqual(beforeReload, { same: true, focus: true, start: 2, end: 9, text: 'a precise edited document', open: [true, true], overflow: false });
+    assert.deepEqual(beforeReload, { same: true, focus: true, start: 2, end: 9, text: 'a precise edited document', open: [true, true, true], overflow: false });
     const dir = new URL('../output/verification/source-changes-panel/', import.meta.url); await mkdir(dir, { recursive: true }); await page.screenshot({ path: fileURLToPath(new URL(`${viewport.width}.png`, dir)), fullPage: true });
     await page.reload(); await page.waitForFunction(() => window.ready); assert.equal(await body(page).inputValue(), 'a precise edited document'); assert.equal(await reason(page).inputValue(), 'new requirement');
   }
@@ -148,7 +153,7 @@ test('refresh and poll preserve DOM focus, selection, details and session drafts
 
 test('file import sends text or DOCX bytes only to parse and preserves text on parser errors or in-flight edits', async t => {
   const page = await pageFor(t); await edit(page, 'keep old text'); const file = page.getByLabel('导入 MD / TXT / DOCX（最大 3 MiB）');
-  await file.setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('imported text') }); await page.getByRole('button', { name: '导入文件到草稿' }).click(); await page.waitForFunction(() => document.querySelector('textarea').value === 'imported text');
+  await file.setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('imported text') }); await page.getByRole('button', { name: '导入文件到草稿' }).click(); await page.waitForFunction(() => document.querySelector('textarea.sc-source').value === 'imported text');
   const request = await page.evaluate(() => window.requests.find(x => x.url.endsWith('/parse'))); assert.deepEqual(request.body, { filename: 'notes.txt', content: 'imported text' }); assert.equal(await page.evaluate(() => window.states.a.changes.length), 0);
   await page.evaluate(() => { window.mode.parseStatus = 400; }); await file.setInputFiles({ name: 'bad.docx', mimeType: 'application/octet-stream', buffer: Buffer.from('bad zip') }); await page.getByRole('button', { name: '导入文件到草稿' }).click(); await page.getByRole('alert').waitFor({ state: 'visible' });
   assert.equal(await body(page).inputValue(), 'imported text'); assert.equal(await page.evaluate(() => window.requests.filter(x => x.url.endsWith('/parse')).at(-1).body.fileBase64), Buffer.from('bad zip').toString('base64'));
@@ -201,7 +206,7 @@ test('applied, interrupted and unknown history remains visible but cannot apply;
   await page.getByLabel('选择变更记录').selectOption('history-1'); assert.match(await page.locator('.source-changes').innerText(), /应用中断/); assert.equal(await page.locator('.source-changes img').count(), 0);
   assert.match(await page.locator('.source-changes').innerText(), /执行尚未确认停止/);
   await page.getByLabel('导入 MD / TXT / DOCX（最大 3 MiB）').setInputFiles({ name: 'contract.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('trusted parser transport fixture') });
-  await page.getByRole('button', { name: '导入文件到草稿' }).click(); await page.waitForFunction(() => document.querySelector('textarea').value === 'parsed docx');
+  await page.getByRole('button', { name: '导入文件到草稿' }).click(); await page.waitForFunction(() => document.querySelector('textarea.sc-source').value === 'parsed docx');
   assert.equal(await page.getByLabel('需求文件名', { exact: true }).inputValue(), 'contract.docx'); assert.equal(await page.evaluate(() => window.applied.length), 0);
 });
 
@@ -326,6 +331,7 @@ test('功能表单遇到旧版本和超长正文时保留填写并阻止追加',
   const page = await pageFor(t); await page.evaluate(() => window.panel.openFeature());
   await page.getByLabel('功能名称', { exact: true }).fill('新功能'); await page.getByLabel('功能说明', { exact: true }).fill('新增说明');
   await page.getByLabel('功能验收条件（每行一条）').fill('可验证结果');
+  await openFullEditor(page);
   await body(page).fill('x'.repeat(99995));
   const add = page.getByRole('button', { name: '加入需求草稿', exact: true }); assert.equal(await add.isDisabled(), true); assert.match(await page.locator('.sc-feature').innerText(), /超过100000字符/);
   await body(page).fill('保留的修改');
@@ -354,7 +360,7 @@ test('之前已应用的功能不能替代本次未保存的功能或正文修�
   assert.match(await progress.innerText(), /后端已确认保存/); assert.equal(await replan.isDisabled(), true);
   await apply(page).click(); await page.waitForFunction(() => window.applied.length === 2); await page.waitForFunction(() => ![...document.querySelectorAll('button')].find(el => el.textContent === '重新规划').disabled);
   assert.match(await progress.innerText(), /后端已确认新版本/); await refresh(page); assert.equal(await replan.isEnabled(), true);
-  await body(page).fill(`${merged}\n尚未保存的下一项修改`); assert.equal(await replan.isDisabled(), true); assert.doesNotMatch(await progress.innerText(), /后端已确认新版本/);
+  await openFullEditor(page); await body(page).fill(`${merged}\n尚未保存的下一项修改`); assert.equal(await replan.isDisabled(), true); assert.doesNotMatch(await progress.innerText(), /后端已确认新版本/);
   await refresh(page); assert.equal(await replan.isDisabled(), true); assert.equal(await page.evaluate(() => window.replans.length), 0);
 });
 
@@ -379,7 +385,7 @@ test('新增功能流程不能应用旧pending变更，只能应用当前草稿�
   assert.equal(await page.getByLabel('选择变更记录').inputValue(), 'change-2'); assert.equal(await apply(page).isEnabled(), true);
   await page.getByLabel('选择变更记录').selectOption('change-1'); assert.equal(await apply(page).isDisabled(), true); await forceApply(); assert.deepEqual(await applyRequests(), []);
   await page.getByLabel('选择变更记录').selectOption('change-2'); assert.equal(await apply(page).isEnabled(), true);
-  await body(page).fill(`${merged}\n尚未保存的正文修改`); assert.equal(await apply(page).isDisabled(), true); await forceApply(); assert.deepEqual(await applyRequests(), []);
+  await openFullEditor(page); await body(page).fill(`${merged}\n尚未保存的正文修改`); assert.equal(await apply(page).isDisabled(), true); await forceApply(); assert.deepEqual(await applyRequests(), []);
   await body(page).fill(merged); assert.equal(await apply(page).isEnabled(), true);
   await reason(page).fill('尚未保存的原因修改'); assert.equal(await apply(page).isDisabled(), true); await forceApply(); assert.deepEqual(await applyRequests(), []);
   await reason(page).fill(savedReason); assert.equal(await apply(page).isEnabled(), true);
@@ -392,4 +398,63 @@ test('新增功能流程不能应用旧pending变更，只能应用当前草稿�
   await apply(page).click(); await page.waitForFunction(() => window.applied.length === 1);
   assert.deepEqual((await applyRequests()).map(request => request.url), ['/api/projects/a/changes/change-2/apply']);
   assert.equal(await page.evaluate(() => window.states.a.current.source.content), merged);
+});
+
+test('新增功能与下一步保存留在同一区域，完整正文按需展开且不丢草稿', async t => {
+  for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
+    const page = await pageFor(t, viewport), editor = page.locator('.sc-full-editor');
+    assert.equal(await editor.evaluate(element => element.open), true, '直接修改模式默认展开完整需求');
+    await edit(page, '保留已有正文与未保存修改');
+    await page.getByRole('button', { name: '新增功能', exact: true }).click();
+    assert.equal(await editor.evaluate(element => element.open), false, '新增功能模式先聚焦功能，不铺开整篇正文');
+    assert.equal(await page.locator('.sc-feature').evaluate(element => !!(element.compareDocumentPosition(document.querySelector('.sc-full-editor')) & Node.DOCUMENT_POSITION_FOLLOWING)), true);
+    await page.getByLabel('功能名称', { exact: true }).fill('资源收藏');
+    await page.getByLabel('功能说明', { exact: true }).fill('用户可以收藏资源并查看收藏列表。');
+    await page.getByLabel('功能验收条件（每行一条）').fill('收藏后列表包含该资源');
+    const add = page.getByRole('button', { name: '加入需求草稿', exact: true }); await add.scrollIntoViewIfNeeded();
+    const beforeScroll = await page.evaluate(() => scrollY); await add.click();
+    assert.equal(await save(page).evaluate(element => document.activeElement === element), true, '加入后聚焦就近保存而非完整正文');
+    assert.ok(Math.abs((await page.evaluate(() => scrollY)) - beforeScroll) < 4, '加入草稿不滚回完整正文');
+    assert.equal(await editor.evaluate(element => element.open), false);
+    assert.match(await page.locator('.sc-save-bar').innerText(), /下一步保存/);
+    assert.equal(await page.evaluate(() => window.requests.filter(request => request.method === 'POST').length), 0);
+    const shots = new URL('../output/playwright/workspace-ui/', import.meta.url); await mkdir(shots, { recursive: true });
+    await page.locator('.source-changes').screenshot({ path: fileURLToPath(new URL(`source-${viewport.width}.png`, shots)) });
+    const merged = await body(page).inputValue(); assert.ok(merged.startsWith('保留已有正文与未保存修改'));
+    await openFullEditor(page); await body(page).fill(`${merged}\n手动补充边界`);
+    await editor.locator(':scope > summary').click();
+    await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('taskflow.sourceChanges.a')).sourceOpen === false);
+    await refresh(page); assert.equal(await editor.evaluate(element => element.open), false);
+    await page.reload(); await page.waitForFunction(() => window.ready);
+    assert.equal(await editor.evaluate(element => element.open), false); assert.equal(await body(page).inputValue(), `${merged}\n手动补充边界`);
+    await page.getByRole('button', { name: '直接修改需求', exact: true }).click();
+    assert.equal(await editor.evaluate(element => element.open), true); assert.equal(await page.locator('.sc-feature').isVisible(), false);
+    assert.equal(await body(page).inputValue(), `${merged}\n手动补充边界`); assert.equal(await page.getByLabel('功能名称', { exact: true }).inputValue(), '资源收藏');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  }
+});
+
+test('隐藏的未完成功能草稿不锁住直接正文流程，重新打开后恢复功能保护', async t => {
+  const page = await pageFor(t), replan = page.getByRole('button', { name: '重新规划', exact: true });
+  await page.getByRole('button', { name: '新增功能', exact: true }).click();
+  await page.getByLabel('功能名称', { exact: true }).fill('尚未加入的功能B');
+  await page.getByLabel('功能说明', { exact: true }).fill('用户可以收藏资源。');
+  await page.getByLabel('功能验收条件（每行一条）').fill('收藏后显示在收藏列表');
+  await page.getByRole('button', { name: '直接修改需求', exact: true }).click();
+  await edit(page, '用户直接修改的完整正文C'); await save(page).click(); await saved(page);
+  assert.equal(await replan.isDisabled(), true, '仅保存仍不能启动规划');
+  await apply(page).click(); await page.waitForFunction(() => window.applied.length === 1);
+  await page.waitForFunction(() => ![...document.querySelectorAll('button')].find(element => element.textContent === '重新规划').disabled);
+  assert.equal(await body(page).inputValue(), '用户直接修改的完整正文C');
+  assert.equal(await page.getByLabel('功能名称', { exact: true }).inputValue(), '尚未加入的功能B');
+  await refresh(page); assert.equal(await replan.isEnabled(), true);
+  await page.getByRole('button', { name: '新增功能', exact: true }).click();
+  assert.equal(await replan.isDisabled(), true, '重新打开后不能用正文C的已应用记录代替功能B');
+  assert.equal(await page.getByLabel('功能说明', { exact: true }).inputValue(), '用户可以收藏资源。');
+  assert.equal(await apply(page).isDisabled(), true);
+  assert.doesNotMatch(await page.getByLabel('新增功能流程').innerText(), /后端已确认新版本/);
+  await page.reload(); await page.waitForFunction(() => window.ready);
+  assert.equal(await page.locator('.sc-feature').isVisible(), true); assert.equal(await replan.isDisabled(), true);
+  assert.equal(await page.getByLabel('功能名称', { exact: true }).inputValue(), '尚未加入的功能B');
+  assert.equal(await page.evaluate(() => window.replans.length), 0, '模式切换不启动规划');
 });

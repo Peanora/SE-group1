@@ -38,11 +38,11 @@ test('actual model-planning UI discloses its budget, preserves engineering task 
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } }), errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', item => { if (item.type() === 'error') errors.push(item.text()); });
-  await page.goto(url); await page.waitForFunction(() => !document.querySelector('#start-run').disabled);
+  await page.goto(url + '/?view=details'); await page.waitForFunction(() => !document.querySelector('#start-run').disabled);
   assert.equal(await page.locator('#planning-model-notice').isVisible(), false);
   await page.locator('#mode-select').selectOption('model');
-  assert.match(await page.locator('#planning-model-notice').textContent(), /不设调用次数上限，单次最多 60 秒，本次总时长最多 10 分钟/u);
-  assert.match(await page.locator('#planning-model-notice').textContent(), /确认规格后.*工程设计.*产生用量/u);
+  assert.match(await page.locator('#planning-model-notice').textContent(), /工程调用次数不限.*单次工程设计最多 60 秒，每轮自动修正最多 10 分钟/u);
+  assert.match(await page.locator('#planning-model-notice').textContent(), /确认规格后.*工程设计.*产生模型用量/u);
   await page.locator('#start-run').click();
   await page.getByRole('button', { name: '确认规格并继续', exact: true }).waitFor();
   assert.equal(specs, 1); assert.equal(designs, 0);
@@ -54,6 +54,7 @@ test('actual model-planning UI discloses its budget, preserves engineering task 
   assert.equal(run.planRevision, planningRevision(run));
   await page.locator('#tab-tasks').click();
   for (const text of ['计划修改范围', 'src/app.mjs', '输入资料', '已确认资源规格', '预期产出', '资源接口与页面']) assert.ok((await page.locator('.task-detail').textContent()).includes(text), text);
+  await page.locator('[data-edit-selected-task]').click();
   const title = page.locator('[data-review-field="task.0.title"]');
   await title.fill('明确资源读取与异常分支'); await title.focus();
   await page.setViewportSize({ width: 390, height: 844 });

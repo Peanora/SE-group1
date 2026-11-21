@@ -11,7 +11,8 @@ const profile = { id: 'library-web-v1', title: '固定图书借阅参考项目',
 
 test('real workbench confirms both planning versions before its execution panel can send an explicitly scoped request', { timeout: 90000 }, async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'web-execution-browser-')), starts = [], records = new Map();
-  let app, shutdowns = 0;
+  let app, shutdowns = 0, releaseExecution;
+  const executionGate = new Promise(resolve => { releaseExecution = resolve; });
   // Explicit controller fixture: no model, target code, or business acceptance is performed here.
   const executionService = {
     async list({ projectId, runId }) {
@@ -25,6 +26,7 @@ test('real workbench confirms both planning versions before its execution panel 
       const { run } = app.store.getRun(input.projectId, input.runId);
       assert.equal(run.approvals.spec.revision, run.specRevision); assert.equal(run.approvals.plan.revision, run.planRevision);
       starts.push(structuredClone(input));
+      await executionGate;
       const execution = { id: 'ui-connection-only', status: 'failed', taskAccepted: false, calls: 0, reviewCalls: 0,
         error: '可信界面连接替身；未生成软件、未调用模型。', usage: { inputTokens: null, outputTokens: null },
         budget: { maxCalls: 1, maxReviewCalls: 1, timeoutMs: 60000 }, versions: [], preview: null,
@@ -41,7 +43,7 @@ test('real workbench confirms both planning versions before its execution panel 
   const url = `http://127.0.0.1:${app.server.address().port}`;
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   t.after(async () => {
-    await browser.close(); await app.close(); assert.equal(shutdowns, 1);
+    releaseExecution(); await browser.close(); await app.close(); assert.equal(shutdowns, 1);
     assert.equal(path.dirname(directory), path.resolve(os.tmpdir())); assert.ok(path.basename(directory).startsWith('web-execution-browser-'));
     await rm(directory, { recursive: true, force: true });
   });
@@ -53,9 +55,9 @@ test('real workbench confirms both planning versions before its execution panel 
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } }), errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', item => { if (item.type() === 'error') errors.push(item.text()); });
-  await page.goto(url); await page.locator('#start-run').waitFor({ state: 'visible' });
-  const start = page.getByRole('button', { name: '使用配置模型开始执行', exact: true });
-  const consent = page.locator('.execution-panel').getByRole('checkbox');
+  await page.goto(url + '/?view=details'); await page.locator('#start-run').waitFor({ state: 'visible' });
+  const start = page.locator('.execution-panel .ep-controls > button.ep-primary');
+  const consent = page.locator('.execution-panel .ep-consent input[type="checkbox"]');
   await page.locator('#start-run').click();
   await page.getByRole('button', { name: '确认规格并继续', exact: true }).waitFor();
   assert.equal(await start.isDisabled(), true); assert.equal(starts.length, 0);
@@ -69,8 +71,22 @@ test('real workbench confirms both planning versions before its execution panel 
   await page.waitForFunction(() => document.querySelector('.execution-panel .ep-body').textContent.includes('配置模型：界面连接替身'));
   const run = app.store.get(project.id).runs.at(-1);
   assert.equal(run.workflowVersion, 2); assert.equal(run.approvals.spec.revision, run.specRevision); assert.equal(run.approvals.plan.revision, run.planRevision);
+  await page.locator('[data-workspace-view="execution"]').click();
   await consent.check(); await page.waitForFunction(() => !document.querySelector('.execution-panel .ep-primary').disabled);
-  await start.click(); await page.getByText('可信界面连接替身；未生成软件、未调用模型。', { exact: true }).waitFor();
+  await start.click();
+  await page.waitForFunction(() => document.querySelector('.execution-panel .ep-primary').disabled);
+  await page.locator('[data-workspace-view="source"]').click();
+  releaseExecution();
+  await page.locator('#error-banner').waitFor();
+  assert.equal(await page.locator('#workspace-source').isVisible(), true, '真实执行失败不能强制跳离当前工作面');
+  assert.match(await page.locator('#error-text').textContent(), /可信界面连接替身/);
+  const noticeBox = await page.locator('#error-banner').boundingBox();
+  assert.ok(noticeBox && noticeBox.y >= 0 && noticeBox.y + noticeBox.height <= page.viewportSize().height, '执行失败统一通知位于当前视口');
+  assert.equal(starts.length, 1);
+  await page.locator('#error-banner [data-notice-locate]').click();
+  assert.equal(await page.locator('#workspace-execution').isVisible(), true);
+  assert.equal(starts.length, 1, '定位失败只打开详情，不新增执行或模型请求');
+  await page.locator('.execution-panel').getByText('可信界面连接替身；未生成软件、未调用模型。', { exact: true }).waitFor();
   assert.deepEqual(starts, [{ projectId: project.id, runId: run.id, profileId: profile.id, contractRevision: profile.contractRevision }]);
   assert.match(await page.locator('.execution-panel .ep-result').textContent(), /尚未通过验收/u);
   assert.match(await page.locator('.execution-panel .ep-facts').textContent(), /未知/u);
@@ -81,14 +97,15 @@ test('real workbench confirms both planning versions before its execution panel 
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.screenshot({ path: path.join(shots, 'mobile.png'), fullPage: true });
-  await page.reload(); await page.getByText('可信界面连接替身；未生成软件、未调用模型。', { exact: true }).waitFor();
+  await page.reload(); await page.locator('[data-workspace-view="execution"]').click(); await page.locator('.execution-panel').getByText('可信界面连接替身；未生成软件、未调用模型。', { exact: true }).waitFor();
   assert.equal(await consent.isChecked(), false); assert.equal(await start.isDisabled(), true);
 
   // Switching the planning selector must remove old execution permission before GET settles.
   const { run: next } = await request(`/api/projects/${project.id}/runs`, { mode: 'local' });
   await page.reload();
   await page.locator('#run-select').selectOption(run.id);
-  await page.getByText('可信界面连接替身；未生成软件、未调用模型。', { exact: true }).waitFor();
+  await page.locator('[data-workspace-view="execution"]').click();
+  await page.locator('.execution-panel').getByText('可信界面连接替身；未生成软件、未调用模型。', { exact: true }).waitFor();
   await consent.check(); await page.waitForFunction(() => !document.querySelector('.execution-panel .ep-primary').disabled);
   let release, intercepted = false;
   const held = new Promise(resolve => { release = resolve; });
@@ -96,7 +113,7 @@ test('real workbench confirms both planning versions before its execution panel 
   await page.locator('#run-select').selectOption(next.id);
   await page.waitForFunction(() => document.querySelector('.execution-panel .ep-notice').textContent.includes('选择一个已确认'));
   assert.equal(intercepted, true); assert.equal(await start.isDisabled(), true); assert.equal(starts.length, 1);
-  release(); await page.getByRole('button', { name: '确认规格并继续', exact: true }).waitFor();
+  release(); await page.locator('[data-workspace-view="plan"]').click(); await page.getByRole('button', { name: '确认规格并继续', exact: true }).waitFor();
   assert.equal(await start.isDisabled(), true); assert.equal(await consent.isChecked(), false);
 
   // An old planning action must not steal the selection epoch and strand the
@@ -116,8 +133,9 @@ test('real workbench confirms both planning versions before its execution panel 
   assert.equal(await page.locator('#review-banner input').first().isDisabled(), true);
   await page.locator('#approve-button').evaluate(button => button.click());
   assert.equal(app.store.getRun(project.id, next.id).run.approvals.plan, null);
-  releaseRun(); await page.getByText('可信界面连接替身；未生成软件、未调用模型。', { exact: true }).waitFor();
+  releaseRun(); await page.locator('[data-workspace-view="execution"]').click(); await page.locator('.execution-panel').getByText('可信界面连接替身；未生成软件、未调用模型。', { exact: true }).waitFor();
   await page.locator('#run-select').selectOption(next.id);
+  await page.locator('[data-workspace-view="plan"]').click();
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).waitFor();
   const { project: other } = await request('/api/projects', { name: '切换目标项目', filename: 'other.md', content: source });
   await page.locator('#refresh-button').click();
@@ -134,7 +152,9 @@ test('real workbench confirms both planning versions before its execution panel 
   assert.equal(app.store.getRun(project.id, next.id).run.approvals.plan, null);
   releaseProject(); await page.getByRole('heading', { name: other.name, exact: true }).waitFor();
   await page.locator(`[data-project="${project.id}"]`).click();
+  await page.locator('[data-workspace-view="plan"]').click();
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).click();
+  await page.locator('[data-workspace-view="execution"]').click();
   await consent.check(); await page.waitForFunction(() => !document.querySelector('.execution-panel .ep-primary').disabled);
   assert.equal(app.store.getRun(project.id, next.id).run.approvals.plan.revision, app.store.getRun(project.id, next.id).run.planRevision);
   assert.equal(starts.length, 1);

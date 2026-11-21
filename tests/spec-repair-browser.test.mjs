@@ -27,10 +27,11 @@ for (const width of [1440, 390]) test(`Edge ${width}px：规格失败可定位�
   const page = await browser.newPage({ viewport: { width, height: 950 } }), errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-  await page.goto(`http://127.0.0.1:${app.server.address().port}`);
+  await page.goto(`http://127.0.0.1:${app.server.address().port}/?view=details`);
   await page.locator('#mode-select').selectOption('model');
   await page.locator('#start-run').click();
   await page.getByRole('heading', { name: '规格整理未完成：定位问题并补充信息', exact: true }).waitFor();
+  if (!await page.locator('#workflow-details').evaluate(element => element.open)) await page.locator('#workflow-details > summary').click();
   assert.match(await page.locator('#stage-inspector').innerText(), /第1条需求/);
   assert.match(await page.locator('#spec-repair-host').innerText(), /第 1 条需求/);
   assert.equal(await page.locator('[data-spec-repair-field="evidence"]').count(), 1);

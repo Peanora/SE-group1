@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createProjectCodeModel } from '../lib/project-code-model.mjs';
+import { getModelRequestEvidence, runModelRequestWithEvidence } from '../lib/model-request-evidence.mjs';
 
 const config = { baseUrl: 'https://model.invalid/v1', model: 'project-model', apiKey: 'secret-project-key' };
 const task = { id: 'web-1', specRevision: 'spec-confirmed', planRevision: 'plan-confirmed', requirements: '实现输入中指定的工单管理 Web 应用', design: { frontend: '原生 HTML', database: 'SQLite' } };
@@ -41,12 +42,13 @@ test('项目模型发送完整任务资料及固定Web契约，只返回规范�
       assert.equal(options.headers.Authorization, `Bearer ${config.apiKey}`);
       const body = JSON.parse(options.body);
       assert.equal(body.model, config.model);
-      assert.equal(body.max_tokens, 16384);
+      assert.equal(body.max_tokens, 32768);
       assert.deepEqual(body.thinking, { type: 'disabled' });
       assert.deepEqual(body.response_format, { type: 'json_object' });
       assert.deepEqual(JSON.parse(body.messages[1].content), { task, files, feedback });
       const system = body.messages[0].content;
-      for (const required of ['src/app.mjs', 'createApp({databasePath})', 'body:string|Buffer', 'SQLite', 'stdout', 'console.log', 'public', 'self', 'Shell', '.platform']) assert.ok(system.includes(required), required);
+      for (const required of ['src/app.mjs', 'createApp({databasePath})', 'body:string|Buffer', 'SQLite', 'stdout', 'console.log', 'public', 'self', 'Shell', '.platform',
+        'app_', 'app_session', 'HttpOnly', 'Authorization 不会透传', '256KiB']) assert.ok(system.includes(required), required);
       assert.ok(!options.body.includes(config.apiKey));
       return responseFor({ files: replacement, commands: ['ignored'], passed: true, status: 'accepted' }, { usage: { prompt_tokens: 100, completion_tokens: 80 } });
     } });
@@ -379,12 +381,12 @@ test('all non-stop finishes reject before null, missing, blank or malformed cont
   }
 });
 
-test('project-only output budget is 16384 while a reported 8192-token truncation remains evidence and cannot retry as JSON', async () => {
+test('project-only output budget is 32768 while a reported 8192-token truncation remains evidence and cannot retry as JSON', async () => {
   // Synthetic replay of the reported live counters/size; private model text is neither copied nor invented here.
   const content = 'x'.repeat(26_601);
   let receipt;
   const model = createProjectCodeModel({ config, fetchImpl: async (_url, options) => {
-    assert.equal(JSON.parse(options.body).max_tokens, 16384);
+    assert.equal(JSON.parse(options.body).max_tokens, 32768);
     return responseFor(undefined, { choices: [{ finish_reason: 'length', message: { content } }], usage: { prompt_tokens: 2068, completion_tokens: 8192 } });
   } });
   await assert.rejects(model({ task, files, onReceipt: async value => { receipt = value; } }), error => {
@@ -393,4 +395,111 @@ test('project-only output budget is 16384 while a reported 8192-token truncation
   assert.equal(receipt.finishReason, 'length');
   assert.equal(Buffer.byteLength(receipt.content), 26_601);
   assert.deepEqual(receipt.usage, { inputTokens: 2068, outputTokens: 8192 });
+});
+
+async function codeEvidence(operation, expected) {
+  let failure;
+  try { await operation; } catch (error) { failure = error; }
+  assert.ok(failure instanceof Error, '该场景必须拒绝模型结果');
+  const evidence = getModelRequestEvidence(failure);
+  assert.deepEqual(evidence, expected);
+  assert.equal(Object.isFrozen(evidence), true);
+  assert.equal(getModelRequestEvidence(failure), evidence);
+  assert.equal(failure.message.includes(config.apiKey), false);
+  return failure;
+}
+
+test('shared request evidence is private, immutable and keeps the sanitized error identity', async () => {
+  const failure = new Error('safe native diagnostic'); let state;
+  await assert.rejects(runModelRequestWithEvidence(value => { state = value; value.dispatched = true; throw failure; }), error => error === failure);
+  const proof = getModelRequestEvidence(failure);
+  assert.deepEqual(proof, { dispatched: true, responseComplete: false });
+  assert.throws(() => { proof.responseComplete = true; }, TypeError);
+  state.responseComplete = true;
+  assert.deepEqual(getModelRequestEvidence(failure), { dispatched: true, responseComplete: false });
+  for (const fake of [null, undefined, 'error', 1, { dispatched: true, responseComplete: true }, Object.assign(new Error('fake'), { dispatched: false, responseComplete: true })]) assert.equal(getModelRequestEvidence(fake), null);
+  let invoked = 0;
+  assert.equal(getModelRequestEvidence({ get responseComplete() { invoked++; return true; } }), null);
+  assert.equal(invoked, 0);
+});
+
+test('code native wrapper covers URL, input and cancellation checks before any HTTP dispatch', async () => {
+  let requests = 0;
+  const fetchImpl = async () => { requests++; return responseFor(); };
+  await codeEvidence(createProjectCodeModel({ config: { ...config, baseUrl: 'not a URL' }, fetchImpl })({ task, files }), { dispatched: false, responseComplete: false });
+  const model = createProjectCodeModel({ config, fetchImpl });
+  await codeEvidence(model(null), { dispatched: false, responseComplete: false });
+  await codeEvidence(model({ task, files: [{ path: '../outside.mjs', content: 'unsafe' }] }), { dispatched: false, responseComplete: false });
+  const controller = new AbortController(); controller.abort();
+  await codeEvidence(model({ task, files, signal: controller.signal }), { dispatched: false, responseComplete: false });
+  const serializeAbort = new AbortController();
+  await codeEvidence(model({ task: { toJSON() { serializeAbort.abort(); return {}; } }, files, signal: serializeAbort.signal }), { dispatched: false, responseComplete: false });
+  assert.equal(requests, 0);
+});
+
+test('code reset and locally settled cancellation do not acknowledge a remote terminal', async () => {
+  const reset = createProjectCodeModel({ config, fetchImpl: async () => { throw Object.assign(new Error(config.apiKey), { responseComplete: true, dispatched: false }); } });
+  await codeEvidence(reset({ task, files }), { dispatched: true, responseComplete: false });
+  const controller = new AbortController(); let entered;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const model = createProjectCodeModel({ config, fetchImpl: async (_url, options) => {
+    entered(); return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(new Error(config.apiKey)), { once: true }));
+  } });
+  const pending = model({ task, files, signal: controller.signal }); await ready; controller.abort();
+  const failure = await codeEvidence(pending, { dispatched: true, responseComplete: false });
+  assert.equal(failure.name, 'AbortError');
+});
+
+for (const status of [200, 401]) test(`code HTTP ${status} interrupted body stays incomplete and hides provider diagnostics`, async () => {
+  let read = 0;
+  const model = createProjectCodeModel({ config, fetchImpl: async () => new Response(new ReadableStream({ pull(controller) {
+    if (read++ === 0) controller.enqueue(new TextEncoder().encode('{"choices":['));
+    else controller.error(new Error(config.apiKey));
+  } }), { status }) });
+  await codeEvidence(model({ task, files }), { dispatched: true, responseComplete: false });
+});
+
+test('code complete HTTP errors, invalid JSON and invalid UTF-8 carry terminal evidence without accepting files', async () => {
+  for (const response of [new Response(config.apiKey, { status: 401 }), new Response(null, { status: 401 }), new Response(null, { status: 200 }), new Response('{ incomplete JSON'), new Response(new Uint8Array([0xff]))]) {
+    let receipts = 0;
+    const model = createProjectCodeModel({ config, fetchImpl: async () => response });
+    await codeEvidence(model({ task, files, onReceipt: () => { receipts++; } }), { dispatched: true, responseComplete: true });
+    assert.equal(receipts, 0);
+  }
+});
+
+test('code bounds error bodies and model JSON cannot forge transport evidence', async () => {
+  const oversized = createProjectCodeModel({ config, fetchImpl: async () => new Response('x'.repeat(512 * 1024 + 1), { status: 401 }) });
+  await codeEvidence(oversized({ task, files }), { dispatched: true, responseComplete: false });
+  const result = await createProjectCodeModel({ config, fetchImpl: async () => responseFor({ files: replacement, responseComplete: true, dispatched: false }) })({ task, files });
+  assert.equal(getModelRequestEvidence(result), null);
+  assert.equal(Object.hasOwn(result, 'responseComplete'), false);
+  assert.deepEqual(result.files, normalized(replacement));
+});
+
+test('code configuration or input credential collisions fail before any request or receipt', async () => {
+  for (const where of ['model', 'task', 'feedback', 'file']) {
+    let requests = 0, receipts = 0;
+    const model = createProjectCodeModel({ config: { ...config, ...(where === 'model' ? { model: `model-${config.apiKey}` } : {}) }, fetchImpl: async () => { requests++; throw new Error('must not send'); } });
+    const input = { task: where === 'task' ? config.apiKey : task, files: where === 'file' ? [{ path: 'src/app.mjs', content: config.apiKey }] : files,
+      feedback: where === 'feedback' ? config.apiKey : null, onReceipt: () => { receipts++; } };
+    await codeEvidence(model(input), { dispatched: false, responseComplete: false }); assert.equal(requests, 0); assert.equal(receipts, 0);
+  }
+});
+
+test('bounded complete large code is receipted while even complete JSON with length finish is never accepted', async () => {
+  const proposed = [{ path: 'src/app.mjs', content: '// public application source\n'.repeat(2100) }];
+  for (const finishReason of ['stop', 'length']) {
+    let requests = 0, receipt;
+    const content = JSON.stringify({ files: proposed });
+    const native = createProjectCodeModel({ config, fetchImpl: async (_url, options) => {
+      requests++; assert.equal(JSON.parse(options.body).max_tokens, 32768);
+      return responseFor(undefined, { choices: [{ finish_reason: finishReason, message: { content } }], usage: { prompt_tokens: 23, completion_tokens: 20000 } });
+    } });
+    const pending = native({ task, files, onReceipt: value => { receipt = value; } });
+    if (finishReason === 'stop') assert.deepEqual((await pending).files, normalized(proposed));
+    else await assert.rejects(pending, /截断/u);
+    assert.equal(requests, 1); assert.equal(receipt.finishReason, finishReason);
+    assert.equal(receipt.content, content); assert.deepEqual(receipt.usage, { inputTokens: 23, outputTokens: 20000 });
+  }
 });

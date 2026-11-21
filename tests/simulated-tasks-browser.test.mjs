@@ -24,12 +24,13 @@ test('真实Edge页面确认计划、模拟失败重试、暂停/继续、刷新
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', entry => { if (entry.type() === 'error') errors.push(entry.text()); });
-  await page.goto(`http://127.0.0.1:${app.server.address().port}`);
+  await page.goto(`http://127.0.0.1:${app.server.address().port}/?view=details`);
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).click();
-  await page.getByRole('button', { name: '启动模拟编排', exact: true }).waitFor();
   await until(() => plan.status === 'succeeded');
-  await page.waitForFunction(() => !document.querySelector('[data-simulation-action="start"]').disabled);
   await page.getByRole('tab', { name: /开发任务/ }).click();
+  await page.locator('#simulation-tools').evaluate(element => { element.open = true; });
+  await page.getByRole('button', { name: '启动模拟编排', exact: true }).waitFor();
+  await page.waitForFunction(() => !document.querySelector('[data-simulation-action="start"]').disabled);
   await page.getByLabel('模拟时长', { exact: true }).fill('800');
   await page.getByLabel('首次失败任务 ID', { exact: true }).fill('B');
   await page.getByRole('button', { name: '启动模拟编排', exact: true }).click();
@@ -45,6 +46,7 @@ test('真实Edge页面确认计划、模拟失败重试、暂停/继续、刷新
   await until(() => current()?.status === 'awaiting_confirmation');
   const id = current().id;
   await page.reload(); await page.getByRole('tab', { name: /开发任务/ }).click();
+  await page.locator('#simulation-tools').evaluate(element => { element.open = true; });
   await page.locator('.dev-task[data-task="D"]').click();
   await page.getByRole('button', { name: '确认此模拟结果', exact: true }).waitFor();
   assert.equal(current().tasks.find(task => task.id === 'E').attempts.length, 0);

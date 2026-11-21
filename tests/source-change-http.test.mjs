@@ -116,7 +116,9 @@ test('parse is read-only, precise fields reject client capabilities and source A
   const cross = await fetch(url + route, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://attacker.example' }, body: JSON.stringify(base) });
   assert.equal(cross.status, 403);
   assert.equal((await request()).body.changes.length, 0);
-  assert.ok((await readdir(directory)).every(name => name === `${project.id}.json` || ['executions', 'source-changes'].includes(name)));
+  assert.ok((await readdir(directory)).every(name => name === `${project.id}.json` || ['executions', 'source-changes', 'verification-planning', 'planned-executions'].includes(name)));
+  assert.deepEqual(await readdir(path.join(directory, 'verification-planning', 'receipts')), [], '只解析需求不能产生模型回执');
+  assert.deepEqual((await app.plannedExecutionService.list({ projectId: project.id, runId: 'not-created' })).executions, [], '解析需求不得自动启动研发或预留收费执行');
 });
 
 test('HTTP list reads the latest source when publication completes while its change list is awaiting', async t => {

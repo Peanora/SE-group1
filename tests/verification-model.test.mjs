@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { createVerificationModel, verificationModelPolicy } from '../lib/verification-model.mjs';
+import { createVerificationModel, verificationModelPolicy, verificationRequestEvidence } from '../lib/verification-model.mjs';
 import { assertCompiledManifest, compileManifest, createVerificationControl, inspectVerificationProposal } from '../lib/verification-contract.mjs';
 
 const config = { baseUrl: 'https://model.invalid/v1', model: 'independent-verification', apiKey: 'private-verification-key' };
@@ -53,6 +53,15 @@ test('pure inspection exports ordinary definitions without granting approval or 
   const control = createVerificationControl(), approval = control.approve({ ...args, proposal: proposal() });
   const manifest = compileManifest({ ...args, proposal: proposal(), approval });
   assert.throws(() => assertCompiledManifest(manifest, binding), /编码阶段/u); control.beginCoding(approval); assert.equal(assertCompiledManifest(manifest, binding), manifest);
+});
+test('native proposal adapter can return a frozen-before-coding delayed-load regression as data, never an execution verdict', async () => {
+  const raw = proposal(); raw.browser = { version: 1, sessions: ['race'], steps: [{ id: 'retained-create', session: 'race', requirementIds: ['REQ1', 'REQ2'], op: 'createWithDelayedLoad', path: '/objects.html', loadPath: '/objects', inputTestId: 'object-name', submitTestId: 'object-create', listTestId: 'object-list', countTestId: 'object-count', value: 'Created object', expectedCount: 1 }] };
+  let calls = 0; const result = await createVerificationModel({ config, fetchImpl: async (_url, options) => { calls++; const prompt = JSON.parse(options.body).messages[0].content;
+    for (const term of ['createWithDelayedLoad', 'loadPath', 'expectedCount', '同一REST', '不泛化所有表单', '编码前']) assert.ok(prompt.includes(term), term); return reply(raw); } })({ ...input(), onReceipt: () => {} });
+  assert.equal(calls, 1); assert.equal(result.coverage, 'structural_only'); assert.equal(result.proposal.browser.steps[0].expectedCount, 1); assert.throws(() => assertCompiledManifest(result.proposal, binding));
+  const value = { proposal: result.proposal, requirements: ['REQ1', 'REQ2'], binding }, control = createVerificationControl(), approval = control.approve(value), manifest = compileManifest({ ...value, approval });
+  const changed = structuredClone(result.proposal); changed.browser.steps[0].expectedCount = 2; assert.throws(() => compileManifest({ ...value, proposal: changed, approval }));
+  control.beginCoding(approval); assert.equal(assertCompiledManifest(manifest, binding), manifest);
 });
 
 test('caller edits and receipt mutations never change the frozen request, validation inputs or output usage', async () => {
@@ -306,4 +315,32 @@ test('cancelling a pending receipt never publishes a proposal when the sink late
   const started = new Promise(resolve => { entered = resolve; }), controller = new AbortController();
   const pending = createVerificationModel({ config, fetchImpl: async () => reply() })({ ...input(), signal: controller.signal, onReceipt: async () => { entered(); await new Promise(resolve => { release = resolve; }); } }).then(value => { published = true; return value; });
   await started; controller.abort(); await assert.rejects(pending, { name: 'AbortError' }); release(); await tick(); assert.equal(published, false);
+});
+
+test('native failure evidence distinguishes incomplete transport and complete malformed responses without trusting JSON or error fields', async () => {
+  for (const mode of ['reset', 'truncated', 'invalid-json', 'http-rejection']) {
+    const model = createVerificationModel({ config, fetchImpl: async () => {
+      if (mode === 'reset') throw new Error('private provider detail');
+      if (mode === 'truncated') return new Response(new ReadableStream({ start(controller) { controller.error(new Error('private body detail')); } }));
+      return new Response(mode === 'invalid-json' ? '{' : 'denied', { status: mode === 'http-rejection' ? 401 : 200 });
+    } });
+    await assert.rejects(model(input()), error => {
+      const evidence = verificationRequestEvidence(error);
+      assert.deepEqual(evidence, { dispatched: true, responseComplete: ['invalid-json', 'http-rejection'].includes(mode) });
+      assert.equal(Object.isFrozen(evidence), true);
+      error.responseComplete = true;
+      assert.equal(verificationRequestEvidence(error).responseComplete, evidence.responseComplete);
+      assert.doesNotMatch(error.message, /private provider|private body/u);
+      return true;
+    });
+  }
+  assert.equal(verificationRequestEvidence(Object.assign(new Error('forged'), { dispatched: false, responseComplete: true })), null);
+  for (const invalid of [{ baseUrl: 'not a URL' }, { timeoutMs: 0 }, { model: '' }]) {
+    let calls = 0;
+    const model = createVerificationModel({ config: { ...config, ...invalid }, fetchImpl: async () => { calls++; throw new Error('must not send'); } });
+    await assert.rejects(model(input()), error => {
+      assert.deepEqual(verificationRequestEvidence(error), { dispatched: false, responseComplete: false }); return true;
+    });
+    assert.equal(calls, 0);
+  }
 });

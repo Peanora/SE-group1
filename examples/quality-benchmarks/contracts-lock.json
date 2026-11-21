@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "purpose": "public complex-Web benchmark requirements and immutable oracle definitions",
+  "applicationRuns": 0,
+  "modelCalls": 0,
+  "files": [
+    {
+      "file": "examples/quality-benchmarks/README.md",
+      "sha256": "929E83006F920230378B1BE196634E17FEF6D78140C1FF7B061031F139B32F3A"
+    },
+    {
+      "file": "examples/quality-benchmarks/definition-kit.mjs",
+      "sha256": "6CB3E8CE7BDD2DFA9475BBDFC22734497CED90F76568F73497E31F5C6A0700B3"
+    },
+    {
+      "file": "examples/quality-benchmarks/holdout-lock.json",
+      "sha256": "036A07F5BA4C36D777050072BBC629080B90DA7542CB608B91529479689D4C57"
+    },
+    {
+      "file": "examples/quality-benchmarks/index.mjs",
+      "sha256": "7DD0F4B6DD69592FBCD2F6DBE01615BF3C6654F6B73AF2D4B1E2D8DF9F7590A6"
+    },
+    {
+      "file": "examples/quality-benchmarks/inventory-change.md",
+      "sha256": "20529CA739F350AC9405C505290FC2492B47D522574581C0C2524F953C94034E"
+    },
+    {
+      "file": "examples/quality-benchmarks/inventory.md",
+      "sha256": "C3CF7A6B4D338D3BC3DB0B791AB3CB4409540ECF7BEC44593D5B7997DBDEA10C"
+    },
+    {
+      "file": "examples/quality-benchmarks/inventory.mjs",
+      "sha256": "273F6378297C04C34588DDDA7ABAA7C50F8C9F49F5F21A7B51DC958FBB583151"
+    },
+    {
+      "file": "examples/quality-benchmarks/procurement-holdout.md",
+      "sha256": "685AD54AAB6A12A364FBF5F46F29D9F62B0189F8C7C5394E64DBCBBC970235B7"
+    },
+    {
+      "file": "examples/quality-benchmarks/procurement-holdout.mjs",
+      "sha256": "E842EFAD6A2FBE64C4399FFC60163B2811C5A8F83F4E1879A438CB5042A64B77"
+    },
+    {
+      "file": "examples/quality-benchmarks/protocol.md",
+      "sha256": "FB671F83AD82408A44CBA32F16D7D368057793532F83404DD30A67B0BC6B19C7"
+    },
+    {
+      "file": "examples/quality-benchmarks/reservations-change.md",
+      "sha256": "A68F34A5C0BD31225991A6E1490FB6C4A2B237079AEE37B41EEC49AC7CD8A52C"
+    },
+    {
+      "file": "examples/quality-benchmarks/reservations.md",
+      "sha256": "494FC6D172F285EF7979E58999F810DDDE2060D158D9D84669C2C56C17BCE8C4"
+    },
+    {
+      "file": "examples/quality-benchmarks/reservations.mjs",
+      "sha256": "40A18F52F40DC6E54FC6F3CD7A840D240C03716BA2E765F2A3618D0BF7119C9C"
+    },
+    {
+      "file": "examples/quality-benchmarks/service-desk-change.md",
+      "sha256": "5C3481D89F0FBB552D518572C6CAD410979CC3926E7C00579AAAE29CFF1FD52E"
+    },
+    {
+      "file": "examples/quality-benchmarks/service-desk.md",
+      "sha256": "A1C715A17DDFD26E170ADECFAA671905F15779B3E3D34D431D550039B7231DDB"
+    },
+    {
+      "file": "examples/quality-benchmarks/service-desk.mjs",
+      "sha256": "16DCD162B6E83BF502A5ED1DA2F99998BA0389CD55DF5B4A1DDB6B5CF738DC89"
+    }
+  ]
+}

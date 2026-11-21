@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createProjectReviewModel, projectReviewPolicy, validateProjectReviewResponse } from '../lib/project-review-model.mjs';
+import { createProjectReviewModel, projectReviewPolicy, validateProjectReviewResponse, decodeProjectReviewResponseV2, getProjectReviewResponseFeedback, normalizeProjectReviewResponseFeedback, projectReviewEvidenceOrigin } from '../lib/project-review-model.mjs';
+import { getModelRequestEvidence } from '../lib/model-request-evidence.mjs';
 
 const clear = { summary: '当前候选没有发现阻塞问题。', issues: [], resolutions: [] };
 const config = { baseUrl: 'https://model.invalid/v1', model: 'project-review', apiKey: 'private-review-secret' };
 const reply = raw => new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(raw) } }] }));
+const wire = raw => ({ summary: raw.summary, issues: raw.issues.map(({ evidence, ...issue }) => issue), resolutions: raw.resolutions });
 
 test('project Review accepts the full allowed multi-file snapshot and never accepts candidate completion fields', async () => {
   const files = Array.from({ length: 24 }, (_, index) => ({ path: `src/module-${index}.mjs`, content: `// ${'x'.repeat(40_000)}\nexport const value=${index};` }));
@@ -15,11 +17,11 @@ test('project Review accepts the full allowed multi-file snapshot and never acce
     assert.ok(context.files.every(file => !Object.hasOwn(file, 'content'))); assert.deepEqual(context.previousIssues, []);
     assert.equal(context.task, '按固定Web契约检查。');
     assert.equal(options.body.includes(config.apiKey), false);
-    return reply({ ...clear, passed: true, status: 'accepted', binding: { sourceHash: 'forged' } });
+    return reply(clear);
   } });
   const result = await model({ task: '按固定Web契约检查。', files });
-  assert.deepEqual(result, { ...clear, model: config.model, usage: { inputTokens: null, outputTokens: null } });
-  assert.equal(projectReviewPolicy.version, 'web-project-review-v1');
+  assert.deepEqual(result, { ...clear, evidenceOrigin: projectReviewEvidenceOrigin, model: config.model, usage: { inputTokens: null, outputTokens: null } });
+  assert.equal(projectReviewPolicy.version, 'web-project-review-v2');
   assert.match(projectReviewPolicy.hash, /^[a-f0-9]{64}$/u);
 });
 
@@ -47,6 +49,41 @@ test('project Review binds evidence to actual lines and explicitly resolves ever
   assert.throws(() => validateProjectReviewResponse({ ...raw, issues: [{ ...issue, evidence: 'invented' }] }, { files, previousIssues }));
 });
 
+test('duplicate findings have a bounded diagnostic and cannot give the same finding two IDs', async () => {
+  const files = [{ path: 'src/queue.mjs', content: 'return waiting.find(row => row.id === requestedId);' }];
+  const issue = { file: files[0].path, line: 1, severity: 'blocking', message: '调度员可绕过队首，后加入的成员可先获得设备。' };
+  const raw = { ...clear, issues: [issue, { ...issue, severity: 'advisory', message: ' ' + issue.message }] };
+  const model = createProjectReviewModel({ config, fetchImpl: async () => reply(raw) });
+  let receipt;
+  await assert.rejects(model({ files, task: '必须按候补加入顺序提升。', allowHistoricalDuplicates: true, onReceipt: value => { receipt = value; } }), error => {
+    const feedback = getProjectReviewResponseFeedback(error);
+    assert.deepEqual(feedback, { version: 1, reason: 'duplicate_issue', field: 'issues[1]' });
+    assert.deepEqual(normalizeProjectReviewResponseFeedback(feedback), feedback);
+    return true;
+  });
+  assert.deepEqual(JSON.parse(receipt.content), raw);
+  const history = { files, allowHistoricalDuplicates: true };
+  const old = decodeProjectReviewResponseV2(receipt.content, history);
+  assert.equal(validateProjectReviewResponse(old, history).issues.length, 2);
+  assert.throws(() => validateProjectReviewResponse(old, { files }), /重复/u);
+  const distinct = { ...raw, issues: [issue, { ...issue, message: '空队列会返回未定义值，无法生成约定的冲突响应。' }] };
+  assert.equal(decodeProjectReviewResponseV2(JSON.stringify(distinct), { files }).issues.length, 2);
+});
+
+test('an existing finding must be rechecked under its original ID even if the new report downgrades severity', () => {
+  const files = [{ path: 'src/queue.mjs', content: 'return waiting.at(-1);' }];
+  const prior = { id: 'FIFO-1', file: files[0].path, line: 1, severity: 'blocking', message: '提升队尾会跳过先加入的成员。', evidence: files[0].content };
+  const context = { files, previousIssues: [prior] };
+  const issue = { file: prior.file, line: prior.line, severity: 'advisory', message: prior.message };
+  const resolutions = [{ id: prior.id, status: 'resolved', reason: '已复查。' }];
+  const repeated = { ...clear, issues: [issue], resolutions };
+  assert.throws(() => decodeProjectReviewResponseV2(JSON.stringify(repeated), context), error =>
+    getProjectReviewResponseFeedback(error)?.reason === 'duplicate_issue');
+  assert.throws(() => validateProjectReviewResponse({ ...repeated, issues: [{ ...issue, evidence: prior.evidence }] }, context), /重复/u);
+  const open = [{ id: prior.id, status: 'open', reason: '当前提交仍然从队尾选人。' }];
+  assert.deepEqual(decodeProjectReviewResponseV2(JSON.stringify({ ...clear, resolutions: open }), context).resolutions, open);
+});
+
 test('project Review transport errors hide credentials and cancellation rejects incomplete opinions', async () => {
   const files = [{ path: 'src/app.mjs', content: 'export const app = 1;' }];
   for (const fetchImpl of [async () => { throw new Error(config.apiKey); }, async () => new Response(config.apiKey, { status: 401 })]) {
@@ -69,7 +106,7 @@ test('Review records malformed, blank and missing content with normalized usage 
     const receipts = [];
     await assert.rejects(createProjectReviewModel({ config, fetchImpl: async () => envelopeFor(content, { usage: { prompt_tokens: 0, completion_tokens: -1 } }) })({ task: '检查', files: candidateFiles,
       onReceipt: async receipt => { receipts.push(receipt); } }), { code: 'invalid_model_response' });
-    assert.deepEqual(receipts, [{ model: config.model, finishReason: 'stop', usage: { inputTokens: 0, outputTokens: null }, content: typeof content === 'string' ? content : '' }]);
+    assert.deepEqual(receipts, [{ model: config.model, finishReason: 'stop', reviewWireVersion: 2, usage: { inputTokens: 0, outputTokens: null }, content: typeof content === 'string' ? content : '' }]);
     assert.equal(Object.getPrototypeOf(receipts[0]), Object.prototype);
     assert.equal(Object.getPrototypeOf(receipts[0].usage), Object.prototype);
   }
@@ -91,9 +128,9 @@ test('Review receipt callbacks are not request data and cannot mutate the saved 
     assert.deepEqual(Object.keys(options.headers).sort(), ['Authorization', 'Content-Type']);
     assert.deepEqual(JSON.parse(JSON.parse(options.body).messages[1].content), { task: '检查', files: files.map(({ path, content }) => ({ path,
       lines: content.split(/\r?\n/u).map((text, index) => ({ line: index + 1, text })) })), previousIssues });
-    return envelopeFor(JSON.stringify(raw), { usage: { prompt_tokens: 8, completion_tokens: 5 } });
+    return envelopeFor(JSON.stringify(wire(raw)), { usage: { prompt_tokens: 8, completion_tokens: 5 } });
   } });
-  assert.deepEqual(await model({ task: '检查', files, previousIssues, onReceipt: sink }), { ...raw, model: config.model, usage: { inputTokens: 8, outputTokens: 5 } });
+  assert.deepEqual(await model({ task: '检查', files, previousIssues, onReceipt: sink }), { ...raw, evidenceOrigin: projectReviewEvidenceOrigin, model: config.model, usage: { inputTokens: 8, outputTokens: 5 } });
   assert.equal(called, true);
 });
 
@@ -134,7 +171,7 @@ test('Review keeps nonleaking escaped JSON byte for byte and still enforces the 
   const result = await createProjectReviewModel({ config, fetchImpl: async () => envelopeFor(content) })({ task: '检查', files: candidateFiles, onReceipt: value => { receipt = value; } });
   assert.equal(receipt.content, content); assert.equal(result.summary, clear.summary);
   const wrong = { ...clear, issues: [{ severity: 'advisory', file: 'src/app.mjs', line: 1, evidence: 'invented', message: 'still invalid' }] };
-  await assert.rejects(createProjectReviewModel({ config, fetchImpl: async () => reply(wrong) })({ task: '检查', files: candidateFiles }), /证据与候选代码不一致/u);
+  await assert.rejects(createProjectReviewModel({ config, fetchImpl: async () => reply(wrong) })({ task: '检查', files: candidateFiles }), error => getProjectReviewResponseFeedback(error)?.reason === 'unknown_fields');
 });
 
 test('stray quote and escape framing cannot retain Review credentials or make them correctable JSON failures', async () => {
@@ -176,7 +213,6 @@ test('Review transport limits, truncation and invalid evidence are not format re
   for (const [fetchImpl, finishReason] of [
     [async () => envelopeFor('{"summary":', { finishReason: 'length' }), 'length'],
     [async () => envelopeFor('{}', { finishReason: null }), 'unknown'],
-    [async () => reply({ ...clear, issues: [{ severity: 'blocking', file: '../outside.mjs', line: 1, evidence: 'invented', message: 'wrong location' }] }), 'stop'],
   ]) {
     let receipt;
     await assert.rejects(createProjectReviewModel({ config, fetchImpl })({ task: '检查', files: candidateFiles, onReceipt: value => { receipt = value; } }), error => error.code !== 'invalid_model_response');
@@ -202,7 +238,7 @@ test('Review finish metadata is restricted to known constants, never provider te
       assert.ok(!error.message.includes(config.apiKey) && !error.message.includes('provider-private-details')); return true;
     });
     assert.equal(calls, 1);
-    assert.deepEqual(receipt, { model: config.model, finishReason: 'unknown', usage: { inputTokens: 2, outputTokens: 5 }, content });
+    assert.deepEqual(receipt, { model: config.model, finishReason: 'unknown', reviewWireVersion: 2, usage: { inputTokens: 2, outputTokens: 5 }, content });
     assert.equal(JSON.stringify(receipt).includes(config.apiKey), false);
   }
 });
@@ -238,7 +274,7 @@ test('Review sends program-numbered source lines once, preserving multi-file CRL
     assert.deepEqual(context, { task: '逐行审查', files: numbered, previousIssues: [] });
     assert.ok(context.files.every(file => !Object.hasOwn(file, 'content')));
     assert.match(request.messages[0].content, /line由平台/u);
-    assert.match(request.messages[0].content, /text\.trim\(\)/u);
+    assert.match(request.messages[0].content, /不输出evidence或复制整行代码/u);
     assert.match(request.messages[0].content, /不要自行数行/u);
     return reply(clear);
   } })({ task: '逐行审查', files });
@@ -255,7 +291,7 @@ test('numbering and strict validation share the original snapshot when caller fi
     assert.deepEqual(sent.files, [{ path: 'src/app.mjs', lines: [{ line: 1, text: 'export function app() {' }, { line: 2, text: '  return {};' }, { line: 3, text: '}' }, { line: 4, text: '' }] }]);
     assert.equal(sent.previousIssues[0].id, 'original-id');
     files[0].path = 'src/replaced.mjs'; files[0].content = '\n'.repeat(10_000); previousIssues[0].id = 'replaced-id';
-    return reply(raw);
+    return reply(wire(raw));
   } })({ task: '检查原快照', files, previousIssues });
   assert.deepEqual(result.issues, raw.issues);
   assert.deepEqual(result.resolutions, raw.resolutions);
@@ -273,7 +309,7 @@ test('a misplaced advisory is still rejected even when its evidence appears at o
     assert.deepEqual(numbered[206], { line: 207, text: `  ${evidence}` });
     return reply(misplaced);
   } })({ task: '检查行号', files, onReceipt: value => { receipt = value; } }), error => {
-    assert.match(error.message, /证据与候选代码不一致/u); assert.notEqual(error.code, 'invalid_model_response'); return true;
+    assert.equal(getProjectReviewResponseFeedback(error)?.reason, 'unknown_fields'); assert.equal(error.code, 'invalid_model_response'); return true;
   });
   assert.equal(receipt.content, JSON.stringify(misplaced));
   assert.throws(() => validateProjectReviewResponse(misplaced, { files }), /证据与候选代码不一致/u);
@@ -311,4 +347,80 @@ test('exactly 10000 source lines are accepted and numbering resets for each file
     return reply(clear);
   } })({ task: '检查边界', files });
   assert.equal(calls, 1);
+});
+
+async function reviewEvidence(operation, expected) {
+  let failure;
+  try { await operation; } catch (error) { failure = error; }
+  assert.ok(failure instanceof Error, '该场景必须拒绝Review意见');
+  const evidence = getModelRequestEvidence(failure);
+  assert.deepEqual(evidence, expected);
+  assert.equal(Object.isFrozen(evidence), true);
+  assert.equal(failure.message.includes(config.apiKey), false);
+  return failure;
+}
+
+test('Review native wrapper includes every pre-dispatch input and configuration failure', async () => {
+  let requests = 0;
+  const fetchImpl = async () => { requests++; return reply(clear); };
+  await reviewEvidence(createProjectReviewModel({ config: { ...config, baseUrl: 'not a URL' }, fetchImpl })({ task: '检查', files: candidateFiles }), { dispatched: false, responseComplete: false });
+  const model = createProjectReviewModel({ config, fetchImpl });
+  await reviewEvidence(model(null), { dispatched: false, responseComplete: false });
+  await reviewEvidence(model({ task: '', files: candidateFiles }), { dispatched: false, responseComplete: false });
+  await reviewEvidence(model({ task: '检查', files: [{ path: '../outside.mjs', content: 'unsafe' }] }), { dispatched: false, responseComplete: false });
+  const controller = new AbortController(); controller.abort();
+  await reviewEvidence(model({ task: '检查', files: candidateFiles, signal: controller.signal }), { dispatched: false, responseComplete: false });
+  const snapshotAbort = new AbortController();
+  await reviewEvidence(model({ task: '检查', files: [{ path: 'src/app.mjs', get content() { snapshotAbort.abort(); return 'export const app = 1;'; } }], signal: snapshotAbort.signal }), { dispatched: false, responseComplete: false });
+  assert.equal(requests, 0);
+});
+
+test('Review connection reset and settled abort cannot forge remote completion with error fields', async () => {
+  const reset = createProjectReviewModel({ config, fetchImpl: async () => { throw Object.assign(new Error(config.apiKey), { responseComplete: true, dispatched: false }); } });
+  await reviewEvidence(reset({ task: '检查', files: candidateFiles }), { dispatched: true, responseComplete: false });
+  const controller = new AbortController(); let entered;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const model = createProjectReviewModel({ config, fetchImpl: async (_url, options) => {
+    entered(); return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(new Error(config.apiKey)), { once: true }));
+  } });
+  const pending = model({ task: '检查', files: candidateFiles, signal: controller.signal }); await ready; controller.abort();
+  const failure = await reviewEvidence(pending, { dispatched: true, responseComplete: false });
+  assert.equal(failure.name, 'AbortError');
+});
+
+for (const status of [200, 401]) test(`Review HTTP ${status} interrupted body is not a terminal response`, async () => {
+  let chunks = 0;
+  const model = createProjectReviewModel({ config, fetchImpl: async () => new Response(new ReadableStream({ pull(controller) {
+    if (chunks++ === 0) controller.enqueue(new TextEncoder().encode('{"choices":['));
+    else controller.error(new Error(config.apiKey));
+  } }), { status }) });
+  await reviewEvidence(model({ task: '检查', files: candidateFiles }), { dispatched: true, responseComplete: false });
+});
+
+test('Review complete rejection, invalid JSON and decode failures preserve real terminal evidence', async () => {
+  for (const response of [new Response(config.apiKey, { status: 401 }), new Response(null, { status: 401 }), new Response(null, { status: 200 }), new Response('{ incomplete JSON'), new Response(new Uint8Array([0xff]))]) {
+    let receipts = 0;
+    const model = createProjectReviewModel({ config, fetchImpl: async () => response });
+    await reviewEvidence(model({ task: '检查', files: candidateFiles, onReceipt: () => { receipts++; } }), { dispatched: true, responseComplete: true });
+    assert.equal(receipts, 0);
+  }
+});
+
+test('Review consumes bounded rejection bodies, hides stream diagnostics and ignores evidence in JSON', async () => {
+  const oversized = createProjectReviewModel({ config, fetchImpl: async () => new Response('x'.repeat(128 * 1024 + 1), { status: 401 }) });
+  await reviewEvidence(oversized({ task: '检查', files: candidateFiles }), { dispatched: true, responseComplete: false });
+  const unreadable = createProjectReviewModel({ config, fetchImpl: async () => ({ ok: true, status: 200, body: { getReader() { throw new Error(config.apiKey); } } }) });
+  await reviewEvidence(unreadable({ task: '检查', files: candidateFiles }), { dispatched: true, responseComplete: false });
+  await assert.rejects(createProjectReviewModel({ config, fetchImpl: async () => reply({ ...clear, responseComplete: true, dispatched: false }) })({ task: '检查', files: candidateFiles }), error => {
+    assert.equal(getProjectReviewResponseFeedback(error)?.reason, 'unknown_fields'); assert.deepEqual(getModelRequestEvidence(error), { dispatched: true, responseComplete: true }); return true;
+  });
+});
+
+test('Review configuration or source credential collisions are rejected without sending or saving receipts', async () => {
+  for (const where of ['model', 'task', 'file']) {
+    let requests = 0, receipts = 0;
+    const model = createProjectReviewModel({ config: { ...config, ...(where === 'model' ? { model: `model-${config.apiKey}` } : {}) }, fetchImpl: async () => { requests++; throw new Error('must not send'); } });
+    await reviewEvidence(model({ task: where === 'task' ? config.apiKey : '检查', files: where === 'file' ? [{ path: 'src/app.mjs', content: config.apiKey }] : candidateFiles,
+      onReceipt: () => { receipts++; } }), { dispatched: false, responseComplete: false }); assert.equal(requests, 0); assert.equal(receipts, 0);
+  }
 });

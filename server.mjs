@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readFile, stat } from 'node:fs/promises';
@@ -7,14 +8,23 @@ import { Orchestrator } from './lib/orchestrator.mjs';
 import { HttpError, parseDocument } from './lib/documents.mjs';
 import { createZip } from './lib/zip.mjs';
 import { SimulatedTaskService } from './lib/simulated-tasks.mjs';
+import { createLocalExecutionSubject } from './lib/team-access.mjs';
+import { createVerificationRecovery } from './lib/verification-recovery.mjs';
+import { loginContinuationDraft, loginRevisionNote, loginRevisionTask, previousLoginPlan } from './lib/verification-login-continuation.mjs';
+import { reconcileEndedPreviews } from './lib/preview-output-recovery.mjs';
+import { repeatedCounterSteps } from './public/verification-draft.js';
 
 import { DEFAULT_STACK, PLATFORM_DEFAULTS } from './lib/platform-defaults.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const MAX_REQUEST = 6 * 1024 * 1024;
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
+const requestBodies = new WeakMap();
+const requestChecks = new WeakMap();
 
 async function readJson(request) {
+  requestChecks.get(request)?.();
+  if (requestBodies.has(request)) return requestBodies.get(request);
   if (!/^application\/json(?:;|$)/iu.test(request.headers['content-type'] ?? '')) throw new HttpError(400, '请使用 application/json 提交数据。');
   let bytes = 0;
   const chunks = [];
@@ -26,8 +36,8 @@ async function readJson(request) {
   try {
     const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
-    return parsed;
-  } catch { throw new HttpError(400, '请求不是有效的 JSON 对象。'); }
+    requestChecks.get(request)?.(); requestBodies.set(request, parsed); return parsed;
+  } catch (error) { if (Number.isInteger(error.status)) throw error; throw new HttpError(400, '请求不是有效的 JSON 对象。'); }
 }
 
 function respond(response, status, body, contentType = 'application/json; charset=utf-8', headers = {}) {
@@ -78,6 +88,7 @@ export async function createApp(options = {}) {
   const planner = options.planner ?? await import('./lib/planner.mjs');
   const store = options.store ?? await new ProjectStore(options.dataDir ?? process.env.DATA_DIR ?? path.join(ROOT, 'data')).init();
   const orchestrator = new Orchestrator(store, planner, { stepDelayMs: options.stepDelayMs ?? process.env.WORKFLOW_STEP_DELAY_MS ?? 350,
+    ...Object.fromEntries(['engineeringMaxCalls', 'engineeringTimeoutMs', 'engineeringTotalTimeoutMs'].filter(key => options[key] !== undefined).map(key => [key, options[key]])),
     ...(options.specificationMaxCalls === undefined ? {} : { specificationMaxCalls: options.specificationMaxCalls }),
     ...(options.specificationTimeoutMs === undefined ? {} : { specificationTimeoutMs: options.specificationTimeoutMs }) });
   const executionService = options.executionService === null ? null : options.executionService ?? await (await import('./lib/web-execution-service.mjs')).createWebExecutionService({
@@ -94,18 +105,76 @@ export async function createApp(options = {}) {
   try { await simulationService.init(); }
   catch (cause) { await Promise.allSettled([orchestrator.shutdown(), executionService?.shutdown()]); throw cause; }
   orchestrator.assertSimulationIdle = projectId => simulationService.assertIdle(projectId);
-  let sourceChangeService;
+  const verificationRoot = path.resolve(options.verificationPlanningRootDir ?? path.join(store.directory, 'verification-planning'));
+  const plannedRoot = path.resolve(options.plannedExecutionRootDir ?? path.join(store.directory, 'planned-executions'));
+  const verificationRecovery = createVerificationRecovery({ root: verificationRoot, getPlanning: (projectId, runId) => store.getPersistedRun(projectId, runId) });
+  let sourceChangeService, verificationPlanningService, plannedExecutionService, teamAccess, localReleasesService, plannedDatasetService, evolutionService;
   try {
-    sourceChangeService = options.sourceChangeService === null ? null : options.sourceChangeService ?? await (await import('./lib/source-change-service.mjs')).createSourceChangeService({
-      rootDir: path.resolve(options.sourceChangeRootDir ?? path.join(store.directory, 'source-changes')), store,
+    verificationPlanningService = options.verificationPlanningService === null ? null : options.verificationPlanningService ?? await (await import('./lib/verification-planning-service.mjs')).createVerificationPlanningService({
+      rootDir: verificationRoot,
+      getPlanning: async (projectId, runId) => store.getPersistedRun(projectId, runId),
+      getPlanningSync: (projectId, runId) => store.getPersistedRun(projectId, runId),
+    });
+    if (options.plannedExecutionService === undefined) await reconcileEndedPreviews(path.join(plannedRoot, 'previews'));
+    plannedExecutionService = options.plannedExecutionService === null ? null : options.plannedExecutionService ?? await (await import('./lib/planned-execution-service.mjs')).createPlannedExecutionService({
+      rootDir: plannedRoot, verificationService: verificationPlanningService,
+      getPlanningSync: (projectId, runId) => store.getPersistedRun(projectId, runId),
+      dependencies: {
+        // Interactive browsing transfers more approved assets than one scripted acceptance.
+        startPreviewRuntime: async input => (await import('./lib/web-runtime.mjs')).startWebRuntime({ ...input, maxOutputBytes: 4 * 1024 * 1024 }),
+        hasExternalActivity: projectId => !!localReleasesService?.hasActivity(projectId) || !!evolutionService?.hasActivity(projectId) || !!plannedDatasetService?.hasActivity(projectId),
+        requiresExecutionSubject: () => !!teamAccess },
       withCheckpoint: (projectId, work) => orchestrator.withProjectCheckpoint(projectId, () => {
-        if (typeof executionService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '当前执行服务无法确认项目安全检查点，变更仍可保存为待应用。');
+        if (typeof executionService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '无法核对已有代码执行状态，暂不能开始研发。');
         return executionService.withProjectCheckpoint(projectId, work);
       }),
     });
-  } catch (cause) { await Promise.allSettled([simulationService.shutdown(), orchestrator.shutdown(), executionService?.shutdown()]); throw cause; }
+    const localLifecycleEnabled = options.localLifecycleEnabled ?? (typeof plannedExecutionService?.authorizeAcceptedSource === 'function' && typeof verificationPlanningService?.assertApprovedDefinition === 'function');
+    if (localLifecycleEnabled) {
+      const lifecycleCheckpoint = (projectId, work) => orchestrator.withProjectCheckpoint(projectId, () => {
+        if (![executionService, verificationPlanningService, plannedExecutionService].every(service => typeof service?.withProjectCheckpoint === 'function')) throw new HttpError(409, '当前服务无法核对本机业务版本的安全检查点。');
+        return executionService.withProjectCheckpoint(projectId, () => verificationPlanningService.withProjectCheckpoint(projectId, () => plannedExecutionService.withProjectCheckpoint(projectId, work)));
+      });
+      localReleasesService = options.localReleasesService ?? await (await import('./lib/planned-local-releases.mjs')).createPlannedLocalReleases({
+        rootDir: path.join(plannedRoot, 'local-releases'), authorizeExecution: (input, context) => plannedExecutionService.authorizeAcceptedSource(input, context),
+        withCheckpoint: lifecycleCheckpoint, assertIdle: () => true,
+      });
+      plannedDatasetService = options.plannedDatasetService ?? await (await import('./lib/planned-dataset.mjs')).createPlannedDatasetService({
+        rootDir: path.join(plannedRoot, 'datasets'), sourceRootDir: plannedRoot, authorizeStoppedDataset: runtimeRef => localReleasesService.authorizeStoppedDataset(runtimeRef),
+      });
+      evolutionService = options.evolutionService ?? await (await import('./lib/planned-evolution.mjs')).createPlannedEvolutionService({
+        rootDir: path.join(plannedRoot, 'evolutions'), sourceRootDir: plannedRoot, getPlanningSync: (projectId, runId) => store.getPersistedRun(projectId, runId),
+        verificationService: verificationPlanningService, plannedService: plannedExecutionService, releaseService: localReleasesService, datasetService: plannedDatasetService, withCheckpoint: lifecycleCheckpoint,
+      });
+    }
+    sourceChangeService = options.sourceChangeService === null ? null : options.sourceChangeService ?? await (await import('./lib/source-change-service.mjs')).createSourceChangeService({
+      rootDir: path.resolve(options.sourceChangeRootDir ?? path.join(store.directory, 'source-changes')), store,
+      withCheckpoint: (projectId, work) => orchestrator.withProjectCheckpoint(projectId, () => {
+        if (typeof executionService?.withProjectCheckpoint !== 'function' || typeof verificationPlanningService?.withProjectCheckpoint !== 'function' || typeof plannedExecutionService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '执行或测试提案服务无法确认项目安全检查点，变更仍可保存为待应用。');
+        return executionService.withProjectCheckpoint(projectId, () => verificationPlanningService.withProjectCheckpoint(projectId, () => plannedExecutionService.withProjectCheckpoint(projectId, work)));
+      }),
+    });
+    if (options.teamEnabled ?? process.env.TASKFLOW_TEAM_MODE === '1') teamAccess = await (await import('./lib/team-access.mjs')).createTeamAccess({ rootDir: path.resolve(options.teamRootDir ?? path.join(store.directory, 'team-access')) });
+  } catch (cause) { await Promise.allSettled([evolutionService?.shutdown(), localReleasesService?.shutdown(), plannedDatasetService?.close(), simulationService.shutdown(), orchestrator.shutdown(), executionService?.shutdown(), verificationPlanningService?.shutdown(), plannedExecutionService?.shutdown(), teamAccess?.close()]); throw cause; }
+  const fixedAdmission = (projectId, work) => {
+    if (typeof verificationPlanningService?.withProjectCheckpoint !== 'function' || typeof plannedExecutionService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '尚不能核对测试提案和研发执行状态。');
+    return verificationPlanningService.withProjectCheckpoint(projectId, () => plannedExecutionService.withProjectCheckpoint(projectId, work));
+  };
+  const atPlanRevisionCheckpoint = (projectId, work) => {
+    const services = [executionService, verificationPlanningService, plannedExecutionService].filter(Boolean);
+    if (services.some(service => typeof service.withProjectCheckpoint !== 'function')) {
+      throw new HttpError(409, '无法核对项目是否有开发、验收准备或预览在途，修改草稿仍可保留。');
+    }
+    return services.reduceRight((next, service) => () => service.withProjectCheckpoint(projectId, next), work)();
+  };
   let closing;
   const publicDir = path.resolve(options.publicDir ?? path.join(ROOT, 'public'));
+  function beginTeamAudit(request, response, actor, target) {
+    const requestId = randomUUID(); teamAccess.audit({ requestId, actor, action: `request.${request.method}`, target, status: 0 });
+    response.setHeader('X-Request-Id', requestId);
+    response.once('finish', () => { try { teamAccess.audit({ requestId, actor, action: 'request.finished', target, status: response.statusCode }); } catch { console.error('[team] 操作结果审计未能写入，请核对已有请求记录。'); } });
+    return { requestId };
+  }
   const server = http.createServer(async (request, response) => {
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
@@ -124,13 +193,53 @@ export async function createApp(options = {}) {
           try { origin = new URL(request.headers.origin); } catch { throw new HttpError(403, '请求来源无效。'); }
           if (origin.host !== request.headers.host || !['http:', 'https:'].includes(origin.protocol)) throw new HttpError(403, '请从本地工作台发起操作。');
         }
+        if (segments[1] === 'team') {
+          requireLocalExecutionRequest(request, server);
+          const auditContext = teamAccess && !['GET', 'HEAD'].includes(method) ? beginTeamAudit(request, response, teamAccess.identity(request.headers.cookie), url.pathname.slice(0, 1000)) : {};
+          if (segments.length === 3 && segments[2] === 'session' && method === 'GET') return respond(response, 200, { enabled: !!teamAccess, setupRequired: teamAccess?.setupRequired() ?? false, user: teamAccess?.identity(request.headers.cookie) ?? null });
+          if (!teamAccess) throw new HttpError(404, '团队登录尚未启用。');
+          if (segments.length === 3 && ['setup', 'login'].includes(segments[2]) && method === 'POST') {
+            const result = await teamAccess[segments[2]](await readJson(request), auditContext);
+            if (result.rejected) throw new HttpError(401, '账号或密码无效。');
+            return respond(response, segments[2] === 'setup' ? 201 : 200, { user: result.user }, undefined, { 'Set-Cookie': result.cookie });
+          }
+          if (segments.length === 3 && segments[2] === 'logout' && method === 'POST') {
+            dataFields(await readJson(request), []); const result = teamAccess.logout(request.headers.cookie, auditContext); return respond(response, 200, { loggedOut: true }, undefined, { 'Set-Cookie': result.cookie });
+          }
+          if (segments.length === 3 && segments[2] === 'members') {
+            if (method === 'GET') return respond(response, 200, { members: teamAccess.listMembers(request.headers.cookie) });
+            if (method === 'POST') return respond(response, 201, { member: await teamAccess.createMember(request.headers.cookie, await readJson(request), auditContext) });
+          }
+          if (segments.length === 4 && segments[2] === 'members' && method === 'PATCH') return respond(response, 200, { member: teamAccess.updateMember(request.headers.cookie, segments[3], await readJson(request), auditContext) });
+          if (segments.length === 3 && segments[2] === 'audit' && method === 'GET') return respond(response, 200, teamAccess.events(request.headers.cookie, Number(url.searchParams.get('after') ?? '0')));
+          throw new HttpError(404, '未找到该账号接口。');
+        }
         if (method === 'GET' && segments.length === 2 && segments[1] === 'health') {
           const config = planner.getModelConfig();
-          return respond(response, 200, { ok: true, platformDefaults: { ...PLATFORM_DEFAULTS, stack: { ...DEFAULT_STACK } }, model: { configured: config.configured, model: config.model ?? '' },
-            modelPlanning: { engineeringMaxCalls: null, engineeringCallLimit: false, engineeringTimeoutMs: orchestrator.engineeringTimeoutMs,
+          return respond(response, 200, { ok: true, teamAccess: { enabled: !!teamAccess }, verificationPlanning: { available: !!verificationPlanningService, phase: 'definition_only', failureRecovery: !!verificationPlanningService }, plannedExecution: { available: !!plannedExecutionService && !!verificationPlanningService, profile: 'planned-web-v1' }, localEvolution: { available: !!localReleasesService && !!evolutionService && !!plannedDatasetService }, platformDefaults: { ...PLATFORM_DEFAULTS, stack: { ...DEFAULT_STACK } }, model: { configured: config.configured, model: config.model ?? '' },
+            engineeringRoleRevision: { available: true, version: 1 },
+            engineeringRouteContractRevision: { available: true, version: 1 },
+            planningIssueConversation: { available: true, version: 3 },
+            modelPlanning: { engineeringMaxCalls: orchestrator.engineeringMaxCalls, engineeringCallLimit: orchestrator.engineeringMaxCalls !== null, engineeringTimeoutMs: orchestrator.engineeringTimeoutMs,
               engineeringTotalTimeoutMs: orchestrator.engineeringTotalTimeoutMs,
-              specificationMaxCalls: orchestrator.specificationMaxCalls, specificationTimeoutMs: orchestrator.specificationTimeoutMs },
+              specificationMaxCalls: orchestrator.specificationMaxCalls, specificationCallLimit: orchestrator.specificationMaxCalls !== null, specificationTimeoutMs: orchestrator.specificationTimeoutMs },
             supportedFormats: ['.md', '.txt', '.docx'] });
+        }
+        if (teamAccess) {
+          requireLocalExecutionRequest(request, server); const actor = teamAccess.requireRole(request.headers.cookie, ['owner', 'reviewer', 'observer']);
+          requestChecks.set(request, () => teamAccess.requireRole(request.headers.cookie, [actor.role]));
+          if (!['GET', 'HEAD'].includes(method)) {
+            const { requestId } = beginTeamAudit(request, response, actor, url.pathname.slice(0, 1000));
+            let permitted = actor.role === 'owner', action = method;
+            if (actor.role === 'reviewer' && method === 'POST') {
+              if (segments.length === 6 && segments[1] === 'projects' && segments[3] === 'runs' && segments[5] === 'action') {
+                const body = await readJson(request); action = typeof body.action === 'string' ? body.action : method;
+                permitted = ['approve_spec', 'reject_spec', 'approve_plan', 'reject_plan'].includes(action);
+              } else permitted = segments.length === 8 && segments[1] === 'projects' && segments[3] === 'runs' && ['verification-plans', 'evolutions'].includes(segments[5]) && ['approve', 'reject'].includes(segments[7]);
+            }
+            if (!permitted) teamAccess.audit({ requestId, actor, action: 'request.denied', target: url.pathname.slice(0, 1000), status: 403 });
+            if (!permitted) throw new HttpError(403, '当前角色只可查看；评审者可确认或驳回规格、计划、测试定义及迁移描述，开发和需求变更由负责人执行。');
+          }
         }
         if (segments[1] !== 'projects') throw new HttpError(404, '未找到该接口。');
         if (segments.length === 2) {
@@ -139,12 +248,38 @@ export async function createApp(options = {}) {
           throw new HttpError(405, '该接口不支持此请求方法。');
         }
         const projectId = segments[2];
+        if (segments[3] === 'local-releases') {
+          requireLocalExecutionRequest(request, server); store.get(projectId);
+          if (!localReleasesService) throw new HttpError(404, '当前服务尚未开放本机业务版本。');
+          const assertAccess = () => { requireLocalExecutionRequest(request, server); requestChecks.get(request)?.(); if (teamAccess) teamAccess.requireRole(request.headers.cookie, method === 'GET' ? ['owner', 'reviewer', 'observer'] : ['owner']); return true; };
+          if (segments.length === 4 && method === 'GET') {
+            const result = await localReleasesService.list({ projectId }, { assertAccess }); assertAccess(); const owner = !teamAccess || teamAccess.identity(request.headers.cookie)?.role === 'owner';
+            return respond(response, 200, { ...result, capabilities: { canActivate: owner }, releases: result.releases.map(row => ({ ...row, actions: Object.fromEntries(Object.entries(row.actions ?? {}).map(([key, value]) => [key, owner && value === true])) })) });
+          }
+          if (segments.length === 5 && segments[4] === 'activate' && method === 'POST') {
+            const body = dataFields(await readJson(request), ['runId', 'executionId', 'expectedReleaseId', 'expectedDataGeneration']); assertAccess(); store.getRun(projectId, body.runId);
+            return respond(response, 200, await localReleasesService.activate({ projectId, ...body }, { assertAccess }));
+          }
+          if (segments.length === 6 && ['start', 'stop', 'rollback'].includes(segments[5]) && method === 'POST') {
+            const action = segments[5], body = dataFields(await readJson(request), action === 'stop' ? [] : action === 'start' ? ['expectedDataGeneration'] : ['expectedDataGeneration', 'reason']); assertAccess();
+            return respond(response, 200, await localReleasesService[action]({ projectId, releaseId: segments[4], ...body }, { assertAccess }));
+          }
+          throw new HttpError(404, '未找到该本机业务版本操作。');
+        }
         if (segments.length === 3 && method === 'DELETE') {
           requireLocalExecutionRequest(request, server);
           const body = exactFields(await readJson(request), ['confirmationName']);
           const result = await orchestrator.withProjectCheckpoint(projectId, async () => {
             if (store.get(projectId).runs.some(run => run.status === 'running')) throw new HttpError(409, '项目仍在运行，请等待阶段结束后再删除。');
-            const remove = () => store.remove(projectId, body.confirmationName);
+            const remove = () => {
+              const publish = () => {
+                if (typeof plannedExecutionService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '无法核对研发执行状态，暂不能删除项目。');
+                return plannedExecutionService.withProjectCheckpoint(projectId, () => store.remove(projectId, body.confirmationName));
+              };
+              if (verificationPlanningService === null) return publish();
+              if (typeof verificationPlanningService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '无法确认测试提案状态，暂不能删除项目。');
+              return verificationPlanningService.withProjectCheckpoint(projectId, publish);
+            };
             if (executionService === null) return remove();
             if (typeof executionService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '无法确认代码执行和预览状态，暂不能删除项目。');
             return executionService.withProjectCheckpoint(projectId, remove);
@@ -159,8 +294,8 @@ export async function createApp(options = {}) {
             const changes = await sourceChangeService.list({ projectId });
             const current = store.getSourceVersion(projectId), project = store.getPersistedProject(projectId);
             return respond(response, 200, { current, versions: project.sourceVersions ?? [{ ...current, at: project.createdAt, changeId: null }],
-              changes, capabilities: { canApply: typeof executionService?.withProjectCheckpoint === 'function',
-                ...(typeof executionService?.withProjectCheckpoint === 'function' ? {} : { reason: '当前执行服务无法确认安全检查点，暂时只允许保存待应用变更。' }) } });
+              changes, capabilities: { canApply: typeof executionService?.withProjectCheckpoint === 'function' && typeof verificationPlanningService?.withProjectCheckpoint === 'function' && typeof plannedExecutionService?.withProjectCheckpoint === 'function',
+                ...(typeof executionService?.withProjectCheckpoint === 'function' && typeof verificationPlanningService?.withProjectCheckpoint === 'function' && typeof plannedExecutionService?.withProjectCheckpoint === 'function' ? {} : { reason: '执行或测试提案服务无法确认安全检查点，暂时只允许保存待应用变更。' }) } });
           }
           if (segments.length === 4 && method === 'POST') {
             const body = dataFields(await readJson(request), ['baseRevision', 'source', 'reason', 'kind', 'requestKey']);
@@ -202,6 +337,171 @@ export async function createApp(options = {}) {
           }
           throw new HttpError(404, '未找到该模拟编排接口。');
         }
+        if (segments[5] === 'evolutions') {
+          requireLocalExecutionRequest(request, server);
+          if (!evolutionService) throw new HttpError(404, '当前服务尚未开放已有数据演进。');
+          const assertAccess = () => { requireLocalExecutionRequest(request, server); requestChecks.get(request)?.(); if (teamAccess) teamAccess.requireRole(request.headers.cookie, method === 'GET' ? ['owner', 'reviewer', 'observer'] : ['approve', 'reject'].includes(segments[7]) ? ['owner', 'reviewer'] : ['owner']); return true; };
+          const identity = { projectId, runId };
+          if (segments.length === 6 && method === 'GET') {
+            const result = await evolutionService.list(identity); assertAccess(); const role = teamAccess?.identity(request.headers.cookie)?.role ?? 'owner';
+            return respond(response, 200, { ...result, capabilities: { canPrepare: role === 'owner' }, evolutions: result.evolutions.map(row => ({ ...row,
+              actions: Object.fromEntries(Object.entries(row.actions ?? {}).map(([key, value]) => [key, value === true && (key === 'canApprove' ? ['owner', 'reviewer'].includes(role) : role === 'owner')])) })) });
+          }
+          if (segments.length === 6 && method === 'POST') {
+            const body = dataFields(await readJson(request), ['releaseId', 'proposalId', 'definitionRevision', 'expectedSourceRevision', 'expectedSourceGeneration', 'requestKey', 'reason']); assertAccess();
+            return respond(response, 200, await evolutionService.prepare({ ...identity, ...body }, { assertAccess }));
+          }
+          if (segments.length === 8 && method === 'POST') {
+            const action = segments[7], fields = { revise: ['revision', 'migration', 'reason'], approve: ['revision', 'feedback'], reject: ['revision', 'feedback'], start: ['revision', 'contractRevision'], activate: ['revision'] }[action];
+            if (!fields || typeof evolutionService[action] !== 'function') throw new HttpError(404, '未找到该演进操作。');
+            const body = dataFields(await readJson(request), fields); assertAccess();
+            return respond(response, action === 'start' ? 202 : 200, await evolutionService[action]({ ...identity, evolutionId: segments[6], ...body }, { assertAccess,
+              ...(action === 'start' ? { subject: teamAccess ? teamAccess.executionSubject(request.headers.cookie) : createLocalExecutionSubject() } : {}) }));
+          }
+          throw new HttpError(404, '未找到该演进接口。');
+        }
+        if (segments[5] === 'development-executions') {
+          requireLocalExecutionRequest(request, server);
+          if (!plannedExecutionService) throw new HttpError(404, '当前服务尚未开放按规划研发。');
+          const identity = { projectId, runId };
+          if (segments.length === 6 && method === 'GET') return respond(response, 200, await plannedExecutionService.list(identity));
+          if (segments.length === 7 && segments[6] === 'start' && method === 'POST') {
+            const body = exactFields(await readJson(request), ['proposalId', 'revision', 'contractRevision']);
+            return respond(response, 202, await plannedExecutionService.start({ ...identity, ...body }, { subject: teamAccess ? teamAccess.executionSubject(request.headers.cookie) : createLocalExecutionSubject() }));
+          }
+          if (segments.length === 8 && segments[7] === 'cancel' && method === 'POST') {
+            dataFields(await readJson(request), []);
+            return respond(response, 200, await plannedExecutionService.cancel({ ...identity, executionId: segments[6] }, { assertAccess: () => { requestChecks.get(request)?.(); return true; } }));
+          }
+          if (segments.length === 8 && ['pause', 'resume', 'recover'].includes(segments[7]) && method === 'POST') {
+            dataFields(await readJson(request), []);
+            if (typeof plannedExecutionService[segments[7]] !== 'function') throw new HttpError(409, '当前执行器不支持任务图暂停或继续。');
+            return respond(response, segments[7] === 'recover' ? 202 : 200, await plannedExecutionService[segments[7]]({ ...identity, executionId: segments[6] }));
+          }
+          if (segments.length === 8 && ['preview', 'stop-preview'].includes(segments[7]) && method === 'POST') {
+            dataFields(await readJson(request), []);
+            const action = segments[7] === 'preview' ? 'preview' : 'stopPreview';
+            if (typeof plannedExecutionService[action] !== 'function') throw new HttpError(409, '当前执行器尚不支持运行预览。');
+            const assertAccess = () => { requestChecks.get(request)?.(); return true; };
+            assertAccess();
+            return respond(response, 200, await plannedExecutionService[action]({ ...identity, executionId: segments[6] }, { assertAccess }));
+          }
+          if (segments.length === 8 && segments[7] === 'revise-checklist' && method === 'POST') {
+            dataFields(await readJson(request), []);
+            const { executions } = await plannedExecutionService.list(identity);
+            const failure = executions.findLast(item => item.current);
+            if (!failure || failure.id !== segments[6] || failure.active || failure.status !== 'failed' || failure.failureHelp?.action !== 'review_checklist'
+              || failure.binding?.planRevision !== run.planRevision || run.status !== 'succeeded') {
+              throw new HttpError(409, '当前执行已经变化，或没有需要修订的登录检查。请刷新进度。');
+            }
+            const tasks = structuredClone(run.tasks);
+            const pageTask = loginRevisionTask(tasks);
+            if (!pageTask) throw new HttpError(409, '当前计划没有可保存验收调整的开发任务。');
+            const setup = loginRevisionNote((run.planVersion ?? 1) + 1, failure.failureHelp.detail);
+            if (pageTask.description.length + setup.length + 2 > 5000) throw new HttpError(409, '这项开发任务的说明已达上限。请在开发任务中整理说明后重试。');
+            pageTask.description += `\n\n${setup}`;
+            const updated = await atPlanRevisionCheckpoint(projectId, () => orchestrator.action(projectId, runId, {
+              action: 'revise_plan', revision: run.planRevision, tasks, feedback: setup,
+            }, { assertAccess: () => { requestChecks.get(request)?.(); } }));
+            return respond(response, 200, { run: updated });
+          }
+          if (segments.length === 8 && segments[7] === 'repair' && method === 'POST') {
+            const input = await readJson(request);
+            const body = exactFields(input, Object.hasOwn(input, 'repairNote') ? ['contractRevision', 'repairNote'] : ['contractRevision']);
+            return respond(response, 202, await plannedExecutionService.repair({ ...identity, executionId: segments[6], ...body }, { subject: teamAccess ? teamAccess.executionSubject(request.headers.cookie) : createLocalExecutionSubject() }));
+          }
+          if (segments.length === 8 && segments[7] === 'download' && method === 'GET') {
+            const file = await plannedExecutionService.download({ ...identity, executionId: segments[6] });
+            return respond(response, 200, file.buffer, file.contentType, { 'Content-Disposition': `attachment; filename="${file.filename}"` });
+          }
+          throw new HttpError(['GET', 'POST'].includes(method) ? 404 : 405, '未找到该研发执行接口或方法不支持。');
+        }
+        if (segments[5] === 'verification-plans') {
+          requireLocalExecutionRequest(request, server);
+          if (!verificationPlanningService) throw new HttpError(404, '当前服务尚未开放独立测试提案。');
+          const identity = { projectId, runId };
+          const currentDefinition = result => result.proposals?.findLast(item => item.current && ['draft', 'approved', 'rejected'].includes(item.status));
+          if (segments.length === 6 && method === 'GET') {
+            const result = await verificationPlanningService.list(identity);
+            if (!result.capabilities) return respond(response, 200, result);
+            const canRecoverLogin = Boolean(plannedExecutionService && result.capabilities.canImportDefinition && !currentDefinition(result)
+              && (!teamAccess || teamAccess.identity(request.headers.cookie)?.role === 'owner') && previousLoginPlan(run));
+            return respond(response, 200, { ...result, capabilities: { ...result.capabilities, canRecoverLogin } });
+          }
+          if (segments.length === 7 && segments[6] === 'recover-login' && method === 'POST') {
+            const { contractRevision, planRevision } = exactFields(await readJson(request), ['contractRevision', 'planRevision']);
+            const fallback = { proposal: null, reason: '未能从旧清单确认所需的登录步骤。请检查或导入当前计划的验收清单。' };
+            const recovery = await orchestrator.withProjectCheckpoint(projectId, async () => {
+              const { run: current } = store.getRun(projectId, runId);
+              const result = await verificationPlanningService.list(identity);
+              requestChecks.get(request)?.();
+              if (current.planRevision !== planRevision || result.capabilities?.contractRevision !== contractRevision) {
+                throw new HttpError(409, '计划或验收规则已变化，请刷新工作区。');
+              }
+              const previous = previousLoginPlan(current);
+              if (!plannedExecutionService || !previous) return { status: 200, body: fallback };
+              const existing = currentDefinition(result);
+              if (existing) return { status: 200, body: { proposal: existing } };
+              if (!result.capabilities.canImportDefinition) throw new HttpError(409, result.capabilities.manualReason);
+              const { executions } = await plannedExecutionService.list(identity);
+              const draft = loginContinuationDraft({ run: current, previous, proposals: result.proposals, executions });
+              if (!draft) return { status: 200, body: fallback };
+              requestChecks.get(request)?.();
+              try {
+                const imported = await verificationPlanningService.importDefinition({ ...identity, contractRevision, ...draft });
+                return { status: 201, body: imported };
+              } catch (error) {
+                if (error.code === 'invalid_proposal') return { status: 200, body: fallback };
+                throw error;
+              }
+            });
+            return respond(response, recovery.status, recovery.body);
+          }
+          if (segments.length === 7 && segments[6] === 'propose' && method === 'POST') {
+            const body = exactFields(await readJson(request), ['contractRevision']);
+            return respond(response, 202, await verificationPlanningService.propose({ ...identity, ...body }));
+          }
+          if (segments.length === 7 && segments[6] === 'import' && method === 'POST') {
+            const body = dataFields(await readJson(request), ['contractRevision', 'proposal', 'feedback']);
+            const imported = await orchestrator.withProjectCheckpoint(projectId, () => {
+              requestChecks.get(request)?.();
+              return verificationPlanningService.importDefinition({ ...identity, ...body });
+            });
+            return respond(response, 201, imported);
+          }
+          if (segments.length === 8 && segments[7] === 'repair-draft') {
+            const source = { ...identity, proposalId: segments[6] }, checkAccess = () => requestChecks.get(request)?.();
+            if (method === 'GET') {
+              const editable = url.searchParams.get('edit') === '1';
+              if (editable && teamAccess) teamAccess.requireRole(request.headers.cookie, ['owner']);
+              const result = await verificationRecovery.read(source, { editable });
+              checkAccess();
+              return respond(response, 200, result);
+            }
+            if (method === 'POST') {
+              const input = await readJson(request);
+              const body = dataFields(input, Object.hasOwn(input, 'proposal') ? ['contractRevision', 'proposal', 'feedback'] : ['contractRevision']);
+              const result = await orchestrator.withProjectCheckpoint(projectId, () => verificationRecovery.save(source, body,
+                { checkAccess, importDefinition: value => verificationPlanningService.importDefinition(value), list: value => verificationPlanningService.list(value) }));
+              return respond(response, 201, result);
+            }
+          }
+          if (segments.length === 8 && ['revise', 'approve', 'reject', 'cancel'].includes(segments[7]) && method === 'POST') {
+            const action = segments[7], allowed = action === 'cancel' ? [] : action === 'revise' ? ['revision', 'proposal', 'feedback'] : ['revision', 'feedback'];
+            const body = dataFields(await readJson(request), allowed);
+            if (action === 'approve') {
+              const { proposals } = await verificationPlanningService.list(identity);
+              const draft = proposals.find(row => row.id === segments[6] && row.revision === body.revision && row.current && row.status === 'draft');
+              if (repeatedCounterSteps(draft?.proposal).length) {
+                const { diagnostic } = await verificationRecovery.read({ ...identity, proposalId: draft.id });
+                if (diagnostic.suggestedRepair) throw new HttpError(409, '清单中列表条目和总数用了同一个检查位置。请先修复清单，再确认。');
+              }
+              requestChecks.get(request)?.();
+            }
+            return respond(response, 200, await verificationPlanningService[action]({ ...identity, proposalId: segments[6], ...body }));
+          }
+          throw new HttpError(['GET', 'POST'].includes(method) ? 404 : 405, '未找到该测试提案接口或请求方法不受支持。');
+        }
         if (segments[5] === 'executions') {
           requireLocalExecutionRequest(request, server);
           if (!executionService) throw new HttpError(404, '当前服务尚未开放网页代码执行。');
@@ -213,14 +513,15 @@ export async function createApp(options = {}) {
           if (segments.length === 7 && segments[6] === 'start') {
             if (method !== 'POST') throw new HttpError(405, '启动执行请使用POST请求。');
             const body = exactFields(await readJson(request), ['profileId', 'contractRevision']);
-            return respond(response, 202, await executionService.start({ ...identity, ...body }));
+            return respond(response, 202, await fixedAdmission(projectId, () => executionService.start({ ...identity, ...body })));
           }
           if (segments.length === 8 && segments[7] === 'action') {
             if (method !== 'POST') throw new HttpError(405, '执行动作请使用POST请求。');
             const input = await readJson(request);
             const body = exactFields(input, ['retry', 'recheck', 'repair'].includes(input?.action) ? ['action', 'profileId', 'contractRevision'] : ['action']);
             if (!['cancel', 'retry', 'recheck', 'repair', 'preview', 'stop_preview'].includes(body.action)) throw new HttpError(400, '执行动作无效，请刷新后使用页面提供的操作。');
-            return respond(response, 200, await executionService.action({ ...identity, executionId: segments[6], ...body }));
+            const action = () => executionService.action({ ...identity, executionId: segments[6], ...body });
+            return respond(response, 200, await (['retry', 'recheck', 'repair', 'preview'].includes(body.action) ? fixedAdmission(projectId, action) : action()));
           }
           if (segments.length === 8 && segments[7] === 'download') {
             if (method !== 'GET') throw new HttpError(405, '源码下载仅支持读取。');
@@ -231,7 +532,16 @@ export async function createApp(options = {}) {
           }
           throw new HttpError(404, '未找到该执行接口。');
         }
-        if (segments.length === 6 && segments[5] === 'action' && method === 'POST') return respond(response, 200, { run: await orchestrator.action(projectId, runId, await readJson(request)) });
+        if (segments.length === 6 && segments[5] === 'action' && method === 'POST') {
+          const input = await readJson(request);
+          const apply = () => orchestrator.action(projectId, runId, input, { assertAccess: () => { requestChecks.get(request)?.(); } });
+          let updated;
+          if (input.action === 'revise_plan' && run.status === 'succeeded') {
+            updated = await atPlanRevisionCheckpoint(projectId, apply);
+          } else updated = await apply();
+          const issueAction = input.action === 'explain_planning_issue' || input.action === 'answer_planning_issue';
+          return respond(response, 200, { run: issueAction ? await orchestrator.describeRun(project, updated) : updated });
+        }
         if (segments.length === 7 && segments[5] === 'artifacts' && method === 'GET') {
           const artifact = run.artifacts.find(item => item.name === segments[6]);
           if (!artifact) throw new HttpError(404, '产物尚未生成或不存在。');
@@ -269,14 +579,16 @@ export async function createApp(options = {}) {
   server.headersTimeout = 15_000;
   const close = () => {
     if (!closing) closing = (async () => {
-      const results = await Promise.allSettled([simulationService.shutdown(), orchestrator.shutdown(), executionService?.shutdown(), sourceChangeService?.shutdown()]);
+      const lifecycle = await Promise.allSettled([evolutionService?.shutdown(), localReleasesService?.shutdown(), plannedDatasetService?.close()]);
+      const results = [...lifecycle, ...await Promise.allSettled([simulationService.shutdown(), orchestrator.shutdown(), executionService?.shutdown(), sourceChangeService?.shutdown(), verificationPlanningService?.shutdown(), plannedExecutionService?.shutdown()])];
       if (server.listening) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+      teamAccess?.close();
       const failure = results.find(result => result.status === 'rejected');
       if (failure) throw failure.reason;
     })();
     return closing;
   };
-  return { server, store, orchestrator, simulationService, executionService, sourceChangeService, close };
+  return { server, store, orchestrator, simulationService, executionService, sourceChangeService, verificationPlanningService, plannedExecutionService, localReleasesService, plannedDatasetService, evolutionService, teamAccess, close };
 }
 
 export async function startServer(options = {}) {

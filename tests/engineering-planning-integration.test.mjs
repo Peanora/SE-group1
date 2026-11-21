@@ -87,13 +87,12 @@ test('无效草案自动带校验原因重试一次，成功后两阶段继续�
   assert.match(feedbacks[1], /JSON/u); assert.equal(x.run.engineeringPlan.binding.specRevision, x.run.specRevision);
 });
 
-test('自动修正不设调用次数上限：不同校验错误会持续带反馈重试直到成功', async t => {
-  let attempts = 0; const real = createEngineeringModel({ config, fetchImpl: async () => reply() });
-  const x = await setup(t, { override: { createEngineeringModel: () => async input => {
-    attempts++;
-    if (attempts <= 3) throw Object.assign(new Error('invalid draft'), { code: 'invalid_model_response', publicDetail: `第${attempts}类不同校验错误` });
-    return real(input);
-  } } });
+test('默认6次预算内，不同原生校验错误会带反馈修正到第4次成功', async t => {
+  let attempts = 0;
+  const x = await setup(t, { fetchImpl: async () => {
+    attempts++; if (attempts > 3) return reply();
+    const invalid = proposal(); invalid.routes[0].id = 'BAD' + attempts; invalid.routes[0].path = 'invalid'; return reply(invalid);
+  } });
   await x.approve(); await waitFor(() => x.run.status === 'awaiting_review');
   assert.equal(attempts, 4); assert.equal(x.run.engineeringCalls, 4); assert.equal(x.run.engineeringHistory.length, 4);
   assert.equal(x.run.engineeringHistory.at(-1).status, 'succeeded'); assert.equal(x.run.engineeringPlan.binding.specRevision, x.run.specRevision);
@@ -101,10 +100,10 @@ test('自动修正不设调用次数上限：不同校验错误会持续带反�
 
 test('自动修正遇到完全相同的校验错误会停止，避免无进展地反复调用', async t => {
   let attempts = 0;
-  const x = await setup(t, { override: { createEngineeringModel: () => async () => {
+  const x = await setup(t, { fetchImpl: async () => {
     attempts++;
-    throw Object.assign(new Error('invalid draft'), { code: 'invalid_model_response', publicDetail: '相同的校验错误' });
-  } } });
+    return reply('{');
+  } });
   await x.approve(); await waitFor(() => x.run.status === 'failed');
   assert.equal(attempts, 2); assert.equal(x.run.engineeringCalls, 2); assert.equal(x.run.engineeringHistory.length, 2);
   assert.match(x.run.stages.find(stage => stage.id === 'architecture').error, /连续返回相同校验错误/u);
@@ -307,7 +306,9 @@ test('非合作回执写入不能阻塞超时或关闭，迟到结果不改最�
       for (const id of ['architecture', 'tasks']) assert.equal(x.run.stages.find(stage => stage.id === id).status, 'failed');
       const before = JSON.stringify(x.run);
       release.resolve(); await waitFor(() => writerSettled); await delay(5);
-      assert.equal(JSON.stringify(x.run), before, '迟到写入不得更新回执或发布草案');
+      const after = structuredClone(x.run); const coordination = after.engineeringHistory[0].coordination; delete after.engineeringHistory[0].coordination;
+      assert.equal(JSON.stringify(after), before, '迟到写入不得更新原回执、草案或原失败；单独协调记录可核对本地IO结束');
+      if (!shutdown) assert.equal(coordination?.resolved, true);
     } finally { release.resolve(); }
   });
 });

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>团队账号 · Taskflow</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%23315deb'/%3E%3Cpath d='M10 11h20M20 11v18m-8-8h16' stroke='white' stroke-width='3' fill='none'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/team.css"><script type="module" src="/team-access.js"></script></head>
+<body class="team-page"><a class="skip-link" href="#team-main">跳到账号操作</a>
+<header class="team-header"><a class="team-brand" href="/">Taskflow <span>团队工作台</span></a><a class="button button-outline" href="/">返回工作台</a></header>
+<main id="team-main" class="team-main"><h1>团队账号</h1><p id="team-description">正在核对登录状态…</p>
+<p id="team-error" role="alert" class="team-message team-error" hidden></p><p id="team-notice" role="status" class="team-message" hidden></p>
+<section id="team-login" class="team-auth" hidden><h2 id="login-title">登录工作台</h2><form id="login-form">
+<label for="login-name">账号<input id="login-name" name="username" autocomplete="username" maxlength="48" required></label>
+<label for="login-password">密码<input id="login-password" name="password" type="password" autocomplete="current-password" minlength="12" maxlength="128" required><small>至少12个字符；密码只用于登录，不会交给模型。</small></label>
+<button class="button button-primary" id="login-submit" type="submit">登录</button></form></section>
+<section id="team-account" hidden><div class="team-account-line"><div><h2 id="account-name"></h2><p id="account-permission"></p></div><button id="logout" class="button button-outline">退出当前账号</button></div>
+<section id="member-admin" class="team-admin" hidden><h2>成员与权限</h2><p>负责人可开发和修改需求；评审者可确认或驳回规格、计划及测试定义；观察者仅查看。变更角色或停用账号会立即使其已有登录失效。</p>
+<div id="members" class="team-members"></div><details class="team-add"><summary>添加团队成员</summary><form id="member-form" class="team-member-form">
+<label for="member-name">新账号<input id="member-name" name="username" autocomplete="off" maxlength="48" required></label>
+<label for="member-password">初始密码<input id="member-password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+<label for="member-role">角色<select id="member-role"><option value="observer">观察者</option><option value="reviewer">评审者</option><option value="owner">负责人</option></select></label>
+<button type="submit" class="button button-primary">添加成员</button></form></details></section>
+<section id="team-audit" class="team-audit" hidden><div class="team-account-line"><h2>操作记录</h2><button id="audit-refresh" class="button button-outline">刷新记录</button></div><p>显示账号、评审和开发操作的请求及结果。请求待核对时不表示操作已经成功。</p><ol id="audit-list"></ol><button id="audit-more" class="button button-outline" hidden>加载后续记录</button></section>
+</section></main></body></html>

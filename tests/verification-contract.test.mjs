@@ -83,7 +83,8 @@ async function mocked(t, mode, raw = proposal()) {
     control=createVerificationControl();const input={proposal:raw,requirements:['REQ1','REQ2'],binding:${JSON.stringify(baseBinding)}};
     approval=control.approve(input);const manifest=compileManifest({...input,approval});control.beginCoding(approval);
     const {runHttpScenarios}=await import(${JSON.stringify(new URL('../lib/http-scenarios.mjs', import.meta.url).href)});
-    const report=await runHttpScenarios({manifest,files,rootDir,binding,signal:controller.signal,executable:'unused-mock',timeoutMs:mode==='timeout'?100:10000,onEvent:event=>{if(mode==='revoke'&&event.id==='login_a_status'||mode==='final-publish-revoke'&&event.id==='SYS_FINAL'&&event.passed){control.revoke(approval);revocations++;}},runtimeFactory:()=>{throw new Error('client factory must not execute');}});
+    // Leave snapshot I/O time; the first mocked request deliberately waits for the total deadline.
+    const report=await runHttpScenarios({manifest,files,rootDir,binding,signal:controller.signal,executable:'unused-mock',timeoutMs:mode==='timeout'?1000:10000,onEvent:event=>{if(mode==='revoke'&&event.id==='login_a_status'||mode==='final-publish-revoke'&&event.id==='SYS_FINAL'&&event.passed){control.revoke(approval);revocations++;}},runtimeFactory:()=>{throw new Error('client factory must not execute');}});
     process.stdout.write(JSON.stringify({report,starts,stops,revocations,requests,workspaces,manifest}));
   `;
   return await new Promise((resolve, reject) => {
@@ -220,7 +221,8 @@ test('纯JSON清单/过期binding/未进入编码阶段不能启动，已知清�
 
 test('取消、超时、未知停止、撤销或源码变化禁止后续启动并保留false', async t => {
   for (const [mode, state] of [['cancel', 'cancelled'], ['timeout', 'timed_out'], ['unknown-stop', 'reconciliation_required'], ['revoke', 'failed'], ['tamper', 'failed'], ['bad-stop', 'failed']]) {
-    const { report, starts, manifest } = await mocked(t, mode); complete(report, manifest); assert.equal(report.status, state, mode); assert.equal(starts, 1, mode); assert.ok(report.checks.some(check => !check.passed));
+    const { report, starts, stops, requests, manifest } = await mocked(t, mode); complete(report, manifest); assert.equal(report.status, state, mode); assert.equal(starts, 1, mode); assert.equal(stops, 1, mode); assert.ok(report.checks.some(check => !check.passed));
+    if (mode === 'timeout') { assert.equal(requests.length, 1); assert.equal(report.checks.find(check => check.id === 'SYS_START').passed, true); }
   }
 });
 

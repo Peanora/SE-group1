@@ -78,7 +78,7 @@ test('missing, duplicate, malformed or inconsistent provider receipts fail close
     const x = await setup(t, { provider: async (text, name, input, actual) => {
       if (variant === 'getter') { const value = {}; Object.defineProperty(value, 'content', { enumerable: true, get() { getters++; return config.apiKey; } }); try { input.onReceipt(value); } catch {} return {}; }
       if (variant === 'encoded_size') return input.onReceipt({ model: config.model, finishReason: 'stop', usage: { inputTokens: 7, outputTokens: 9 }, content: '\0'.repeat(512 * 1024) });
-      let captured; const result = await actual(text, name, { ...input, onReceipt: variant === 'missing' ? undefined : value => { captured = value; return input.onReceipt(value); } });
+      let captured; const result = await actual(text, name, { ...input, onReceipt: variant === 'missing' ? undefined : (value, proof) => { captured = value; return input.onReceipt(value, proof); } });
       if (variant === 'duplicate') { try { await input.onReceipt(captured); } catch {} }
       if (variant === 'mismatch') result.title = 'not the receipted title';
       if (variant === 'result_getter') Object.defineProperty(result, 'title', { enumerable: true, get() { getters++; return 'bad'; } });
@@ -99,26 +99,26 @@ test('run budget is durable, failures do not refund attempts and exhausted retry
   await waitFor(() => restoredRun.status === 'failed' && !restored.state(restoredRun).active.size && !restored.state(restoredRun).driving); assert.equal(x.calls(), 2); assert.equal(restoredRun.specificationHistory.length, 2);
 });
 
-test('a non-cooperative provider times out, blocks new work until truly settled, and cannot publish a late receipt or spec', async t => {
+test('unproven remote transport stays blocked after local provider settlement and cannot publish late data', async t => {
   const gate = deferred(); let callback;
   const x = await setup(t, { options: { specificationTimeoutMs: 35 }, provider: (_text, _name, input) => { callback = input.onReceipt; return gate.promise; } }); await terminal(x);
   const attempt = x.run.specificationHistory[0], before = structuredClone(attempt); assert.equal(attempt.code, 'model_timeout'); assert.equal(attempt.requestState, 'unconfirmed');
   await assert.rejects(x.orchestrator.withProjectCheckpoint(x.project.id, () => assert.fail('unknown request admitted')), { code: 'project_busy' });
   await assert.rejects(retry(x), { status: 409 }); await assert.rejects(x.orchestrator.createRun(x.project.id), { status: 409 });
   assert.throws(() => callback({ model: config.model, finishReason: 'stop', usage: { inputTokens: 7, outputTokens: 9 }, content: JSON.stringify(raw()) }));
-  gate.resolve({ title: 'late' }); await waitFor(() => !x.orchestrator.hasSpecificationWork(x.project.id)); await delay(10); assert.deepEqual(attempt, before); assert.equal(x.run.spec, null);
-  assert.equal(await x.orchestrator.withProjectCheckpoint(x.project.id, () => 'idle'), 'idle');
+  gate.resolve({ title: 'late' }); await delay(15); assert.deepEqual(attempt, before); assert.equal(x.run.spec, null);
+  assert.equal(x.orchestrator.hasSpecificationWork(x.project.id), true); await assert.rejects(x.orchestrator.withProjectCheckpoint(x.project.id, () => assert.fail('local settlement is not remote stop')), { code: 'project_busy' });
 });
 
-test('shutdown interrupts ownership promptly; late completion does not alter history and a restart can explicitly retry', async t => {
+test('shutdown is bounded but restart cannot retry an unknown original remote request', async t => {
   const gate = deferred(), entered = deferred(); const x = await setup(t, { provider: () => { entered.resolve(); return gate.promise; } });
-  await entered.promise; assert.equal(x.invocations(), 1); assert.equal(x.run.specificationHistory[0].requestState, 'running');
+  await entered.promise; assert.equal(x.invocations(), 1); assert.equal(x.run.specificationHistory[0].requestState, 'dispatch_intent');
   const started = Date.now(); await x.orchestrator.shutdown(); assert.ok(Date.now() - started < 1000); const old = structuredClone(x.run.specificationHistory[0]);
   assert.equal(old.code, 'cancelled'); assert.equal(old.requestState, 'unconfirmed'); assert.equal(x.run.spec, null);
   const store = await new ProjectStore(x.directory).init(), next = new Orchestrator(store, { ...x.trusted, analyzeWithModel: x.actual }, { stepDelayMs: 0 }); x.register(next); await next.init();
   const project = store.get(x.project.id), run = project.runs[0]; assert.equal(run.specificationCalls, 1); assert.deepEqual(run.specificationHistory[0], old);
-  await next.action(project.id, run.id, { action: 'retry', stageId: 'spec' }); await waitFor(() => run.status === 'awaiting_spec' && !next.state(run).active.size && !next.state(run).driving);
-  gate.resolve({ title: 'late previous controller' }); await delay(15); assert.deepEqual(run.specificationHistory[0], old); assert.equal(run.specificationHistory.length, 2); assert.equal(run.specificationCalls, 2);
+  await assert.rejects(next.action(project.id, run.id, { action: 'retry', stageId: 'spec' }), {status:409});
+  gate.resolve({ title: 'late previous controller' }); await delay(15); assert.deepEqual(run.specificationHistory[0], old); assert.equal(run.specificationHistory.length, 1); assert.equal(run.specificationCalls, 1);
   assert.deepEqual(x.run.specificationHistory[0], old); assert.equal(x.run.spec, null);
 });
 
@@ -298,6 +298,8 @@ test('具体引用失败原因被保留，公开说明不包含模型正文或�
   const x=await setup(t,{fetchImpl:async()=>reply(JSON.stringify(bad))});await terminal(x);
   const dto=await x.orchestrator.describeRun(x.project,x.run);
   assert.equal(dto.specificationFailure.reason,'requirement_quote_not_found');assert.equal(dto.specificationFailure.requirementIndex,1);
+  assert.deepEqual(dto.planningIssue.draftRequirement,{index:1,title:'查看资源',description:source,sourceQuote:'not-in-source-private'});
+  assert.equal(dto.planningIssue.autoExplain,false);
   assert.match(x.run.stages.find(s=>s.id==='spec').error,/第1条需求/);
   assert.equal(JSON.stringify(dto.specificationFailure).includes('not-in-source-private'),false);assert.equal(JSON.stringify(dto.specificationFailure).includes(x.directory),false);
 });
@@ -397,11 +399,52 @@ test('新版规格重复上一版问题时预填继承回答，不再要求用�
   assert.equal(result.specRevision, contentRevision(result.spec));
 });
 
-test('模型响应已保存但后置规格校验失败时记录为规格校验失败，而不是版本失效', async t => {
-  const duplicate=raw();duplicate.questions=['是否需要审核？','是否需要审核？'];
-  const x=await setup(t,{fetchImpl:async()=>reply(JSON.stringify(duplicate))});await terminal(x);
-  const attempt=x.run.specificationHistory[0],failure=(await x.orchestrator.describeRun(x.project,x.run)).specificationFailure;
-  assert.equal(attempt.status,'failed');assert.equal(attempt.code,'invalid_model_response');
-  assert.equal(failure.repairable,true);assert.equal(failure.requirementIndex,undefined);
-  assert.equal(x.run.spec,null);assert.equal(x.run.approvals.spec,null);
+test('规格首轮合并重复问法，有待答问题时草案保留且不记录完成', async t => {
+  const duplicate=raw();duplicate.questions=['是否需要审核？','是否需要审核?', '谁有权限查看？'];
+  const x=await setup(t,{fetchImpl:async()=>reply(JSON.stringify(duplicate))});await terminal(x,'awaiting_spec');
+  const {planningIssue}=await x.orchestrator.describeRun(x.project,x.run);
+  assert.deepEqual(planningIssue.qa.map(item=>item.question),['是否需要审核？','谁有权限查看？']);
+  assert.equal(x.run.approvals.spec,null);
+  assert.ok(x.run.events.some(event=>event.stageId==='spec' && /等待补充需求/u.test(event.message)));
+  assert.ok(!x.run.events.some(event=>event.stageId==='spec' && /整理设计规格完成/u.test(event.message)));
+  await assert.rejects(x.orchestrator.action(x.project.id,x.run.id,{action:'approve_spec',revision:x.run.specRevision}),{status:409});
+});
+
+test('都需要确认首版列出的每项功能，只追问真正未明确的原题', async t => {
+  const features = '单聊与群聊的会话列表、未读消息提示、消息已读状态，首版分别需要哪些？';
+  const exclusive = '消息可保留七天还是三十天？';
+  const x = await setup(t, { fetchImpl: async () => reply(JSON.stringify({ ...raw(), questions: [features, exclusive] })) });
+  await terminal(x, 'awaiting_spec');
+  const { planningIssue: first } = await x.orchestrator.describeRun(x.project, x.run);
+  await x.orchestrator.action(x.project.id, x.run.id, { action: 'answer_planning_issue', issueId: first.id, continue: true,
+    answers: Object.fromEntries(first.qa.map(item => [item.id, '都需要。'])) });
+  await terminal(x, 'awaiting_spec');
+  const { planningIssue: next } = await x.orchestrator.describeRun(x.project, x.run);
+  assert.deepEqual(next.qa.map(item => item.question), [exclusive]);
+  assert.equal(x.run.spec.clarificationSources.records[0].decision, 'confirmed');
+  assert.deepEqual(x.run.spec.clarificationSources.records[0].quotes, ['单聊与群聊的会话列表', '未读消息提示', '消息已读状态']);
+  assert.equal(x.calls(), 2);
+});
+
+test('旧运行的重复历史问题与新增细节可直接用已保存答复整理，无需补填', async t => {
+  const historyQuestion='首版不保存历史消息，是否意味着用户刷新页面或重新登录后之前聊天的文字内容全部不可见？';
+  const obsolete=`请分别明确以下问题中的选项或事项（此前回答“是”还不能确定范围）：${historyQuestion}`;
+  const optional='固定模拟验证码以什么形式呈现给用户？';
+  const laterAnswer='重新登录后本机用户仍可见之前消息';
+  const x=await setup(t,{fetchImpl:async()=>reply(JSON.stringify({...raw(),questions:[optional,obsolete]}))});
+  await terminal(x,'awaiting_spec');
+  x.run.clarificationHistory=[
+    {answers:[{id:'Q-001',question:historyQuestion,answer:'是'}]},
+    {kind:'planning_issue',answers:[{id:'Q-001',question:obsolete,answer:'本机用户还是可以可见的'}]},
+    {kind:'planning_issue',answers:[{id:'Q-001',question:'重新登录后本机用户可以看到之前消息吗？',answer:laterAnswer},{id:'Q-002',question:obsolete,answer:'可见'}]},
+  ];
+  const history=structuredClone(x.run.clarificationHistory);
+  const {planningIssue:issue}=await x.orchestrator.describeRun(x.project,x.run);
+  assert.deepEqual(issue.qa,[]);assert.equal(issue.canRebuild,true);assert.equal(issue.autoExplain,false);assert.equal(x.calls(),1);
+  await x.orchestrator.action(x.project.id,x.run.id,{action:'answer_planning_issue',issueId:issue.id,answers:{},continue:true});
+  await terminal(x,'awaiting_spec');
+  assert.equal(x.calls(),2);assert.deepEqual(x.run.specQuestions,[]);assert.equal(x.run.approvals.spec,null);
+  assert.deepEqual(x.run.clarificationHistory,history);
+  assert.equal(x.run.spec.clarificationSources.records[0].decision,'answered');
+  assert.equal((await x.orchestrator.describeRun(x.project,x.run)).planningIssue,undefined);
 });

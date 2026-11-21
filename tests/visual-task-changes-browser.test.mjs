@@ -70,7 +70,7 @@ async function fixture(t, width) {
   const page = await browser.newPage({ viewport: { width, height: width === 390 ? 844 : 1000 } });
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', item => { if (item.type() === 'error') errors.push(item.text()); });
-  await page.goto(`http://127.0.0.1:${app.server.address().port}`);
+  await page.goto(`http://127.0.0.1:${app.server.address().port}/?view=details`);
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).waitFor();
   return { app, project, run, page, calls, content };
 }
@@ -114,6 +114,7 @@ for (const width of [1440, 390]) test(`真实Edge ${width}px：从任务图编�
   await page.screenshot({ path: path.join(evidence, `task-editor-${width}.png`), fullPage: true });
 
   await page.reload();
+  await page.locator('[data-workspace-view="plan"]').click();
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).waitFor();
   assert.equal(await title.inputValue(), changedTitle);
   assert.equal(await prerequisite('C').isChecked(), true);
@@ -143,23 +144,87 @@ for (const width of [1440, 390]) test(`真实Edge ${width}px：从任务图编�
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).click();
   await until(() => run.status === 'succeeded' && !app.orchestrator.state(run).driving, '确认后导出完成');
   await page.locator('#download-bundle').waitFor({ state: 'visible' });
-  await page.waitForFunction(() => document.querySelector('[data-edit-selected-task]')?.disabled);
-  assert.equal(await page.locator('[data-edit-selected-task]').isDisabled(), true);
-  assert.equal(await page.locator('[data-add-feature]').isEnabled(), true);
   assert.equal(run.approvals.plan.revision, run.planRevision);
   const exported = JSON.parse(run.artifacts.find(item => item.name === 'plan.json').content);
   assert.equal(exported.tasks[1].title, changedTitle);
   assert.equal(exported.planRevision, run.planRevision);
+  const flow = page.locator('#delivery-workflow');
+  assert.equal(await flow.getByRole('button').count(), 9);
+  assert.equal(await flow.locator('[data-delivery-step="plan-approval"]').getAttribute('data-state'), 'done');
+  await flow.locator('[data-delivery-step="coding"]').click();
+  const prepare = page.getByRole('button', { name: '去准备验收清单', exact: true });
+  await prepare.click();
+  assert.equal(await page.locator('#verification-plans-section').evaluate(section => section.open), true);
+  assert.equal(await page.locator('#execution-tools').evaluate(section => section.open), false);
+  await flow.locator('[data-delivery-step="plan"]').click();
+  assert.equal(await page.locator('[data-edit-selected-task]').isEnabled(), true);
+  assert.equal(await page.locator('[data-add-feature]').isEnabled(), true);
+  await page.locator('[data-edit-selected-task]').click();
+  assert.equal(await page.locator('#task-edit-dialog').evaluate(dialog => dialog.open), true);
+  await title.fill('修订已确认的资源任务');
+  assert.equal(run.approvals.plan.revision, exported.planRevision, '打开和编辑草稿不改变已确认版本');
+  await page.getByRole('button', { name: '保存修订', exact: true }).click();
+  await page.getByRole('button', { name: '确认计划并导出', exact: true }).waitFor();
+  assert.equal(run.approvals.plan, null);
+  assert.equal(run.approvals.spec.revision, original.specRevision);
+  assert.equal(run.revisionHistory.plan.at(-1).revision, exported.planRevision);
+  assert.equal(run.revisionHistory.plan.at(-1).approvals.plan.revision, exported.planRevision);
+  assert.equal(run.tasks[1].title, '修订已确认的资源任务');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
 
   const change = app.sourceChangeService.request({ projectId: project.id, baseRevision: app.store.getSourceVersion(project.id).revision,
     source: { filename: 'requirements.md', content: `${content}\n申请者可以按名称筛选资源。` }, reason: '明确后续新增筛选功能', kind: 'other', requestKey: `visual-task-history-${width}` });
   await app.sourceChangeService.apply({ projectId: project.id, changeId: change.id, baseRevision: change.baseRevision, generation: change.generation });
-  await page.getByRole('heading', { name: '历史需求输入：确认记录只读', exact: true }).waitFor();
+  await page.waitForFunction(() => document.querySelector('#review-heading')?.textContent === '历史需求输入：确认记录只读');
   assert.equal(run.sourceSuperseded, true);
   assert.equal(await page.locator('[data-review-action]').count(), 0);
   assert.equal(await page.locator('[data-edit-selected-task]').isDisabled(), true);
   assert.equal(await page.locator('.dev-task.draft-changed').count(), 0);
   await assert.rejects(app.orchestrator.action(project.id, run.id, { action: 'revise_plan', revision: run.planRevision, tasks: structuredClone(run.tasks) }), { status: 409, code: 'source_superseded' });
   assert.deepEqual(calls, { specifications: 1, engineering: 1 });
+});
+
+test('全流程以当前版本的实际记录更新，并定位验收清单、检查明细和交付', { timeout: 60000 }, async t => {
+  const { page, project, run } = await fixture(t, 1440);
+  const base = `/api/projects/${project.id}/runs/${run.id}`;
+  const revision = 'a'.repeat(64), policyHash = 'b'.repeat(64);
+  const binding = { projectId: project.id, runId: run.id, specRevision: run.specRevision, planRevision: run.planRevision,
+    sourceRevision: run.sourceRevision, sourceGeneration: 0, policyHash, engineeringHash: 'c'.repeat(64), contextHash: 'd'.repeat(64) };
+  const definition = { id: 'joint-qa', projectId: project.id, runId: run.id, binding, current: true, approved: true, status: 'approved',
+    policyHash, revision, manifestHash: 'e'.repeat(64), coverage: 'structural_only', executed: false, approval: { phase: 'definition_only' },
+    proposal: { name: '资源验收清单', version: 1, steps: [{ id: 'read' }], browser: { version: 1, sessions: ['visitor'], steps: [{ id: 'visible' }] } } };
+  let approved = false, execution = null;
+  const budget = { maxCalls: 3, maxReviewCalls: 3, maxAttempts: 3, remainingAttempts: 3, totalModelCalls: 18, remainingModelCalls: 18, timeoutMs: 600000 };
+  await page.route(`**${base}/verification-plans`, route => route.fulfill({ json: { coverage: 'structural_only', capabilities: {}, proposals: approved ? [definition] : [] } }));
+  await page.route(`**${base}/development-executions`, route => route.fulfill({ json: { capabilities: { canStart: approved, contractRevision: revision,
+    model: { name: 'fixture' }, budget, reason: approved ? '' : '必须先认可当前联合HTTP与浏览器验收定义。' }, executions: execution ? [execution] : [] } }));
+  await page.getByRole('button', { name: '确认计划并导出', exact: true }).click();
+  const step = id => page.locator(`[data-delivery-step="${id}"]`);
+  await step('verification').getByText('待准备清单', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '打开验收清单', exact: true }).click();
+  assert.equal(await page.locator('#verification-plans-section > summary').evaluate(element => document.activeElement === element), true);
+  approved = true;
+  await step('coding').click();
+  const refresh = page.getByRole('button', { name: '刷新开发状态', exact: true });
+  await refresh.click();
+  await step('verification').getByText('清单已确认', { exact: true }).waitFor();
+  await step('coding').getByText('待开始开发', { exact: true }).waitFor();
+  const start = page.getByRole('button', { name: '按当前规划开始开发', exact: true });
+  assert.equal(await start.isDisabled(), true, '知悉预算之前禁止开始');
+  await page.locator('.planned-execution [type="checkbox"]').check();
+  assert.equal(await start.isEnabled(), true);
+  execution = { id: 'fixture-run', projectId: project.id, runId: run.id, kind: 'planned_web', current: true, binding,
+    proposalId: definition.id, revision, active: true, status: 'validating', candidateCommit: '1'.repeat(40), tasks: [], actions: {} };
+  await refresh.click();
+  await step('testing').getByText('正在检查候选', { exact: true }).waitFor();
+  assert.equal(await step('delivery').getAttribute('data-state'), 'idle');
+  await step('testing').click();
+  assert.equal(await page.getByText('自检、HTTP与浏览器实际检查', { exact: true }).evaluate(element => element.parentElement.open && document.activeElement === element), true);
+  execution = { ...execution, active: false, status: 'accepted', accepted: true, actions: { canPreview: true, canDownload: true },
+    checks: { http: [{ passed: true }], browser: [{ passed: true }, { passed: true }], review: 'completed', issues: [] } };
+  await refresh.click();
+  await step('testing').getByText('HTTP 1/1，浏览器 2/2', { exact: true }).waitFor();
+  await step('delivery').click();
+  assert.equal(await page.getByRole('heading', { name: '软件预览' }).evaluate(element => document.activeElement === element), true);
+  assert.equal(await page.getByRole('link', { name: '下载当前已验收源码' }).isVisible(), true);
 });
