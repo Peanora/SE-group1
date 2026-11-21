@@ -17,6 +17,7 @@ const escape = (value = '') => String(value).replace(/[&<>"']/g, (c) => ({ '&': 
 const state = { health: null, projects: [], project: null, run: null, stageId: 'spec', taskId: null, artifactName: 'task.md', tab: 'events', raw: false, busy: false, epoch: 0, selectionPending: false, pollTimer: null, feedback: '', importFile: null, filename: 'requirements.md' };
 let sourceReadyProject = '';
 let deliveryMarkup = '';
+let executionMarkup = '';
 const notices = createWorkspaceNotices({ errorBanner: $('#error-banner'), errorText: $('#error-text'), dismissButton: $('#dismiss-error'), toast: $('#toast'),
   getContext: () => ({ projectId: state.project?.id || '', runId: state.run?.id || '' }), locate: locateWorkspaceProblem });
 const workspaceLayout = createWorkspaceLayout({ getContext: () => ({ projectId: state.selectionPending ? '' : state.project?.id || '', runId: state.run?.id || '', busy: state.busy, runStatus: state.run?.status, historical: historicalRun() }),
@@ -282,7 +283,35 @@ function renderDeliveryProgress() {
     deliveryMarkup = markup;
     replacePreservingFocus($('#delivery-steps'), markup);
   }
+  renderExecutionFlow(steps);
   renderWorkspaceContext(steps);
+}
+function nextExecutionStep(steps) {
+  const [preparation, coding, testing, delivery] = steps.slice(-4);
+  return delivery.state === 'done' ? delivery : preparation.state !== 'done' ? preparation
+    : ['working', 'failed', 'waiting'].includes(testing.state) ? testing : coding;
+}
+function renderExecutionFlow(steps) {
+  const next = nextExecutionStep(steps);
+  const markup = steps.slice(-4).map(({ id, title, state: status, text }, index) => `<li>
+    <button type="button" class="execution-workspace-step" data-execution-step="${id}" data-focus-key="execution-${id}"
+      data-state="${status}" ${id === next.id ? 'aria-current="step"' : ''} ${state.selectionPending ? 'disabled' : ''}>
+      <span class="execution-step-marker" aria-hidden="true">${status === 'done' ? '✓' : status === 'failed' ? '!' : index + 1}</span>
+      <span class="execution-step-label"><strong>${title}</strong><small>${escape(text)}</small></span>
+    </button>
+  </li>`).join('');
+  if (executionMarkup !== markup) {
+    executionMarkup = markup;
+    replacePreservingFocus($('#execution-workspace-steps'), markup);
+  }
+  const failure = next.state === 'failed' && next.id !== 'verification' && plannedPanel?.workflowProgress().failureHelp;
+  const hint = historicalRun() ? '所选规划属于历史需求版本。切换到当前规划可继续开发。'
+    : next.id === 'delivery' ? '当前候选已通过独立验收。打开交付可查看预览与源码。'
+      : next.state === 'failed' ? failure?.nextStep || next.detail || '打开当前步骤查看原因和可用操作。'
+        : next.detail || '';
+  const hintLine = $('#execution-next-hint');
+  if (hintLine.textContent !== hint) hintLine.textContent = hint;
+  hintLine.hidden = !hint;
 }
 function renderWorkspaceContext(steps = workflowSteps()) {
   const run = state.run, historical = historicalRun(), context = $('#workspace-context');
@@ -305,9 +334,7 @@ function renderWorkspaceContext(steps = workflowSteps()) {
   } else if (run?.status === 'succeeded') {
     title = '规划文档已生成'; note = '可以查看任务与文档。真实代码执行和验收在独立工作区，规划完成不代表业务软件已验收。'; action = '查看文档'; kind = 'artifacts';
     if (run.engineeringPlan && plannedPanel && executionContext().planningStatus === 'confirmed') {
-      const [, , , , , preparation, coding, testing, delivery] = steps;
-      const next = delivery.state === 'done' ? delivery : preparation.state !== 'done' ? preparation
-        : ['working', 'failed', 'waiting'].includes(testing.state) ? testing : coding;
+      const next = nextExecutionStep(steps);
       kind = `delivery:${next.id}`;
       ({ title, note, action } = ({
         verification: { title: '准备验收清单', note: '确认这次开发要通过哪些接口和浏览器检查，再开始编写代码。', action: '打开验收清单' },
@@ -334,9 +361,6 @@ function renderWorkspaceContext(steps = workflowSteps()) {
   $('#workspace-context-title').textContent = title; $('#workspace-context-note').textContent = note;
   const button = $('[data-workspace-next]'); button.textContent = action; button.dataset.nextKind = kind;
   button.disabled = !state.project || state.busy || state.selectionPending;
-  const preparation = steps.find(step => step.id === 'verification');
-  const failure = plannedPanel?.workflowProgress().failureHelp;
-  $('#execution-next-hint').textContent = failure?.nextStep ?? (preparation?.state === 'done' ? '可以开始开发，执行后在这里核对测试和交付。' : '先准备并确认接口与浏览器验收清单。');
 }
 function focusWorkspaceTarget(target) {
   if (!target || !target.getClientRects().length) return;
@@ -435,7 +459,7 @@ const planningReview = createPlanningReview({
 function openSourceEditor() {
   const section = $('#source-changes-section');
   if (!section || section.hidden) { toast('当前项目没有可提交的原始需求修改入口。'); return; }
-  workspaceLayout.show('source'); section.open = true;
+  workspaceLayout.show('source');
   sourceChanges.closeFeature({ focus: false });
   $('.source-changes textarea.sc-source')?.scrollIntoView({ block: 'center' });
 }
@@ -859,6 +883,10 @@ $('[data-workspace-next]').addEventListener('click', handleWorkspaceNext);
 $('#delivery-steps').addEventListener('click', event => {
   const step = event.target.closest('[data-delivery-step]');
   if (step) openDeliveryStage(step.dataset.deliveryStep);
+});
+$('#execution-workspace-steps').addEventListener('click', event => {
+  const step = event.target.closest('[data-execution-step]');
+  if (step) openDeliveryStage(step.dataset.executionStep);
 });
 $('#task-edit-dialog').addEventListener('close', () => { if (!$('#task-edit-dialog').open) planningReview.render(); });
 $('#pause-button').addEventListener('click', () => runAction(state.run?.status === 'paused' ? 'resume' : 'pause'));

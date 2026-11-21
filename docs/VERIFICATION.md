@@ -1,5 +1,14 @@
 # 首版验证记录
 
+## 2026-11-21 需求与验收可视化
+
+- `npm run check` 通过，共 265 个脚本。
+- 工作台、首页流程、任务修订、验收清单、角色证据及接口组合 40/40 通过。执行 `node --test --test-concurrency=3 tests/workspace-ui-browser.test.mjs tests/web-execution-browser.test.mjs tests/homepage-workflow-browser.test.mjs tests/visual-task-changes-browser.test.mjs tests/verification-planning-browser.test.mjs tests/planned-role-progress.test.mjs tests/source-change-http.test.mjs tests/planned-task-http.test.mjs tests/planned-record-data.test.mjs`。启用本机 MXC，使用本机模型夹具走通浏览器失败返工、Review 阻塞返工、同版本预览和源码下载。日志 `output/playwright/project-redesign/final-regression-confirmed.log`。
+- `node --test --test-concurrency=2 tests/project-redesign-browser.test.mjs tests/planned-preview-panel.test.mjs` 通过 20/20。1440px 与 390px Edge 验证改动草稿存留、保存后折叠、检查点拒绝、应用读取确认、流程定位、键盘选择及同候选失败证据。测试还覆盖确认用量、历史通过、回执未确认及未知状态的交付门禁。日志 `output/ui-navigation/project-redesign/regression-final3.log`。
+- 最后调整已生效阶段的导航后，需求流程桌面及手机补验 2/2 通过。定位重新规划按钮时保留原运行，显式启动后才创建绑定新需求的运行。原需求变更两组通过 29/29（`node --test --test-concurrency=2 tests/source-changes-panel.test.mjs tests/source-change-browser.test.mjs`）。
+- 执行面板与任务面板原组件组（`planned-execution-panel.test.mjs`、`planned-task-panel.test.mjs`）通过 42/42。早期回归按旧文案等待“配置模型”，现按原有页面的“编码模型”定位。桌面图改为优先适配容器后，旧图测试验证节点可读且不重叠，仍检查任务与依赖、焦点和真实工具证据。
+- 本地 4317 首页、入口脚本和两个新增样式文件均返回 HTTP 200。截图位于 `output/ui-navigation/project-redesign/`，页面使用测试数据。未运行全量套件及外部付费模型。
+
 ## 2026-11-21 工作台改版与设置分离
 
 - `npm run check` 通过，共 264 个脚本。

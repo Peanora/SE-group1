@@ -10,6 +10,8 @@
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/workspace.css">
   <link rel="stylesheet" href="/workbench-theme.css">
+  <link rel="stylesheet" href="/source-process.css">
+  <link rel="stylesheet" href="/execution-process.css">
   <script type="module" src="/app.js"></script>
 </head>
 <body class="tf-product tf-workbench">
@@ -120,11 +122,15 @@
       <details id="simulation-tools" class="workspace-secondary"><summary>模拟编排（可选）</summary><div id="simulation-panel-host" class="simulation-panel" hidden></div></details>
       </section>
       <section id="workspace-source" class="workspace-panel" data-workspace-panel="source" role="tabpanel" aria-labelledby="workspace-tab-source" tabindex="-1" hidden>
-      <div class="workspace-section-heading"><div><h2>需求与功能</h2><p>在同一处填写、预览、保存和应用需求。旧版本会保留。</p></div><button type="button" class="text-button" data-workspace-back>返回上一工作区</button></div>
-      <details id="source-changes-section" class="source-change-entry" hidden><summary>修改当前项目需求</summary><div id="source-changes-host"></div></details>
+      <div class="workspace-section-heading"><h2>需求与功能</h2><button type="button" class="text-button" data-workspace-back>返回上一工作区</button></div>
+      <section id="source-changes-section" aria-label="需求变更工作区" hidden><div id="source-changes-host"></div></section>
       </section>
       <section id="workspace-execution" class="workspace-panel" data-workspace-panel="execution" role="tabpanel" aria-labelledby="workspace-tab-execution" tabindex="-1" hidden>
-      <div class="workspace-section-heading"><div><h2>代码与验收</h2><p id="execution-next-hint">先准备验收清单，再开始开发。</p></div></div>
+      <header class="workspace-section-heading"><h2>代码与验收</h2></header>
+      <nav class="execution-workspace-flow" aria-label="从验收清单到交付">
+        <ol id="execution-workspace-steps"></ol>
+        <p id="execution-next-hint">先准备验收清单，再开始开发。</p>
+      </nav>
       <details id="verification-plans-section" class="workspace-secondary" hidden><summary>准备验收清单</summary><div id="verification-plans-host"></div></details>
       <section id="planned-execution-section" hidden><div id="planned-execution-host"></div></section>
       <details id="execution-tools" class="workspace-secondary"><summary>其他工具与参考项目</summary>

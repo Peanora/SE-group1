@@ -101,12 +101,54 @@ function evidenceCandidate(progress) {
   return { candidateCommit: progress.commit, lastFixedCandidateCommit: progress.commit ? undefined : progress.lastFixedCommit ?? undefined };
 }
 
+function checkEvidence(checks) {
+  if (!Array.isArray(checks) || !checks.length) return { label: '未提供结果', state: 'waiting' };
+  const passed = checks.filter(check => check?.passed === true).length;
+  const failed = checks.filter(check => check?.passed === false).length;
+  return { label: `${passed} / ${checks.length}${failed ? ` · ${failed} 未通过` : passed === checks.length ? ' 通过' : ' · 待核对'}`, state: failed ? 'failed' : passed === checks.length ? 'done' : 'unknown' };
+}
+
+/** Historical test results are used only when that exact public attempt supplies them. */
+export function executionVersionEvidence(item) {
+  const versions = new Map(), tasks = Array.isArray(item?.tasks) ? item.tasks : [];
+  const put = (raw, source) => {
+    if (!raw || !COMMIT.test(raw.candidateCommit ?? '')) return;
+    const taskId = typeof raw.taskId === 'string' ? raw.taskId : '';
+    const attemptId = typeof raw.attemptId === 'string' ? raw.attemptId : '';
+    const key = JSON.stringify([taskId, attemptId, raw.candidateCommit]);
+    const previous = versions.get(key);
+    versions.set(key, { ...previous, ...raw, key, taskId, attemptId, sources: [...new Set([...(previous?.sources ?? []), source])] });
+  };
+  for (const review of Array.isArray(item?.reviewHistory) ? item.reviewHistory : []) {
+    put({ taskId: review.taskId, attemptId: review.attemptId, candidateCommit: review.candidateCommit,
+      attempt: review.attempt, review, current: false }, 'reviewHistory');
+  }
+  for (const task of tasks) {
+    for (const previous of Array.isArray(task.history) ? task.history : []) put({ ...previous, taskId: task.id, current: false }, 'task.history');
+    const progress = executionRoleProgress(item, task);
+    if (progress.commit) put({ taskId: task.id, attemptId: task.attemptId, candidateCommit: progress.commit, checks: task.checks, current: true }, 'task.current');
+  }
+  if (item?.executionMode === 'task_dag' && COMMIT.test(item.candidateCommit ?? '') && item.checks) {
+    put({ taskId: '', candidateCommit: item.candidateCommit, checks: item.checks, scope: 'integration',
+      current: !(item.active && item.workflow?.stage === 'coding') }, 'integration.current');
+  }
+  if (item?.executionMode !== 'task_dag') {
+    const progress = executionRoleProgress(item);
+    if (progress.commit) {
+      const review = (item.reviewHistory ?? []).findLast(entry => entry.candidateCommit === progress.commit);
+      put({ taskId: review?.taskId, attemptId: review?.attemptId, candidateCommit: progress.commit, checks: item.checks, current: true }, 'execution.current');
+    }
+  }
+  return [...versions.values()];
+}
+
 /** Only backend current/accepted facts grant actions; POST responses never grant a pass. */
 export function createPlannedExecutionPanel({ api, getContext, onError = () => {}, onFailure = () => {}, onUpdate = () => {}, openVerification, reviseChecklist, canReviseChecklist = () => true }) {
   if (typeof api !== 'function' || typeof getContext !== 'function') throw new TypeError('规划开发面板需要api和当前规划上下文。');
   let root, refs, destroyed = false, mounted = false, timer, epoch = 0, readSerial = 0, action = null, pending = null;
   let context = contextOf(null), key = '', data = null, proposals = null, fresh = false, loading = false, error = '', notice = '', consentKey = '';
-  let selectedId = '', proposalId = '', selectionEdits = 0, previewRead = null, graphRecord = '', selectedTask = '', repairNoteKey = ''; const savedSelections = new Map(), notified = new Set(), eventNodes = new Map(), taskNodes = new Map(), graphNodes = new Map();
+  let selectedId = '', proposalId = '', selectionEdits = 0, previewRead = null, graphRecord = '', selectedTask = '', repairNoteKey = '', selectedVersion = '', focusChain = true, graphOrder = [], resizeObserver;
+  const savedSelections = new Map(), processSelections = new Map(), notified = new Set(), eventNodes = new Map(), taskNodes = new Map(), graphNodes = new Map(), versionNodes = new Map();
   const node = (tag, value, cls) => { const element = document.createElement(tag); if (value != null) element.textContent = value; if (cls) element.className = cls; return element; };
   const setText = (element, value) => { const text = printable(value); if (element.textContent !== text) element.textContent = text; };
   function button(label, handler, cls) { const element = node('button', label, cls); element.type = 'button'; element.addEventListener('click', handler); return element; }
@@ -244,7 +286,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
       return refs.checks.closest('details').querySelector('summary');
     }
     if (stage === 'delivery' && !refs.detail.hidden && !refs.previewBox.hidden) return refs.previewBox.querySelector('h3');
-    if (stage === 'coding' && !refs.detail.hidden && row()?.active) return refs.status;
+    if (stage === 'coding' && !refs.detail.hidden) return refs.processTitle;
     return refs.state;
   }
   function previewLink(item) { const preview = previewOf(item); return previewFresh() && accepted(item) && preview?.state === 'running' && preview.active === true && Number.isFinite(Date.parse(preview.expiresAt)) && Date.parse(preview.expiresAt) > Date.now() ? previewURL(preview.url) : null; }
@@ -285,6 +327,30 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     const recordSelect = field('开发执行记录', executionSelect); body.append(recordSelect);
     const empty = node('p', '尚无开发执行记录。'), detail = node('div'), result = node('p', null, 'pe-result'), status = node('p'), failure = node('p', null, 'pe-note pe-error'), facts = node('p'), actions = node('div', null, 'pe-actions');
     const roleMonitor = createRoleMonitor();
+    const process = node('section', null, 'pe-process'), processHead = node('div', null, 'pe-process-head'), processTitle = node('h3', '真实开发进程'), processScope = node('p', null, 'pe-process-scope');
+    process.setAttribute('aria-label', '真实开发进程'); processTitle.tabIndex = -1;
+    const focusButton = button('聚焦依赖链', () => { focusChain = !focusChain; renderProcess(row()); }, 'pe-focus-chain'); focusButton.setAttribute('aria-pressed', 'true');
+    const processHeading = node('div'); processHeading.append(processTitle, processScope); processHead.append(processHeading, focusButton);
+    const processGrid = node('div', null, 'pe-process-grid'), processMap = node('div', null, 'pe-process-map'), wholeFlow = node('ol', null, 'pe-whole-flow');
+    wholeFlow.setAttribute('aria-label', '本次候选的真实执行阶段');
+    const inspector = node('aside', null, 'pe-process-inspector'), inspectorContext = node('p', null, 'pe-inspector-context'), inspectorTitle = node('h4'), inspectorState = node('p', null, 'pe-inspector-state'), inspectorCause = node('p', null, 'pe-inspector-cause'), inspectorCommit = node('p', null, 'pe-inspector-commit'), inspectorDependencies = node('p', null, 'pe-inspector-dependencies'), inspectorFacts = node('dl', null, 'pe-inspector-facts');
+    inspector.setAttribute('aria-label', '所选任务详情');
+    const inspectorRoles = createRoleMonitor(true); inspectorRoles.element.classList.add('pe-inspector-roles');
+    const inspectorRoleDetails = node('details', null, 'pe-inspector-role-details'); inspectorRoleDetails.append(node('summary', '角色状态详情'), inspectorRoles.element);
+    const inspectorFailures = node('div', null, 'pe-inspector-failures'), inspectorFailureList = node('ul'), inspectorFailureMore = node('p');
+    inspectorFailures.append(node('h4', '未通过的检查'), inspectorFailureList, inspectorFailureMore);
+    const inspectorEvidence = button('查看所选任务证据', () => {
+      const task = taskNodes.get(selectedTask);
+      if (task && !selectedVersion) { focusEvidence(task.card); return; }
+      focusEvidence(refs.inspectorRaw.closest('details'));
+    }, 'pe-inspector-evidence');
+    inspector.append(inspectorContext, inspectorTitle, inspectorState, inspectorCause, inspectorCommit, inspectorDependencies, inspectorFacts, inspectorFailures, inspectorRoleDetails, inspectorEvidence);
+    const inspectorRaw = section('所选版本原始证据', inspector);
+    processGrid.append(processMap, inspector); process.append(processHead, processGrid);
+    const matrixSection = node('section', null, 'pe-version-evidence'), matrixHeading = node('h3', '候选版本与验收证据'), matrixNote = node('p', '每行只对应已记录的候选；历史结果不继承到新代码。', 'pe-matrix-note'), matrixScroll = node('div', null, 'pe-matrix-scroll'), matrixTable = node('table', null, 'pe-version-matrix'), matrixBody = node('tbody'), matrixHead = node('tr');
+    matrixTable.setAttribute('aria-label', '候选版本的同版验收结果');
+    for (const label of ['任务 / 尝试', '候选提交', '自检', 'HTTP', 'Edge', 'Review', '版本归属']) { const th = node('th', label); th.scope = 'col'; matrixHead.append(th); }
+    const matrixThead = node('thead'); matrixThead.append(matrixHead); matrixTable.append(matrixThead, matrixBody); matrixScroll.append(matrixTable); matrixSection.append(matrixHeading, matrixNote, matrixScroll);
     const failureHelpBox = node('div', null, 'pe-note pe-error'), failureTitle = node('strong'), failureDetail = node('p'), failureNext = node('p');
     const prepareRevision = button('准备清单修订', () => { const item = row(); if (mayReviseChecklist(item)) void reviseChecklist(item.id); }, 'pe-primary');
     const technicalFailure = button('展开技术检查', () => {
@@ -297,21 +363,24 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     const repairNote = node('textarea'), repairNoteField = field('修复说明（选填）', repairNote);
     repairNote.maxLength = 2000; repairNote.placeholder = '写明已观察到的症状或代码位置。说明会随修复请求发送给编码模型，请避免填写凭据。';
     const repairInfo = node('p', '修复会复用所选执行的源码。新代码会重新跑测试与审查。', 'pe-note');
-    const repair = button('保留代码并修复', () => { void perform('repair'); }), cancel = button('请求停止本次开发', () => { void perform('cancel'); }), download = node('a', '下载当前已验收源码', 'pe-download'); download.rel = 'noreferrer'; actions.append(repair, cancel, download); detail.append(result, status, roleMonitor.element, failureHelpBox, failure, facts, repairInfo, repairNoteField, actions);
+    const executionSummary = node('div', null, 'pe-execution-summary'); executionSummary.append(result, status, process); body.insertBefore(recordSelect, setup); body.insertBefore(executionSummary, setup);
+    const repair = button('保留代码并修复', () => { void perform('repair'); }), cancel = button('请求停止本次开发', () => { void perform('cancel'); }), download = node('a', '下载当前已验收源码', 'pe-download'); download.rel = 'noreferrer'; actions.append(repair, cancel, download); detail.append(roleMonitor.element, failureHelpBox, failure, facts, repairInfo, repairNoteField, actions);
     const pause = button('暂停派发新任务', () => { void perform('pause'); }), resume = button('继续任务开发', () => { void perform('resume'); }), recover = button('从安全暂停点恢复', () => { void perform('recover'); }); actions.append(pause, resume, recover);
     const recoveryNote = node('p', '恢复会保留已完成任务和原有用量，只继续未完成任务；仍使用本次剩余额度和原时限。尚未确认停止的执行不能据此重新启动。', 'pe-note'); detail.append(recoveryNote);
     const previewBox = node('div', null, 'pe-preview'), previewStatus = node('p', null, 'pe-preview-status'), previewInfo = node('p', null, 'pe-note'), previewActions = node('div', null, 'pe-actions');
     const previewStart = button('启动已验收软件预览', () => { void perform('preview'); }), previewStop = button('停止软件预览', () => { void perform('stop-preview'); }), previewAnchor = node('a', '打开软件预览', 'pe-preview-link');
     previewAnchor.target = '_blank'; previewAnchor.rel = 'noopener noreferrer'; previewActions.append(previewStart, previewStop, previewAnchor); previewBox.append(node('h3', '软件预览'), previewStatus, previewInfo, previewActions); detail.append(previewBox);
-    const taskSection = node('details'), taskList = node('div'), graphNote = node('p', null, 'pe-note'), graphScroll = node('div', null, 'pe-graph-scroll'), graphCanvas = node('div', null, 'pe-graph-canvas'); graphScroll.tabIndex = 0; graphScroll.setAttribute('role', 'region'); graphScroll.setAttribute('aria-label', '真实任务依赖图，可横向滚动'); graphScroll.append(graphCanvas);
-    taskSection.open = true; taskSection.append(node('summary', '真实任务、依赖与验收证据'), graphNote, graphScroll, taskList); detail.append(taskSection);
+    const taskSection = node('details'), taskList = node('div'), graphNote = node('p', null, 'pe-note'), graphScroll = node('div', null, 'pe-graph-scroll'), graphCanvas = node('div', null, 'pe-graph-canvas'); graphScroll.tabIndex = 0; graphScroll.setAttribute('role', 'region'); graphScroll.setAttribute('aria-label', '真实任务依赖图'); graphScroll.append(graphCanvas);
+    processMap.append(graphNote, graphScroll, wholeFlow);
+    taskSection.open = true; taskSection.append(node('summary', '真实任务、依赖与验收证据'), taskList); detail.append(matrixSection, taskSection);
     const commands = node('details', null, 'pe-commands'), commandScroll = node('div', null, 'pe-command-scroll'), commandTable = node('table', null, 'pe-command-table'), commandHead = node('tr'), commandBody = node('tbody');
     commandTable.append(node('caption', '仅展示后端提供的脱敏工具结果；未知值保留为未知。'));
     for (const title of ['记录 / 任务', '阶段 / 工具', '开始时间', '用时', '退出码', '停止确认', '状态']) { const th = node('th', title); th.scope = 'col'; commandHead.append(th); }
     const thead = node('thead'); thead.append(commandHead); commandTable.append(thead, commandBody); commandScroll.append(commandTable); commands.append(node('summary', '真实工具执行结果'), commandScroll); detail.append(commands);
     const binding = section('本次冻结预算与代码版本', detail), diff = section('本次代码差异', detail), checks = section('自检、HTTP与浏览器实际检查', detail), review = section('Review与阻塞问题', detail), calls = section('模型请求与实际用量', detail);
     const events = node('details'), list = node('ol'); events.open = !openVerification; events.append(node('summary', '真实执行日志'), list); detail.append(events); body.append(empty, detail); root.append(body); host.append(root);
-    refs = { refreshButton, state, errorBox, noticeBox, prepare, setup, recordSelect, cost, monetary, definitionSelect, consent, start, scope, executionSelect, empty, detail, result, status, roleMonitor, failure, failureHelp: failureHelpBox, failureTitle, failureDetail, failureNext, prepareRevision, facts, repair, repairInfo, repairNote, repairNoteField, cancel, pause, resume, recover, recoveryNote, download, previewBox, previewStatus, previewInfo, previewStart, previewStop, previewAnchor, taskSection, taskList, graphNote, graphScroll, graphCanvas, commands, commandBody, binding, diff, checks, review, calls, list };
+    refs = { refreshButton, state, errorBox, noticeBox, prepare, setup, recordSelect, executionSummary, cost, monetary, definitionSelect, consent, start, scope, executionSelect, empty, detail, result, status, roleMonitor, failure, failureHelp: failureHelpBox, failureTitle, failureDetail, failureNext, prepareRevision, facts, repair, repairInfo, repairNote, repairNoteField, cancel, pause, resume, recover, recoveryNote, download, previewBox, previewStatus, previewInfo, previewStart, previewStop, previewAnchor, process, processTitle, processScope, processMap, focusButton, wholeFlow, inspector, inspectorContext, inspectorTitle, inspectorState, inspectorCause, inspectorCommit, inspectorDependencies, inspectorFacts, inspectorFailures, inspectorFailureList, inspectorFailureMore, inspectorRoles, inspectorRoleDetails, inspectorEvidence, inspectorRaw, matrixSection, matrixBody, matrixNote, taskSection, taskList, graphNote, graphScroll, graphCanvas, commands, commandBody, binding, diff, checks, review, calls, list };
+    if (typeof ResizeObserver === 'function') { resizeObserver = new ResizeObserver(() => { if (row() && !destroyed) renderGraph(row()); }); resizeObserver.observe(graphScroll); }
     definitionSelect.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } if (action) return; proposalId = definitionSelect.value; consent.checked = false; remember(); render(); });
     executionSelect.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } if (action) return; selectedId = executionSelect.value; selectionEdits++; previewRead = null; remember(); render(); notifyFailures(); void refresh(); });
     consent.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } render(); });
@@ -319,34 +388,198 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     download.addEventListener('click', event => { if (syncContext() || !mayDownload(row())) { event.preventDefault(); render(); void refresh(); } });
     previewAnchor.addEventListener('click', event => { if (syncContext() || !previewLink(row()) || previewAnchor.href !== previewLink(row())) { event.preventDefault(); render(); void refresh(); } });
   }
-  function taskState(task) { return task.status === 'completed' ? '本任务已验收并集成' : task.status === 'pending' ? '等待依赖或派发' : STATES[task.stage] || STATES[task.status] || '正在核对'; }
+  function taskState(task) { return task.status === 'completed' ? '本任务已验收并集成' : task.status === 'blocked' ? '等待前置任务通过' : task.status === 'pending' ? '等待依赖或派发' : STATES[task.stage] || STATES[task.status] || '正在核对'; }
+  function selectTask(id, keyboard = false) {
+    const item = row(); if (!item || !(item.tasks ?? []).some(task => task.id === id)) return;
+    selectedTask = id; selectedVersion = ''; processSelections.set(keyOf([key, item.id]), { selectedTask, focusChain });
+    while (processSelections.size > 60) processSelections.delete(processSelections.keys().next().value);
+    renderProcess(item);
+    if (keyboard) { const control = graphNodes.get(id)?.button; control?.focus({ preventScroll: true }); control?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+  }
+  function graphFocus(tasks) {
+    if (!focusChain || !selectedTask) return null;
+    const active = new Set([selectedTask]), byId = new Map(tasks.map(task => [task.id, task]));
+    const walk = pick => {
+      const seen = new Set([selectedTask]), queue = [selectedTask];
+      for (let index = 0; index < queue.length; index++) for (const id of pick(queue[index])) if (!seen.has(id) && byId.has(id)) { seen.add(id); active.add(id); queue.push(id); }
+    };
+    walk(id => byId.get(id)?.dependsOn ?? []);
+    walk(id => tasks.filter(task => task.dependsOn?.includes(id)).map(task => task.id));
+    return active;
+  }
   function renderGraph(item) {
-    if (graphRecord !== item.id) { graphRecord = item.id; selectedTask = ''; }
     const tasks = Array.isArray(item.tasks) ? item.tasks : [], byId = new Map(tasks.map(task => [task.id, task])), levels = new Map();
     let valid = tasks.length >= 1 && tasks.length <= 8 && byId.size === tasks.length && tasks.every(task => ID.test(task.id || '') && Array.isArray(task.dependsOn) && new Set(task.dependsOn).size === task.dependsOn.length && task.dependsOn.every(id => byId.has(id) && id !== task.id));
     if (valid) for (let pass = 0; pass < tasks.length; pass++) for (const task of tasks) if (!levels.has(task.id) && task.dependsOn.every(id => levels.has(id))) levels.set(task.id, task.dependsOn.length ? Math.max(...task.dependsOn.map(id => levels.get(id))) + 1 : 0);
     valid &&= levels.size === tasks.length;
-    setText(refs.graphNote, valid ? '依赖来自本次实际任务，状态来自后端执行记录。选择节点查看检查与历史意见；依赖关系本身不代表功能已实现。' : '任务依赖记录尚不完整，暂不绘制关系；请核对下方实际任务证据。'); refs.graphScroll.hidden = !valid;
+    setText(refs.graphNote, valid ? '选择任务查看当前候选、依赖和阻塞原因。方向键切换，Home / End 到首尾任务。' : '任务依赖记录尚不完整，暂不绘制关系；请核对下方实际任务证据。'); refs.graphScroll.hidden = !valid || item.executionMode !== 'task_dag';
     if (!valid) { for (const view of graphNodes.values()) view.button.remove(); graphNodes.clear(); refs.graphCanvas.querySelector('svg')?.remove(); return; }
+    if (!byId.has(selectedTask)) selectedTask = tasks.find(task => task.status === 'failed')?.id ?? tasks.find(task => task.status === 'running')?.id ?? tasks[0].id;
+    const active = graphFocus(tasks), mobile = typeof matchMedia === 'function' && matchMedia('(max-width: 760px)').matches;
+    const ordered = tasks.slice().sort((a, b) => levels.get(a.id) - levels.get(b.id)); graphOrder = ordered.map(task => task.id);
+    const columnCount = Math.max(...levels.values()) + 1, availableWidth = refs.graphScroll.clientWidth;
+    const fitColumns = !mobile && availableWidth >= columnCount * 145 + (columnCount - 1) * 22 + 40;
+    const cardWidth = fitColumns ? Math.min(210, (availableWidth - 40 - (columnCount - 1) * 22) / columnCount) : 210;
+    const columnStep = fitColumns ? cardWidth + 22 : 270;
     const places = new Map(), columns = new Map();
-    for (const task of tasks) { const level = levels.get(task.id), row = columns.get(level) || 0; columns.set(level, row + 1); places.set(task.id, { x: 20 + level * 270, y: 20 + row * 150 }); }
-    const width = (Math.max(...levels.values()) + 1) * 270 - 20, height = Math.max(...columns.values()) * 150 + 16;
+    for (const task of tasks) { const level = levels.get(task.id), row = columns.get(level) || 0; columns.set(level, row + 1); places.set(task.id, { x: 20 + level * columnStep, y: 20 + row * 150 }); }
+    const width = mobile ? Math.max(240, availableWidth || 300) : fitColumns ? columnCount * cardWidth + (columnCount - 1) * 22 + 40 : columnCount * 270 - 20;
+    if (mobile) ordered.forEach((task, index) => places.set(task.id, { x: 30, y: 18 + index * 150 }));
+    const height = mobile ? tasks.length * 150 + 18 : Math.max(...columns.values()) * 150 + 16;
     refs.graphCanvas.style.width = `${width}px`; refs.graphCanvas.style.height = `${height}px`;
+    refs.graphCanvas.dataset.orientation = mobile ? 'vertical' : 'horizontal';
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('width', width); svg.setAttribute('height', height); svg.setAttribute('aria-hidden', 'true');
     for (const task of tasks) for (const dependency of task.dependsOn) {
-      const from = places.get(dependency), to = places.get(task.id), path = document.createElementNS(svg.namespaceURI, 'path'), x = from.x + 210, y = from.y + 63, endX = to.x - 4, endY = to.y + 63;
-      path.dataset.from = dependency; path.dataset.to = task.id; path.setAttribute('d', `M${x},${y} C${x + 28},${y} ${endX - 28},${endY} ${endX},${endY} M${endX - 6},${endY - 4} L${endX},${endY} L${endX - 6},${endY + 4}`); path.setAttribute('fill', 'none'); path.setAttribute('stroke', '#8ba0c0'); path.setAttribute('stroke-width', '1.5'); svg.append(path);
+      const from = places.get(dependency), to = places.get(task.id), path = document.createElementNS(svg.namespaceURI, 'path'), x = from.x + cardWidth, y = from.y + 63, endX = to.x - 4, endY = to.y + 63;
+      path.dataset.from = dependency; path.dataset.to = task.id; path.dataset.focus = String(!active || active.has(dependency) && active.has(task.id));
+      const gutter = 10, targetX = to.x - 3;
+      path.setAttribute('d', mobile ? `M${from.x},${y} H${gutter} V${endY} H${targetX} M${targetX - 5},${endY - 4} L${targetX},${endY} L${targetX - 5},${endY + 4}` : `M${x},${y} C${x + 28},${y} ${endX - 28},${endY} ${endX},${endY} M${endX - 6},${endY - 4} L${endX},${endY} L${endX - 6},${endY + 4}`);
+      path.setAttribute('fill', 'none'); path.setAttribute('stroke', '#a59ab5'); path.setAttribute('stroke-width', '1.5'); svg.append(path);
     }
     const oldSvg = refs.graphCanvas.querySelector('svg'); if (oldSvg) oldSvg.replaceWith(svg); else refs.graphCanvas.prepend(svg);
     const kept = new Set();
     for (const task of tasks) {
       kept.add(task.id); let view = graphNodes.get(task.id);
-      if (!view) { const control = button('', () => { selectedTask = task.id; const card = taskNodes.get(task.id); if (card) { card.card.open = true; card.summary.tabIndex = -1; card.summary.focus({ preventScroll: true }); card.card.scrollIntoView({ block: 'nearest' }); } for (const [id, entry] of graphNodes) entry.button.setAttribute('aria-pressed', String(id === selectedTask)); }, 'pe-task-node'), id = node('small'), title = node('span', null, 'pe-graph-title'), status = node('small'); control.append(id, title, status); refs.graphCanvas.append(control); view = { button: control, id, title, status }; graphNodes.set(task.id, view); }
-      const position = places.get(task.id); view.button.style.left = `${position.x}px`; view.button.style.top = `${position.y}px`; view.button.dataset.taskId = task.id; view.button.dataset.status = task.status; view.button.setAttribute('aria-pressed', String(task.id === selectedTask)); view.button.title = `${task.title || task.id}；依赖：${task.dependsOn.join('、') || '无'}`;
+      if (!view) {
+        const control = button('', () => selectTask(task.id), 'pe-task-node'), id = node('small'), title = node('span', null, 'pe-graph-title'), status = node('small'), dependencies = node('small', null, 'pe-graph-dependencies');
+        control.addEventListener('keydown', event => {
+          const index = graphOrder.indexOf(task.id); let target;
+          if (event.key === 'Home') target = graphOrder[0];
+          else if (event.key === 'End') target = graphOrder.at(-1);
+          else if (['ArrowLeft', 'ArrowUp'].includes(event.key)) target = graphOrder[Math.max(0, index - 1)];
+          else if (['ArrowRight', 'ArrowDown'].includes(event.key)) target = graphOrder[Math.min(graphOrder.length - 1, index + 1)];
+          if (target) { event.preventDefault(); selectTask(target, true); }
+        });
+        control.append(id, title, status, dependencies); refs.graphCanvas.append(control); view = { button: control, id, title, status, dependencies }; graphNodes.set(task.id, view);
+      }
+      const position = places.get(task.id); view.button.style.left = `${position.x}px`; view.button.style.top = `${position.y}px`; view.button.style.width = mobile ? `${width - 46}px` : `${cardWidth}px`;
+      view.button.dataset.taskId = task.id; view.button.dataset.status = task.status; view.button.dataset.focus = String(!active || active.has(task.id)); view.button.tabIndex = task.id === selectedTask ? 0 : -1; view.button.setAttribute('aria-pressed', String(task.id === selectedTask)); view.button.title = `${task.title || task.id}；依赖：${task.dependsOn.join('、') || '无'}`;
       view.button.setAttribute('aria-label', `${task.id}：${view.button.title}；${taskState(task)}`);
-      setText(view.id, task.id); setText(view.title, task.title || task.id); setText(view.status, taskState(task));
+      setText(view.id, task.id); setText(view.title, task.title || task.id); setText(view.status, taskState(task)); setText(view.dependencies, `依赖：${task.dependsOn.join('、') || '无'}`);
     }
     for (const [id, view] of graphNodes) if (!kept.has(id)) { view.button.remove(); graphNodes.delete(id); }
+  }
+
+  function reviewEvidence(version) {
+    const status = version.review?.status ?? version.checks?.review;
+    const issues = version.review?.issues ?? version.checks?.issues ?? [];
+    const blockers = issues.filter(issue => issue.severity === 'blocking' && issue.status !== 'resolved').length;
+    if (status === 'completed') return { label: blockers ? `${blockers} 项阻塞` : '完成 · 无开放阻塞', state: blockers ? 'failed' : 'done' };
+    if (status === 'not_started') {
+      const testFailed = [version.checks?.http, version.checks?.browser].some(rows => Array.isArray(rows) && rows.some(check => check?.passed === false));
+      return { label: testFailed ? '等待测试通过' : '未开始', state: 'waiting' };
+    }
+    if (status === 'changes_requested') return { label: '要求修改', state: 'failed' };
+    return { label: status ? '未取得有效结论' : '未提供结果', state: 'unknown' };
+  }
+  function renderVersions(item) {
+    const versions = executionVersionEvidence(item), kept = new Set();
+    if (selectedVersion && !versions.some(version => version.key === selectedVersion)) selectedVersion = '';
+    refs.matrixSection.hidden = !versions.length;
+    setText(refs.matrixNote, !versions.length ? '本次尚未记录固定候选。' : '每行绑定实际候选与任务尝试。未提供的历史检查保持未知；新代码必须重新验收。');
+    for (const version of versions) {
+      kept.add(version.key); let view = versionNodes.get(version.key);
+      if (!view) {
+        const tr = node('tr'), taskCell = node('th'), pick = button('', () => {
+          selectedVersion = version.key; if ((row()?.tasks ?? []).some(task => task.id === version.taskId)) selectedTask = version.taskId;
+          renderProcess(row());
+        }); taskCell.scope = 'row'; taskCell.append(pick); const cells = Array.from({ length: 6 }, () => node('td')); tr.append(taskCell, ...cells); refs.matrixBody.append(tr);
+        view = { tr, pick, cells }; versionNodes.set(version.key, view);
+      }
+      const current = version.current && fresh && currentRow(item);
+      view.tr.dataset.taskId = version.taskId; view.tr.dataset.attemptId = version.attemptId; view.tr.dataset.candidateCommit = version.candidateCommit; view.tr.dataset.current = String(current);
+      view.pick.setAttribute('aria-pressed', String(selectedVersion === version.key));
+      setText(view.pick, `${version.scope === 'integration' ? '集成候选' : version.taskId || '整体开发'}${Number.isSafeInteger(version.attempt) ? ` · 第 ${version.attempt} 轮` : version.attemptId ? ` · ${version.attemptId.slice(0, 10)}` : ' · 尝试编号未提供'}`);
+      setText(view.cells[0], version.candidateCommit.slice(0, 12)); view.cells[0].title = version.candidateCommit;
+      const evidence = [checkEvidence(version.checks?.self), checkEvidence(version.checks?.http), checkEvidence(version.checks?.browser), reviewEvidence(version)];
+      evidence.forEach((result, index) => { setText(view.cells[index + 1], result.label); view.cells[index + 1].dataset.state = result.state; });
+      setText(view.cells[5], current ? '最近固定候选' : !fresh ? '待刷新核对' : '历史候选 · 不继承通过');
+    }
+    for (const [id, view] of versionNodes) if (!kept.has(id)) { view.tr.remove(); versionNodes.delete(id); }
+    return versions;
+  }
+  function taskCause(item, task) {
+    if (!fresh) return '开发状态尚未刷新核对；保留上次证据，不据此开放操作。';
+    if (!currentRow(item)) return '这是历史运行的记录，当前需求与计划不继承本记录的通过结论。';
+    if (task?.error) return printable(task.error);
+    if (item.status === 'reconciliation_required') return item.error || '进程、停止或模型用量尚未核对，后续派发和交付保持关闭。';
+    if (CONTROL_HOLDS.has(item.status)) return STATES[item.status] || '等待控制器核对后继续。';
+    if (task?.status === 'pending' || task?.status === 'blocked') {
+      const waiting = (task.dependsOn ?? []).map(id => (item.tasks ?? []).find(candidate => candidate.id === id)).filter(dependency => dependency?.status !== 'completed');
+      if (waiting.length) return `等待依赖：${waiting.map(dependency => dependency ? `${dependency.title || dependency.id}（${taskState(dependency)}）` : '记录待核对').join('、')}。`;
+      return '依赖已记录完成，尚未收到本任务的派发或执行结果；可能等待并发槽或控制器检查点。';
+    }
+    if (task?.status === 'completed') return '本任务结果已记录。完整项目的结论见集成验收。';
+    return item.error || '检查结论属于下方候选版本。';
+  }
+  function renderInspector(item, versions) {
+    const selected = versions?.find(version => version.key === selectedVersion), historical = selected && (!selected.current || !fresh || !currentRow(item));
+    const task = item.executionMode === 'task_dag' && selected?.scope !== 'integration' ? (item.tasks ?? []).find(entry => entry.id === selectedTask) : null;
+    const progress = executionRoleProgress(item, task, fresh && currentRow(item));
+    const attemptId = selected ? selected.attemptId : task?.attemptId;
+    refs.inspector.dataset.taskId = task?.id ?? ''; refs.inspector.dataset.candidateCommit = selected?.candidateCommit ?? progress.commit ?? '';
+    setText(refs.inspectorContext, selected ? historical ? '所选历史候选' : '所选候选版本' : task ? '所选真实任务' : '本次整体开发');
+    setText(refs.inspectorTitle, task?.title || task?.id || (item.executionMode === 'task_dag' ? '完整项目集成候选' : '完整项目候选'));
+    setText(refs.inspectorState, historical ? '历史结果，不计入当前通过' : task ? taskState(task) : STATES[item.status] || '状态待核对');
+    const currentState = task?.status === 'failed' || !task && item.status === 'failed' ? 'failed'
+      : task?.status === 'completed' || !task && accepted(item) ? 'done' : 'waiting';
+    refs.inspectorState.dataset.state = historical ? 'waiting' : currentState;
+    setText(refs.inspectorCause, historical ? '下方只展示该候选已提供的证据；未提供的历史检查不补为通过。' : taskCause(item, task));
+    setText(refs.inspectorCommit, selected?.candidateCommit ?? (progress.commit ? `候选 ${progress.commit}` : progress.lastFixedCommit ? `本轮尚未固定候选；上一版本 ${progress.lastFixedCommit}` : '本轮尚未固定候选'));
+    refs.inspectorCommit.title = selected?.candidateCommit ?? progress.commit ?? '';
+    const downstream = task ? (item.tasks ?? []).filter(entry => entry.dependsOn?.includes(task.id)) : [];
+    setText(refs.inspectorDependencies, task ? `前置任务：${task.dependsOn?.join('、') || '无'}。后续任务：${downstream.map(entry => `${entry.id} ${entry.title || ''}`).join('、') || '无'}。${attemptId ? `尝试 ${attemptId}` : '未提供尝试编号'}` : `执行 ${item.id}`);
+    const checks = selected ? selected.checks : progress.commit ? (task ? task.checks : item.checks) : null;
+    const facts = [['自检', checkEvidence(checks?.self)], ['HTTP', checkEvidence(checks?.http)], ['Edge', checkEvidence(checks?.browser)], ['Review', reviewEvidence(selected ?? { checks })]];
+    refs.inspectorFacts.replaceChildren();
+    for (const [title, value] of facts) { const name = node('dt', title), result = node('dd', value.label); result.dataset.state = value.state; refs.inspectorFacts.append(name, result); }
+    const failures = [['自检', checks?.self], ['HTTP', checks?.http], ['Edge', checks?.browser]].flatMap(([kind, entries]) =>
+      (Array.isArray(entries) ? entries : []).filter(check => check?.passed === false).map(check => ({ kind, check })));
+    refs.inspectorFailures.hidden = failures.length === 0; refs.inspectorFailureList.replaceChildren();
+    for (const { kind, check } of failures.slice(0, 3)) {
+      const entry = node('li'), title = node('strong', `${kind} · ${String(check.id || check.testId || check.name || '检查未通过').slice(0, 100)}`);
+      const detail = check.error ?? check.actual ?? check.message;
+      entry.append(title, node('span', detail == null ? '未提供进一步失败说明。' : printable(detail).slice(0, 240)));
+      if (check.expected != null) entry.append(node('small', `预期：${printable(check.expected).slice(0, 140)}`));
+      refs.inspectorFailureList.append(entry);
+    }
+    refs.inspectorFailureMore.hidden = failures.length <= 3;
+    setText(refs.inspectorFailureMore, `另有 ${Math.max(0, failures.length - 3)} 项未通过，可展开下方候选证据查看完整记录。`);
+    refs.inspectorRoles.element.hidden = historical || !task;
+    refs.inspectorRoleDetails.hidden = refs.inspectorRoles.element.hidden;
+    if (!refs.inspectorRoles.element.hidden) renderRoleMonitor(refs.inspectorRoles, item, task);
+    setText(refs.inspectorEvidence, selectedVersion ? '查看所选版本证据' : task ? '查看所选任务证据' : '查看本次候选证据');
+    setText(refs.inspectorRaw, selected ?? { taskId: task?.id ?? null, attemptId: task?.attemptId ?? null, ...evidenceCandidate(progress), checks, error: task?.error ?? item.error ?? null });
+  }
+  function renderWholeFlow(item) {
+    const progress = executionRoleProgress(item, undefined, fresh && currentRow(item)), checks = progress.commit ? item.checks : null;
+    const self = checkEvidence(checks?.self), live = fresh && currentRow(item) && item.active && !CONTROL_HOLDS.has(item.status);
+    const phases = [
+      { id: 'environment', title: '准备环境', label: ['reserved', 'preparing', 'checking_environment'].includes(item.status) ? STATES[item.status] : '详见真实工具记录', state: live && ['preparing', 'checking_environment'].includes(item.status) ? 'running' : 'waiting', target: refs.commands },
+      { id: 'coding', title: '编码候选', label: ROLE_STATES.coding[progress.coding], state: progress.coding, target: refs.calls.closest('details') },
+      { id: 'self', title: '编码自检', label: progress.coding === 'checking' ? '正在自检' : self.label, state: progress.coding === 'checking' ? 'running' : self.state, target: refs.checks.closest('details') },
+      { id: 'testing', title: '独立测试', label: ROLE_STATES.testing[progress.testing], state: progress.testing, target: refs.checks.closest('details') },
+      { id: 'review', title: '代码审查', label: ROLE_STATES.review[progress.review], state: progress.review, target: refs.review.closest('details') },
+      { id: 'delivery', title: '交付资格', label: accepted(item) ? '当前版本已获准' : '等待同版本完整验收', state: accepted(item) ? 'done' : 'waiting', target: refs.binding.closest('details') },
+    ];
+    for (const phase of phases) {
+      let entry = refs.wholeFlow.querySelector(`[data-stage="${phase.id}"]`);
+      if (!entry) { entry = node('li'); entry.dataset.stage = phase.id; const action = button('', () => focusEvidence(phase.target)); action.append(node('strong'), node('span')); entry.append(action); refs.wholeFlow.append(entry); }
+      entry.dataset.state = phase.state; setText(entry.querySelector('strong'), phase.title); setText(entry.querySelector('span'), phase.label);
+    }
+  }
+  function renderProcess(item) {
+    if (!item) return;
+    const recordKey = keyOf([key, item.id]);
+    if (graphRecord !== recordKey) { graphRecord = recordKey; selectedVersion = ''; ({ selectedTask = '', focusChain = true } = processSelections.get(recordKey) ?? {}); }
+    const byTask = item.executionMode === 'task_dag';
+    refs.process.dataset.view = byTask ? 'dependency' : 'whole';
+    setText(refs.processScope, `${!fresh ? '待刷新核对' : currentRow(item) ? '当前规划' : '历史运行'} · ${byTask ? '按真实任务依赖执行' : '整份计划开发'} · ${item.workflow?.reworkCount == null ? '返工记录见历史' : `已记录 ${count(item.workflow.reworkCount)} 次自动返工`}`);
+    refs.focusButton.hidden = !byTask; refs.focusButton.setAttribute('aria-pressed', String(focusChain));
+    refs.wholeFlow.hidden = byTask; refs.graphNote.hidden = !byTask;
+    renderGraph(item); if (!byTask) renderWholeFlow(item);
+    refs.process.dataset.selectedTask = byTask ? selectedTask : '';
+    const versions = renderVersions(item); renderInspector(item, versions);
   }
   function renderCommands(item) {
     const commands = Array.isArray(item.commands) ? item.commands.filter(command => command && typeof command === 'object') : []; refs.commandBody.replaceChildren();
@@ -384,7 +617,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
       && selectedDefinition()?.id === item.proposalId && selectedDefinition()?.revision === item.revision);
     refs.repairNote.disabled = !!action || !!pending || refs.repairNoteField.hidden;
     refs.repairInfo.hidden = refs.repairNoteField.hidden;
-    refs.empty.hidden = !!item; refs.detail.hidden = !item; if (!item) return;
+    refs.empty.hidden = !!item; refs.detail.hidden = !item; refs.executionSummary.hidden = !item; if (!item) return;
     refs.roleMonitor.element.hidden = item.executionMode === 'task_dag';
     const roleProgress = refs.roleMonitor.element.hidden ? null : renderRoleMonitor(refs.roleMonitor, item);
     const passed = accepted(item); refs.result.dataset.accepted = String(passed); setText(refs.result, passed ? item.checkpoint?.restored === true ? '同版本历史验收已核对，交付资格已恢复；未重新运行测试。' : '当前规格的软件已通过本次验收' : item.status === 'accepted' ? '历史通过记录仅供查看；当前验收许可尚未确认。' : item.status === 'diagnostic_passed' ? '诊断检查通过，不代表当前软件通过验收。' : '当前软件尚未获得完整验收结论。');
@@ -420,7 +653,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
       setText(view.evidence, { baseCommit: task.baseCommit, ...evidenceCandidate(taskProgress), attemptId: task.attemptId, errorCode: task.errorCode ?? null, error: task.error ?? null, usage: task.usage, checks: task.checks, testingErrors: taskProgress.testingErrors, diff: task.diff, history: task.history ?? [] });
     }
     for (const [id, view] of taskNodes) if (!currentTasks.has(id)) { view.card.remove(); taskNodes.delete(id); }
-    renderGraph(item); renderCommands(item);
+    renderProcess(item); renderCommands(item);
     setText(refs.binding, { binding: item.binding, budget: item.budget, baseCommit: item.baseCommit, candidateCommit: item.candidateCommit, proposalId: item.proposalId, revision: item.revision }); setText(refs.diff, item.diff || '尚无代码差异。');
     const evidenceVersion = roleProgress ? evidenceCandidate(roleProgress) : { candidateCommit: item.candidateCommit };
     setText(refs.checks, { ...evidenceVersion,
@@ -487,5 +720,5 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     finally { if (currentToken(token) && action === token) { action = null; render(); onUpdate(); schedule(); } else if (!destroyed && syncContext()) { render(); void refresh(); } }
   }
   return { async mount(host) { if (destroyed || mounted || !host?.append) throw new Error('规划开发面板只能挂载一次。'); mounted = true; build(host); return refresh(); }, refresh, workflowProgress, focusStage, reviseCurrentChecklist,
-    destroy() { if (destroyed) return; remember(); destroyed = true; mounted = false; epoch++; readSerial++; action = null; pending = null; previewRead = null; clearTimeout(timer); root?.remove(); refs = null; eventNodes.clear(); taskNodes.clear(); graphNodes.clear(); savedSelections.clear(); notified.clear(); } };
+    destroy() { if (destroyed) return; remember(); destroyed = true; mounted = false; epoch++; readSerial++; action = null; pending = null; previewRead = null; clearTimeout(timer); resizeObserver?.disconnect(); root?.remove(); refs = null; eventNodes.clear(); taskNodes.clear(); graphNodes.clear(); versionNodes.clear(); processSelections.clear(); savedSelections.clear(); notified.clear(); } };
 }

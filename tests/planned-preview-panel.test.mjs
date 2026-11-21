@@ -13,6 +13,7 @@ const ctx = { projectId: 'project-a', runId: 'run-a', specRevision: A, planRevis
 const marker = '<img src=x onerror="window.injected=true"><script>window.injected=true</script>';
 const digest = bytes => createHash('sha256').update(bytes).digest('hex').toUpperCase();
 const panelURL = new URL('../public/planned-execution.js', import.meta.url), panelBytes = await readFile(panelURL), panelHash = digest(panelBytes);
+const processCSS = await readFile(new URL('../public/execution-process.css', import.meta.url));
 const definition = { id: 'proposal-1', projectId: ctx.projectId, runId: ctx.runId, current: true, approved: true, status: 'approved', revision: A, manifestHash: B, coverage: 'structural_only', executed: false,
   binding: { ...ctx, sourceRevision: C, sourceGeneration: 1 }, approval: { phase: 'definition_only' }, proposal: { name: '联合验收定义', browser: { version: 1, sessions: ['user'], steps: [{ id: 'visible' }] } } };
 function preview(extra = {}) { return { id: 'preview-1', executionId: 'execution-1', state: 'running', active: true, startedAt: '2026-11-18T00:00:00Z', expiresAt: '2099-01-01T00:00:00Z', url: 'http://127.0.0.1:4317/', error: null, actions: { canStop: true }, ...extra }; }
@@ -21,7 +22,7 @@ function execution(extra = {}) { return { id: 'execution-1', projectId: ctx.proj
   actions: { canPreview: true, canStopPreview: false, canDownload: true }, ...extra }; }
 function fixture() { return { dev: { capabilities: { canStart: true, contractRevision: D, model: { name: 'fixture-only' }, budget: { maxCalls: 3, maxReviewCalls: 3, timeoutMs: 600000, maxAttempts: 3, totalModelCalls: 0, remainingModelCalls: 18, remainingAttempts: 3 } }, executions: [execution()] }, definitions: { coverage: 'structural_only', proposals: [definition] } }; }
 const safeJSON = value => JSON.stringify(value).replaceAll('<', '\\u003c');
-const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"><style>body{margin:0;background:#f5f7fb;font:14px sans-serif}main{max-width:1100px;margin:24px auto;padding:0 16px}</style></head><body><main><div id="panel"></div></main><script type="module">
+const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"><link rel="stylesheet" href="/execution-process.css"><style>body{margin:0;background:#f5f7fb;font:14px sans-serif}main{max-width:1100px;margin:24px auto;padding:0 16px}</style></head><body><main><div id="panel"></div></main><script type="module">
 import {createPlannedExecutionPanel} from '/planned-execution.js';
 window.ctx=${safeJSON(ctx)};window.initial=${safeJSON(fixture())};window.states={a:structuredClone(window.initial),b:structuredClone(window.initial)};
 for(const state of [window.states.b])for(const row of [...state.dev.executions,...state.definitions.proposals]){row.projectId='project-b';row.runId='run-b';row.binding.projectId='project-b';row.binding.runId='run-b';}
@@ -46,7 +47,7 @@ window.panel=createPlannedExecutionPanel({api,getContext:()=>window.ctx,onError:
 let browser, server, origin, evidence;
 before(async () => {
   assert.equal(digest(await readFile(panelURL)), panelHash); const base = path.resolve('output/planned-preview-panel-author'); await mkdir(base, { recursive: true }); evidence = await mkdtemp(path.join(base, 'run-'));
-  server = http.createServer((request, response) => { const js = request.url === '/planned-execution.js'; response.writeHead(200, { 'content-type': js ? 'text/javascript' : 'text/html; charset=utf-8' }); response.end(js ? panelBytes : html); });
+  server = http.createServer((request, response) => { const js = request.url === '/planned-execution.js', css = request.url === '/execution-process.css'; response.writeHead(200, { 'content-type': js ? 'text/javascript' : css ? 'text/css' : 'text/html; charset=utf-8' }); response.end(js ? panelBytes : css ? processCSS : html); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); origin = `http://127.0.0.1:${server.address().port}`; browser = await chromium.launch({ channel: 'msedge', headless: true });
 });
 after(async () => {
@@ -90,12 +91,18 @@ for (const width of [1440, 390]) test(`actual task graph and safe commands ${wid
   const nodes = page.locator('.pe-task-node'); assert.equal(await nodes.count(), 8); assert.deepEqual(await nodes.evaluateAll(nodes => nodes.map(node => node.dataset.taskId)), tasks.map(task => task.id));
   assert.deepEqual(await page.locator('.pe-graph-canvas path').evaluateAll(paths => paths.map(path => [path.dataset.from, path.dataset.to])), tasks.flatMap(task => task.dependsOn.map(id => [id, task.id])));
   await page.locator('.pe-task-node[data-task-id="ACTUAL_2"]').click(); const card = page.locator('.pe-task-node[data-task-id="ACTUAL_2"]'); assert.equal(await card.getAttribute('aria-pressed'), 'true');
-  assert.equal(await page.evaluate(() => document.activeElement?.tagName), 'SUMMARY'); assert.match(await page.evaluate(() => document.activeElement?.textContent), /本次|独立测试与审查/u);
+  assert.equal(await card.evaluate(node => node === document.activeElement), true, 'Selecting a task keeps keyboard focus on its graph button');
+  assert.equal(await page.locator('.pe-process-inspector').getAttribute('data-task-id'), 'ACTUAL_2');
   await page.getByRole('checkbox').check(); await records(page).focus(); await refresh(page); assert.equal(await records(page).evaluate(node => node === document.activeElement), true); assert.equal(await page.getByRole('checkbox').isChecked(), true);
   const commands = page.locator('.pe-commands'); assert.equal(await commands.getAttribute('open'), null); await commands.locator('summary').click(); assert.match(await commands.innerText(), /120 ms/u); assert.match(await commands.innerText(), /未知/u); assert.match(await commands.innerText(), /已确认/u);
   for (const secret of ['PRIVATE_ARGV', 'PRIVATE_STDOUT', 'PRIVATE_PID', 'PRIVATE_PATH']) assert.equal((await commands.innerText()).includes(secret), false);
   assert.equal(await page.locator('img,script:not([type="module"])').count(), 0); assert.equal(await page.evaluate(() => window.injected), undefined);
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true); assert.ok(await page.locator('.pe-graph-scroll').evaluate(node => node.scrollWidth > node.clientWidth));
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  const graphOverflows = await page.locator('.pe-graph-scroll').evaluate(node => node.scrollWidth > node.clientWidth + 1);
+  if (width === 390) assert.equal(graphOverflows, false, 'Mobile uses the vertical dependency map without horizontal scrolling');
+  const rectangles = await nodes.evaluateAll(elements => elements.map(element => { const rect = element.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; }));
+  assert.ok(rectangles.every(rect => rect.width >= 140 && rect.height >= 100), 'Adaptive task cards retain a readable size');
+  assert.ok(rectangles.every((rect, index) => rectangles.slice(index + 1).every(other => rect.x + rect.width <= other.x + 1 || other.x + other.width <= rect.x + 1 || rect.y + rect.height <= other.y + 1 || other.y + other.height <= rect.y + 1)), 'Adaptive task cards do not overlap');
   await page.screenshot({ path: path.join(evidence, `graph-commands-${width}.png`), fullPage: true });
 });
 
@@ -183,7 +190,8 @@ test('invalid graph relationships are displayed as evidence without fabricated e
   const page = await pageFor(t);
   for (const tasks of [[{ id: 'A', title: marker, dependsOn: ['MISSING'], status: 'pending' }], [{ id: 'A', dependsOn: ['B'] }, { id: 'B', dependsOn: ['A'] }]]) {
     await setRow(page, execution({ executionMode: 'task_dag', tasks })); assert.equal(await page.locator('.pe-graph-scroll').isVisible(), false); assert.equal(await page.locator('.pe-graph-canvas path').count(), 0);
-    const evidence = page.locator('.pe-graph-scroll + div > details').first(); if (await evidence.getAttribute('open') === null) await evidence.locator('summary').click();
+    const taskEvidence = page.locator('details').filter({ has: page.locator('summary').getByText('真实任务、依赖与验收证据', { exact: true }) });
+    const evidence = taskEvidence.locator(':scope > div > details').first(); if (await evidence.getAttribute('open') === null) await evidence.locator('summary').click();
     // The task description is a direct child; the role monitor has its own paragraph.
     const description = evidence.locator(':scope > p'); assert.equal(await description.isVisible(), true); assert.match(await description.innerText(), /任务 A/u);
   }

@@ -68,7 +68,7 @@ test('real workbench confirms both planning versions before its execution panel 
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).waitFor();
   assert.equal(await start.isDisabled(), true); assert.equal(starts.length, 0);
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).click();
-  await page.waitForFunction(() => document.querySelector('.execution-panel .ep-body').textContent.includes('配置模型：界面连接替身'));
+  await page.waitForFunction(() => document.querySelector('.execution-panel .ep-body').textContent.includes('编码模型：界面连接替身'));
   const run = app.store.get(project.id).runs.at(-1);
   assert.equal(run.workflowVersion, 2); assert.equal(run.approvals.spec.revision, run.specRevision); assert.equal(run.approvals.plan.revision, run.planRevision);
   await page.locator('[data-workspace-view="execution"]').click();

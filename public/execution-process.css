@@ -1,0 +1,570 @@
+/* Real development records: the dependency drawing never grants an action. */
+section.planned-execution .pe-graph-dependencies {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+section.planned-execution {
+  color: #302d36;
+  background: #fff;
+  border-color: #e2dee6;
+  font-family: inherit;
+}
+
+section.planned-execution .pe-process {
+  margin: 22px 0 18px;
+  border: 1px solid #ddd7e4;
+  border-radius: 9px;
+  overflow: hidden;
+  background: #fbfaf7;
+}
+
+section.planned-execution .pe-process-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 19px 21px;
+  background: #f9f7f3;
+  border-bottom: 1px solid #e4dfe8;
+}
+
+section.planned-execution .pe-process-head h3 {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.5;
+  color: #29262e;
+  font-weight: 600;
+}
+
+section.planned-execution .pe-process-scope {
+  font-size: 12px;
+  line-height: 1.8;
+  color: #797280;
+  margin: 5px 0 0;
+}
+
+section.planned-execution .pe-focus-chain {
+  padding: 7px 11px;
+  min-height: 34px;
+  border-color: #d4cadf;
+  font-size: 12px;
+  background: #fff;
+  flex: none;
+}
+
+section.planned-execution .pe-focus-chain[aria-pressed=true] {
+  color: #5d477c;
+  background: #eee9f4;
+  border-color: #c7bad9;
+}
+
+section.planned-execution .pe-process-grid {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) minmax(255px,29%);
+  align-items: stretch;
+}
+
+section.planned-execution .pe-process-map {
+  padding: 17px;
+  min-width: 0;
+}
+
+section.planned-execution .pe-process .pe-graph-scroll {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  max-height: 560px;
+}
+
+section.planned-execution .pe-process .pe-graph-canvas {
+  background-image: radial-gradient(#dbd6df .7px,transparent .7px);
+  background-size: 16px 16px;
+}
+
+section.planned-execution .pe-process .pe-note {
+  font-size: 12px;
+  line-height: 1.8;
+  color: #7a7280;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0 3px 10px;
+}
+
+section.planned-execution .pe-process .pe-task-node {
+  border: 1px solid #d8d2de;
+  border-left: 3px solid #b9b0c3;
+  border-radius: 7px;
+  color: #4b4553;
+  box-shadow: 0 2px 3px #33274104;
+  padding: 9px 12px;
+  gap: 3px;
+  height: 126px;
+  background: #fff;
+  transition: opacity .12s;
+}
+
+section.planned-execution .pe-process .pe-task-node[aria-pressed=true] {
+  border-color: #7d659d;
+  background: #f4effb;
+  box-shadow: 0 0 0 2px #b9a7d328;
+}
+
+section.planned-execution .pe-process .pe-task-node[data-status=completed] {
+  border-left-color: #78917d;
+}
+
+section.planned-execution .pe-process .pe-task-node[data-status=failed] {
+  border-left-color: #b77877;
+}
+
+section.planned-execution .pe-process .pe-task-node[data-status=running] {
+  border-left-color: #8c75ab;
+}
+
+section.planned-execution .pe-process .pe-task-node[data-focus=false] {
+  opacity: .42;
+}
+
+section.planned-execution .pe-process .pe-task-node small {
+  color: #776b81;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+section.planned-execution .pe-process .pe-task-node .pe-graph-title {
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.6;
+  color: #3c3545;
+}
+
+section.planned-execution .pe-process .pe-task-node[aria-pressed=true] small {
+  color: #756083;
+}
+
+section.planned-execution .pe-process .pe-graph-canvas path[data-focus=true] {
+  stroke: #8e7ba5;
+  stroke-width: 1.7;
+}
+
+section.planned-execution .pe-process .pe-graph-canvas path[data-focus=false] {
+  stroke: #d8d2df;
+  opacity: .45;
+}
+
+section.planned-execution .pe-process-inspector {
+  padding: 20px;
+  background: #fff;
+  border-left: 1px solid #e2dce9;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+section.planned-execution .pe-inspector-context {
+  color: #887b97;
+  font-size: 11px;
+  margin: 0 0 7px;
+}
+
+section.planned-execution .pe-process-inspector h4 {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.7;
+  margin: 0 0 9px;
+  color: #342c3d;
+}
+
+section.planned-execution .pe-inspector-state {
+  font-size: 12px;
+  font-weight: 500;
+  color: #6b5c7c;
+  margin: 7px 0;
+}
+
+section.planned-execution .pe-inspector-cause {
+  font-size: 12px;
+  color: #7c7384;
+  line-height: 1.9;
+  margin: 11px 0;
+}
+
+section.planned-execution .pe-inspector-commit {
+  font: 11px/1.9 ui-monospace,Consolas,monospace;
+  color: #6e607e;
+  padding: 10px 0;
+  margin: 12px 0;
+  border-top: 1px solid #eee9f2;
+  border-bottom: 1px solid #eee9f2;
+  overflow-wrap: anywhere;
+}
+
+section.planned-execution .pe-inspector-dependencies {
+  font-size: 11px;
+  color: #776b81;
+  line-height: 1.9;
+}
+
+section.planned-execution .pe-inspector-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0,1fr);
+  gap: 9px 16px;
+  font-size: 12px;
+  line-height: 1.8;
+  margin: 20px 0;
+}
+
+section.planned-execution .pe-inspector-facts dt {
+  color: #776b81;
+}
+
+section.planned-execution .pe-inspector-facts dd {
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+section.planned-execution :is(.pe-inspector-facts dd,.pe-version-matrix td,.pe-inspector-state)[data-state=done] {
+  color: #577b63;
+}
+
+section.planned-execution :is(.pe-inspector-facts dd,.pe-version-matrix td,.pe-inspector-state)[data-state=failed] {
+  color: #a25f62;
+}
+
+section.planned-execution .pe-inspector-roles {
+  border-top: 1px solid #ece7f0;
+  padding-top: 12px;
+  margin: 15px 0;
+}
+
+section.planned-execution .pe-inspector-roles h4 {
+  font-size: 12px;
+  margin: 0 0 6px;
+}
+
+section.planned-execution .pe-inspector-roles .pe-role-context {
+  font-size: 10px;
+  color: #776b81;
+}
+
+section.planned-execution .pe-inspector-roles .pe-role-list {
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+section.planned-execution .pe-inspector-roles .pe-role-list li {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  gap: 10px;
+  border: 0;
+  padding: 3px 0;
+  font-size: 11px;
+}
+
+section.planned-execution .pe-inspector-roles .pe-role-list strong {
+  font-weight: 500;
+  color: #7e718b;
+}
+
+section.planned-execution .pe-inspector-evidence {
+  font-size: 12px;
+  padding: 7px 10px;
+  min-height: 33px;
+  border-color: #ddd3e6;
+  color: #6d5288;
+  background: #fff;
+}
+
+section.planned-execution .pe-inspector-failures {
+  margin: 17px 0;
+  padding: 12px 0;
+  border-top: 1px solid #eadfe4;
+  border-bottom: 1px solid #eadfe4;
+}
+
+section.planned-execution .pe-inspector-failures h4 {
+  font-size: 12px;
+  color: #945c64;
+  margin: 0 0 8px;
+}
+
+section.planned-execution .pe-inspector-failures ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+section.planned-execution .pe-inspector-failures li {
+  padding: 8px 0;
+  font-size: 11px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+section.planned-execution .pe-inspector-failures :is(strong,span,small) {
+  display: block;
+}
+
+section.planned-execution .pe-inspector-failures strong {
+  color: #8e5962;
+  font-weight: 550;
+}
+
+section.planned-execution .pe-inspector-failures :is(span,small,p) {
+  color: #766b7e;
+  font-size: 11px;
+}
+
+section.planned-execution .pe-process-inspector>details {
+  font-size: 11px;
+  border: 0;
+  border-top: 1px solid #ece6f1;
+  border-radius: 0;
+  padding: 12px 0 0;
+  margin-bottom: 0;
+}
+
+section.planned-execution .pe-process-inspector pre {
+  max-height: 220px;
+  font-size: 10px;
+  background: #f8f6fb;
+}
+
+section.planned-execution .pe-whole-flow {
+  list-style: none;
+  padding: 4px 0;
+  margin: 0;
+  max-height: none;
+  display: grid;
+  grid-template-columns: repeat(3,minmax(0,1fr));
+  gap: 20px 12px;
+}
+
+section.planned-execution .pe-whole-flow li {
+  position: relative;
+  padding: 0;
+  border-top: 2px solid #ddd6e5;
+}
+
+section.planned-execution .pe-whole-flow li[data-state=done] {
+  border-color: #89a38f;
+}
+
+section.planned-execution .pe-whole-flow li:is([data-state=running],[data-state=checking]) {
+  border-color: #947bb1;
+}
+
+section.planned-execution .pe-whole-flow li:is([data-state=failed],[data-state=incomplete],[data-state=self_incomplete]) {
+  border-color: #bb7e81;
+}
+
+section.planned-execution .pe-whole-flow button {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  align-items: flex-start;
+  justify-content: flex-start;
+  width: 100%;
+  height: 100%;
+  min-height: 112px;
+  padding: 13px 10px 11px;
+  text-align: left;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+section.planned-execution .pe-whole-flow strong {
+  font-size: 13px;
+  font-weight: 550;
+  color: #50425f;
+}
+
+section.planned-execution .pe-whole-flow span {
+  color: #776b81;
+  font-size: 11px;
+}
+
+section.planned-execution .pe-version-evidence {
+  border-top: 1px solid #ded7e6;
+  margin: 23px 0 20px;
+  padding-top: 18px;
+}
+
+section.planned-execution .pe-version-evidence h3 {
+  font-size: 15px;
+  margin: 0 0 7px;
+  color: #44374f;
+}
+
+section.planned-execution .pe-matrix-note {
+  font-size: 11px;
+  color: #776b81;
+  margin: 0 0 13px;
+}
+
+section.planned-execution .pe-matrix-scroll {
+  max-width: 100%;
+  overflow: auto;
+  overscroll-behavior-x: contain;
+}
+
+section.planned-execution .pe-version-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 760px;
+  font-size: 11px;
+  line-height: 1.8;
+  color: #81718e;
+}
+
+section.planned-execution .pe-version-matrix :is(th,td) {
+  text-align: left;
+  padding: 11px 10px;
+  border-bottom: 1px solid #e9e3ee;
+  overflow-wrap: anywhere;
+  max-width: 220px;
+  vertical-align: top;
+}
+
+section.planned-execution .pe-version-matrix thead th {
+  font-weight: 500;
+  color: #776b81;
+  background: #faf8fc;
+}
+
+section.planned-execution .pe-version-matrix tbody th {
+  font-weight: 400;
+}
+
+section.planned-execution .pe-version-matrix tbody tr[data-current=true] {
+  background: #faf8fd;
+}
+
+section.planned-execution .pe-version-matrix button {
+  font-size: 11px;
+  line-height: 1.8;
+  min-height: 28px;
+  padding: 2px 5px;
+  background: none;
+  color: #71528e;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  text-align: left;
+  justify-content: flex-start;
+}
+
+section.planned-execution .pe-version-matrix button[aria-pressed=true] {
+  background: #efe8f7;
+  border-color: #dbcee9;
+}
+
+section.planned-execution .pe-version-matrix td:nth-child(2) {
+  font-family: ui-monospace,Consolas,monospace;
+  font-size: 10px;
+  color: #7f6e91;
+}
+
+@media(max-width:1000px) {
+  section.planned-execution .pe-process-grid {
+    grid-template-columns: minmax(0,1fr) 255px;
+  }
+
+  section.planned-execution .pe-whole-flow {
+    grid-template-columns: repeat(2,minmax(0,1fr));
+  }
+
+  section.planned-execution .pe-process-inspector {
+    padding: 17px;
+  }
+
+  section.planned-execution .pe-process-map {
+    padding: 14px;
+  }
+
+}
+
+@media(max-width:760px) {
+  section.planned-execution .pe-process-head {
+    padding: 15px;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  section.planned-execution .pe-process-head h3 {
+    font-size: 15px;
+  }
+
+  section.planned-execution .pe-process-scope {
+    font-size: 11px;
+  }
+
+  section.planned-execution .pe-focus-chain {
+    font-size: 11px;
+    min-height: 32px;
+    padding: 6px 8px;
+  }
+
+  section.planned-execution .pe-process-grid {
+    grid-template-columns: minmax(0,1fr);
+  }
+
+  section.planned-execution .pe-process-map {
+    padding: 12px;
+  }
+
+  section.planned-execution .pe-process .pe-graph-scroll {
+    max-height: 490px;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  section.planned-execution .pe-process-inspector {
+    border-left: 0;
+    border-top: 1px solid #e3dce9;
+    padding: 18px;
+  }
+
+  section.planned-execution .pe-process-inspector h4 {
+    font-size: 15px;
+  }
+
+  section.planned-execution .pe-inspector-roles .pe-role-list {
+    grid-template-columns: 1fr;
+  }
+
+  section.planned-execution .pe-whole-flow {
+    gap: 12px;
+  }
+
+  section.planned-execution .pe-whole-flow button {
+    min-height: 104px;
+  }
+
+  section.planned-execution .pe-inspector-facts {
+    gap: 7px 14px;
+  }
+
+  section.planned-execution .pe-version-matrix {
+    font-size: 11px;
+  }
+
+  section.planned-execution .pe-version-evidence {
+    margin-top: 19px;
+  }
+
+}
+
+@media(prefers-reduced-motion:reduce) {
+  section.planned-execution .pe-process .pe-task-node {
+    transition: none;
+  }
+}

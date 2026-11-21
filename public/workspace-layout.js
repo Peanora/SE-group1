@@ -43,7 +43,6 @@ export function createWorkspaceLayout({ getContext, onViewChange = () => {}, isV
       const selected = tab.dataset.workspaceView === view;
       tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1;
     }
-    if (view === 'source') document.querySelector('#source-changes-section').open = true;
     restoreScroll();
   }
   function show(next, { focus = false } = {}) {
