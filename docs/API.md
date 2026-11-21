@@ -133,7 +133,7 @@ Cookie为8小时HttpOnly/SameSite=Strict的随机会话，数据库仅保存令�
 
 | 方法/后缀 | 请求 | 行为 |
 | --- | --- | --- |
-| GET基础路径 | 无 | `capabilities`含冻结模型/规则的`contractRevision`、每角色3次、600秒、3尝试/18模型调用共享预算，及`executions`真实状态。 |
+| GET基础路径 | 无 | `capabilities` 返回当前模型与执行预算的 `contractRevision`，包括每角色 3 次请求和新尝试 60 分钟总时限。`executions` 保留每次实际执行时的冻结预算和状态。 |
 | POST `/start` | 精确`{proposalId,revision,contractRevision}` | 当前联合HTTP+浏览器定义已认可才202创建新记录。SQLite先预留预算，再进入共同检查点/冻结定义并启动编码；不自动开始。 |
 | POST `/:id/cancel` | `{}` | 请求停止；本地结束不证明远端终止。未知保持活动及预算预留。 |
 | POST `/:id/pause` | `{}` | 仅当前控制器持有的真实任务图：暂停新批次派发，返回`pause_requested`；在途结果保存后才`paused`。旧执行器/整体编码不支持则409。 |

@@ -59,10 +59,10 @@ if (process.argv.length !== 3 || !['--fixture', '--model'].includes(mode)) {
     const store = await new ProjectStore(dataDir).init();
     const verification = await createVerificationPlanningService({ rootDir: path.join(dataDir, 'verification-planning'), getPlanning: (pid, rid) => store.getPersistedRun(pid, rid), getPlanningSync: (pid, rid) => store.getPersistedRun(pid, rid), config: synthetic,
       dependencies: { createModel: () => async input => { const proposal = definitionFor(input.requirements), usage = { inputTokens: 0, outputTokens: 0 }; await input.onReceipt({ model: synthetic.model, finishReason: 'stop', usage, content: JSON.stringify(proposal) }); return { proposal, model: synthetic.model, usage, policyHash: verificationModelPolicy.hash, coverage: 'structural_only' }; } } });
-    const options = { store, teamEnabled: true, stepDelayMs: 0, planner: fixturePlanner, verificationPlanningService: verification };
+    const options = { store, teamEnabled: true, stepDelayMs: 0, planner: fixturePlanner, verificationPlanningService: verification, plannedExecutionTimeoutMs: 600000 };
     if (mode === '--fixture') {
       const files = structuredClone(plannedNotes.files); files[0].content = files[0].content.replace("const p=new URL(req.path,'http://local').pathname;", "const p=new URL(req.path,'http://local').pathname;if(p==='/favicon.ico'&&['GET','HEAD'].includes(req.method))return {status:204,body:''};");
-      options.plannedExecutionService = await createPlannedExecutionService({ rootDir: serviceRoot, verificationService: verification, getPlanningSync: (pid, rid) => store.getPersistedRun(pid, rid), withCheckpoint: (_pid, work) => work(), config: synthetic,
+      options.plannedExecutionService = await createPlannedExecutionService({ rootDir: serviceRoot, verificationService: verification, getPlanningSync: (pid, rid) => store.getPersistedRun(pid, rid), withCheckpoint: (_pid, work) => work(), config: synthetic, timeoutMs: 600000,
         dependencies: { createProvider: () => fixture({ files }), createReviewer: () => fixture({ summary: '可信夹具诊断，不构成模型Review', issues: [], resolutions: [] }),
           startExecution: input => startPlannedWebExecution({ ...input, providerKind: 'trusted_fixture', reviewerKind: 'diagnostic', maxCalls: 1, maxReviewCalls: 1 }) } });
     }

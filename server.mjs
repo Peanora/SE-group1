@@ -130,6 +130,7 @@ export async function createApp(options = {}) {
       rootDir: plannedRoot, verificationService: verificationPlanningService,
       getPlanningSync: (projectId, runId) => store.getPersistedRun(projectId, runId),
       getConfig: () => agentSettings.resolve('coding'), getReviewConfig: () => agentSettings.resolve('review'),
+      timeoutMs: options.plannedExecutionTimeoutMs,
       dependencies: {
         // Interactive browsing transfers more approved assets than one scripted acceptance.
         startPreviewRuntime: async input => (await import('./lib/web-runtime.mjs')).startWebRuntime({ ...input, maxOutputBytes: 4 * 1024 * 1024 }),
@@ -251,7 +252,8 @@ export async function createApp(options = {}) {
             agentSettings: { available: true, version: 1 },
             engineeringRouteContractRevision: { available: true, version: 1 },
             planningIssueConversation: { available: true, version: 3 },
-            automaticDelivery: { available: automaticDelivery.available, ...automaticDelivery.readiness(), ...AUTOMATIC_BUDGET },
+            automaticDelivery: { available: automaticDelivery.available, ...automaticDelivery.readiness(), ...AUTOMATIC_BUDGET,
+              developmentTimeoutMs: plannedExecutionService?.timeoutMs },
             modelPlanning: { engineeringMaxCalls: orchestrator.engineeringMaxCalls, engineeringCallLimit: orchestrator.engineeringMaxCalls !== null, engineeringTimeoutMs: orchestrator.engineeringTimeoutMs,
               engineeringTotalTimeoutMs: orchestrator.engineeringTotalTimeoutMs,
               specificationMaxCalls: orchestrator.specificationMaxCalls, specificationCallLimit: orchestrator.specificationMaxCalls !== null, specificationTimeoutMs: orchestrator.specificationTimeoutMs },

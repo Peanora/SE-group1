@@ -77,7 +77,7 @@ async function fixture(t, options = {}) {
   const candidate = (await verification.propose({ ...ids, contractRevision: (await verification.list(ids)).capabilities.contractRevision })).proposal;
   row = await until(async () => (await verification.list(ids)).proposals.find(item => item.id === candidate.id && item.status === 'draft'));
   if (options.approved !== false) row = (await verification.approve({ ...ids, proposalId: row.id, revision: row.revision, feedback: '认可结构定义，不代表执行验收' })).proposal;
-  await open();
+  await open(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs });
   return { directory, data, ledger, contexts, providerSettings, query, seedLegacyBudget, checkpoint, get service() { return service; }, get verification() { return verification; }, get row() { return row; }, coreCalls: () => coreCalls,
     release: () => { for (const release of releases) release(); }, mode: value => { mode = value; }, open,
     async reopen(extra = {}, both = false) { await service.shutdown(); if (both) { await verification.shutdown(); await openVerification(); } return open(extra); },
@@ -118,13 +118,37 @@ test('service freezes absent model controls, binds explicit changes in contract 
 
 test('before any native core admission the run budget and six-call reservation are durable', async t => {
   const f = await fixture(t); const before = await f.service.list(ids);
-  assert.deepEqual(before.capabilities.budget, { maxCalls: 3, maxReviewCalls: 3, timeoutMs: 600000, unlimited: true,
+  assert.deepEqual(before.capabilities.budget, { maxCalls: 3, maxReviewCalls: 3, timeoutMs: 3_600_000, unlimited: true,
     maxAttempts: null, remainingAttempts: null, totalModelCalls: null, remainingModelCalls: null });
   await f.service.start(await f.input()); const state = await f.finished();
   assert.equal(f.coreCalls(), 1); assert.equal(f.ledger.length, 2);
   assert.equal(state.executions[0].status, 'failed'); assert.equal(state.capabilities.budget.remainingModelCalls, null);
   const [budget] = f.query('SELECT * FROM budgets'); assert.equal(budget.used_calls, 2); assert.equal(budget.reserved_calls, 0);
   const json = JSON.stringify(state); for (const privateValue of [f.directory, config.apiKey, 'receiptPath', 'private-workspace', 'private-receipt']) assert.equal(json.includes(privateValue), false);
+});
+
+test('a new attempt on an existing approved plan gets one hour without changing previous deadlines or usage', async t => {
+  const f = await fixture(t, { timeoutMs: 600_000 });
+  const before = await f.input();
+  const { execution: old } = await f.service.start(before);
+  await f.finished();
+  assert.equal(old.budget.timeoutMs, 600_000);
+
+  await f.reopen();
+  await assert.rejects(f.service.start(before), error => error.code === 'contract_changed');
+  const { execution: next } = await f.service.start(await f.input());
+  assert.equal(next.budget.timeoutMs, 3_600_000);
+  const result = await until(async () => {
+    const state = await f.service.list(ids);
+    return state.executions.every(row => !row.active) && state;
+  });
+  assert.equal(result.executions.find(row => row.id === old.id).budget.timeoutMs, 600_000);
+  assert.equal(result.executions.find(row => row.id === next.id).budget.timeoutMs, 3_600_000);
+  const [ledger] = f.query('SELECT budget, attempts, used_calls, reserved_calls FROM budgets');
+  assert.equal(JSON.parse(ledger.budget).timeoutMs, 600_000);
+  assert.equal(ledger.attempts, 2);
+  assert.equal(ledger.used_calls, 4);
+  assert.equal(ledger.reserved_calls, 0);
 });
 
 test('unapproved, obsolete, foreign or malformed definition requests do not consume attempts', async t => {

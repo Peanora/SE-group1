@@ -69,7 +69,7 @@ async function runModelBenchmark({ loadRace = false } = {}) {
       dependencies: { createModel: () => async input => { const proposal = benchmark.definitionFor(input.requirements), usage = { inputTokens: 0, outputTokens: 0 };
         await input.onReceipt({ model: fixtureConfig.model, finishReason: 'stop', usage, content: JSON.stringify(proposal) }); return { proposal, model: fixtureConfig.model, usage, policyHash: verificationModelPolicy.hash, coverage: 'structural_only' }; } } });
     // No coding/Review providers, execution kinds or core functions are replaced.
-    const instance = await createApp({ store, teamEnabled: true, stepDelayMs: 0, planner: fixturePlanner, verificationPlanningService: verification });
+    const instance = await createApp({ store, teamEnabled: true, stepDelayMs: 0, planner: fixturePlanner, verificationPlanningService: verification, plannedExecutionTimeoutMs: 1200000 });
     try {
       await new Promise((resolve, reject) => { instance.server.once('error', reject); instance.server.listen(0, '127.0.0.1', resolve); }); guard();
       instance.origin = `http://127.0.0.1:${instance.server.address().port}`;

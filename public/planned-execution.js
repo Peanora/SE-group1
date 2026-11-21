@@ -1,4 +1,5 @@
 const HASH = /^[a-f0-9]{64}$/u, ID = /^[A-Za-z0-9_-]{1,128}$/u;
+const MAX_DEVELOPMENT_TIMEOUT_MS = 3600000;
 const WORKING = new Set(['reserved', 'preparing', 'checking_environment', 'generating', 'proposal_rejected', 'self_check', 'validating', 'running', 'merging', 'pause_requested', 'paused', 'paused_recovery_ready', 'recovery_requested']);
 const STATES = { reserved: '已受理，等待准备', preparing: '准备工作区', checking_environment: '检查执行环境', generating: '编码与修订', self_check: '运行编码自检', validating: '独立测试与审查', restoring_delivery: '核对同版本历史交付，未调用模型', accepted: '本次检查已结束', diagnostic_passed: '诊断检查通过，未计为软件验收', failed: '开发执行失败', stopped: '已确认停止', timed_out: '已达到时长上限', cancel_requested: '已请求停止，等待确认', reconciliation_required: '状态待核对，尚未确认停止' };
 Object.assign(STATES, { running: '按依赖执行真实任务', proposal_rejected: '文件建议未通过，正在预算内纠正', merging: '合并已验收候选', pause_requested: '已请求暂停，等待在途任务保存', paused: '已暂停派发新任务', paused_recovery_ready: '安全暂停点已保存，等待恢复', recovery_requested: '正在核对安全暂停点并恢复任务' });
@@ -228,7 +229,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
       && Number.isSafeInteger(taskLimit) && taskLimit >= 1 && taskLimit <= 8 && Number.isSafeInteger(attemptCalls) && attemptCalls === taskLimit * (budget.maxCalls + budget.maxReviewCalls)
       && (budget.taskLimit === undefined || Number.isSafeInteger(budget.maxConcurrency) && budget.maxConcurrency >= 1 && budget.maxConcurrency <= 2)
       && ['maxCalls', 'maxReviewCalls'].every(name => Number.isSafeInteger(budget?.[name]) && budget[name] >= 1 && budget[name] <= 5)
-      && Number.isSafeInteger(budget.timeoutMs) && budget.timeoutMs >= 1 && budget.timeoutMs <= (taskLimit > 1 ? 1200000 : 600000) && validAggregate;
+      && Number.isSafeInteger(budget.timeoutMs) && budget.timeoutMs >= 1 && budget.timeoutMs <= MAX_DEVELOPMENT_TIMEOUT_MS && validAggregate;
   }
   function failureHelp(item) {
     const help = item?.failureHelp;

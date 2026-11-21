@@ -198,6 +198,10 @@ test('automatic delivery in Edge pauses only for the missing business answer and
     return state.status === 'running' && state.executionId && calls.includes('coding') && state;
   }, '回答后未自动通过规格、计划和清单并进入编码');
   const executionUrl = `${runUrl}/development-executions`;
+  assert.equal((await responseJson('/api/health')).automaticDelivery.developmentTimeoutMs, 3_600_000);
+  const { capabilities, executions: [running] } = await responseJson(executionUrl);
+  assert.equal(capabilities.budget.timeoutMs, 3_600_000);
+  assert.equal(running.budget.timeoutMs, 3_600_000);
   const beforeDelivery = await page.request.get(`${origin}${executionUrl}/${inFlight.executionId}/download`);
   assert.equal(beforeDelivery.status(), 409);
   assert.equal(await page.locator('#automatic-download').isVisible(), false);

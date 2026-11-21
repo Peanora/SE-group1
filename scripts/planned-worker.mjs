@@ -131,7 +131,7 @@ async function main() {
   const options = { outputDir, binding: grant.binding, task: grant.task, manifest, provider, reviewer, executable: bootstrap.executable, maxCalls: grant.budget.maxCalls,
     maxReviewCalls: grant.budget.maxReviewCalls, maxConcurrency: grant.budget.maxConcurrency, timeoutMs: Math.max(1, grant.deadlineAt - Date.now()), deadlineAt: grant.deadlineAt, ...(resumePermit ? { resumePermit } : {}), assertCurrent: current,
     onEvent: event => { try { store.event(lease, event); } catch {} } };
-  handle = grant.mode === 'graph' ? startPlannedTaskExecution(options) : startPlannedWebExecution({ ...options, binding: { ...grant.binding, taskId: 'whole' }, timeoutMs: Math.min(600000, options.timeoutMs) });
+  handle = grant.mode === 'graph' ? startPlannedTaskExecution(options) : startPlannedWebExecution({ ...options, binding: { ...grant.binding, taskId: 'whole' } });
   timer = setTimeout(() => handle.cancel(), Math.max(1, grant.deadlineAt - Date.now()));
   try {
     const actual = await handle.done; finished = true; clearTimeout(timer); const graph = grant.mode === 'graph' ? actual : undefined, record = graph?.status === 'accepted' ? plannedTaskIntegration(graph, manifest) : actual;

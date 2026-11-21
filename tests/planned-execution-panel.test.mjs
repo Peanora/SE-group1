@@ -70,6 +70,27 @@ test('unlimited plans keep per-execution confirmation and accept only the explic
   assert.equal(await page.evaluate(() => window.requests.some(request => request.method === 'POST')), false);
 });
 
+test('whole-project and task development allow a one-hour budget and reject larger budgets', async t => {
+  const page = await pageFor(t, 390);
+  for (const executionBudget of [{}, { taskLimit: 2, maxConcurrency: 2, attemptModelCalls: 12 }]) {
+    await page.evaluate(({ executionBudget, unlimitedBudget }) => {
+      window.states.a.dev.capabilities.budget = { ...window.initial.dev.capabilities.budget, ...unlimitedBudget, ...executionBudget, timeoutMs: 3600000 };
+    }, { executionBudget, unlimitedBudget });
+    await refresh(page);
+    assert.match(await page.locator('.planned-execution').innerText(), /总时限3600秒/u);
+    assert.equal(await start(page).isDisabled(), true);
+    await consent(page).check();
+    assert.equal(await start(page).isEnabled(), true);
+
+    await page.evaluate(() => { window.states.a.dev.capabilities.budget.timeoutMs += 1; });
+    await refresh(page);
+    assert.equal(await consent(page).isChecked(), false);
+    assert.equal(await consent(page).isDisabled(), true);
+    assert.equal(await start(page).isDisabled(), true);
+  }
+  assert.equal(await page.evaluate(() => window.requests.some(request => request.method === 'POST')), false);
+});
+
 test('checklist blocker shows the reason and enables revision while blocking coding retries', async t => {
   const page = await pageFor(t, 390);
   const value = { ...failedRow, failureHelp: { action: 'review_checklist', title: '验收缺少登录步骤',

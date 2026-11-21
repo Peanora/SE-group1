@@ -963,8 +963,13 @@ $('#file-input').addEventListener('change', (event) => importFile(event.target.f
 $('#clear-file').addEventListener('click', resetFile);
 $('#start-run').addEventListener('click', () => { void startRun(); });
 $('#start-automatic').addEventListener('click', () => {
-  const { specificationMaxCalls, engineeringMaxCalls, verificationMaxAttempts } = state.health.automaticDelivery;
-  $('#automatic-budget').textContent = `规格最多 ${specificationMaxCalls} 次，工程设计最多 ${engineeringMaxCalls} 次，验收清单最多 ${verificationMaxAttempts} 次。整体验收的编码及审查合计最多 6 次，按任务开发时合计最多 48 次。`;
+  const { specificationMaxCalls, engineeringMaxCalls, verificationMaxAttempts, developmentTimeoutMs } = state.health.automaticDelivery;
+  const budget = $('#automatic-budget');
+  budget.textContent = `规格最多 ${specificationMaxCalls} 次，工程设计最多 ${engineeringMaxCalls} 次，验收清单最多 ${verificationMaxAttempts} 次。整体验收的编码及审查合计最多 6 次，按任务开发时合计最多 48 次。`;
+  if (Number.isSafeInteger(developmentTimeoutMs) && developmentTimeoutMs > 0) {
+    const duration = developmentTimeoutMs % 60000 === 0 ? `${developmentTimeoutMs / 60000} 分钟` : `${developmentTimeoutMs / 1000} 秒`;
+    budget.textContent += `开发阶段最多 ${duration}，包含测试、审查和返工。`;
+  }
   $('#automatic-consent').checked = false;
   $('#confirm-automatic').disabled = true;
   $('#automatic-delivery-dialog').showModal();
