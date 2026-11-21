@@ -222,6 +222,7 @@ test('homepage follows automatic repair of a failed browser round and a blocked 
   await stage(page, 'verification').getByText('清单已确认', { exact: true }).waitFor();
   await stage(page, 'coding').click();
   const execution = page.locator('#planned-execution-section');
+  const roleProgress = execution.getByRole('region', { name: '执行角色进度' });
   const begin = execution.getByRole('button', { name: '按当前规划开始开发', exact: true });
   const cancel = execution.getByRole('button', { name: '请求停止本次开发', exact: true });
   await execution.getByRole('checkbox').check();
@@ -237,6 +238,7 @@ test('homepage follows automatic repair of a failed browser round and a blocked 
   assert.equal(await stage(page, 'coding').getAttribute('aria-current'), 'step');
   await stage(page, 'coding').click();
   await cancel.waitFor();
+  await roleProgress.getByText('正在编码', { exact: true }).waitFor();
   assert.doesNotMatch(await stage(page, 'verification').innerText(), /清单准备未完成/u);
   const executionApi = verificationApi.replace(/verification-plans$/u, 'development-executions');
   releaseCoding();
@@ -244,6 +246,8 @@ test('homepage follows automatic repair of a failed browser round and a blocked 
   assert.equal(await stage(page, 'coding').getAttribute('data-state'), 'working');
   await stage(page, 'testing').click();
   await execution.getByText('自检、HTTP与浏览器实际检查', { exact: true }).waitFor();
+  assert.equal(await roleProgress.locator('[data-role="testing"]').getAttribute('data-state'), 'waiting');
+  assert.equal(await roleProgress.locator('.pe-role-context').getAttribute('title'), '');
   releaseRework();
   const deadline = Date.now() + 90000;
   let result;
@@ -257,6 +261,9 @@ test('homepage follows automatic repair of a failed browser round and a blocked 
   assert.equal(result.workflow.reworkCount, 2);
   await stage(page, 'delivery').getByText('可预览与下载', { exact: true }).waitFor();
   await stage(page, 'delivery').click();
+  await roleProgress.getByText('审查已完成', { exact: true }).waitFor();
+  assert.equal(await roleProgress.locator('[data-role="testing"]').getAttribute('data-state'), 'done');
+  assert.equal(await roleProgress.locator('.pe-role-context').getAttribute('title'), result.candidateCommit);
   await execution.getByRole('button', { name: '启动已验收软件预览', exact: true }).click();
   const popup = page.waitForEvent('popup');
   await page.getByRole('link', { name: '打开软件预览', exact: true }).click();

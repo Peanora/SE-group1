@@ -297,3 +297,48 @@ test('review detail keeps the original commit and resolved issue history readabl
     assert.deepEqual(JSON.parse(await detail.locator('pre').textContent()).history, history);
   }
 });
+
+test('role progress follows the selected candidate and opens its evidence with the keyboard', async t => {
+  for (const width of [1440, 390]) {
+    const page = await pageFor(t, width);
+    const commit = '1'.repeat(40);
+    const current = execution({ status: 'validating', candidateCommit: commit,
+      checks: { http: [{ passed: true }], browser: [{ passed: true }] },
+      workflow: { stage: 'review' },
+      reviewHistory: [{ attempt: 1, candidateCommit: commit, status: 'not_started' }] });
+    const previous = execution({ id: 'older-run', status: 'failed', active: false, current: false,
+      candidateCommit: '9'.repeat(40), checks: { browser: [{ passed: false }] } });
+    await page.evaluate(rows => { window.states.a.dev.executions = rows; }, [current, previous]);
+    await refresh(page);
+    await records(page).selectOption(current.id);
+    const monitor = page.getByRole('region', { name: '执行角色进度' });
+    const role = name => monitor.locator('[data-role="' + name + '"]');
+    await monitor.getByText('正在审查', { exact: true }).waitFor();
+    assert.equal(await role('testing').getAttribute('data-state'), 'done');
+    assert.equal(await monitor.locator('.pe-role-context').getAttribute('title'), commit);
+    const action = monitor.getByRole('button', { name: '查看审查记录', exact: true });
+    await action.focus();
+    await refresh(page);
+    assert.equal(await page.evaluate(() => document.activeElement.textContent), '查看审查记录');
+    await action.press('Enter');
+    assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Review与阻塞问题');
+    assert.equal(await page.evaluate(() => document.activeElement.parentElement.open), true);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+
+    await page.evaluate(id => {
+      const row = window.states.a.dev.executions.find(execution => execution.id === id);
+      row.status = 'generating';
+      row.events.push({ type: 'coding_round', round: 2 });
+    }, current.id);
+    await refresh(page);
+    assert.equal(await role('coding').getAttribute('data-state'), 'running');
+    assert.equal(await role('testing').getAttribute('data-state'), 'waiting');
+    assert.equal(await action.isDisabled(), true);
+    assert.equal(await monitor.locator('.pe-role-context').getAttribute('title'), '');
+
+    await records(page).selectOption(previous.id);
+    await monitor.getByText(/历史运行/u).waitFor();
+    assert.equal(await role('testing').getAttribute('data-state'), 'failed');
+    assert.equal(await action.isDisabled(), true);
+  }
+});

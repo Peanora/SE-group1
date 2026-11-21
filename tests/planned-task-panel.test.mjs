@@ -105,7 +105,12 @@ for (const width of [1440, 390]) test(`new task panel ${width}px shows separate 
     for (const field of ['SELF_', 'HTTP_', 'EDGE_']) assert.ok(body.includes(field), `${width}/${i}/${field}`);
   }
   assert.match(await taskCards(page).nth(1).innerText(), /TASK_A/u); assert.match(await taskCards(page).nth(1).locator('pre').innerText(), /BLOCK_B/u);
-  assert.ok((await taskCards(page).nth(1).locator('p').innerText()).includes(marker)); assert.match(await taskCards(page).nth(1).locator('pre').innerText(), /proposal_invalid/u);
+  assert.ok((await taskCards(page).nth(1).locator(':scope > p').innerText()).includes(marker)); assert.match(await taskCards(page).nth(1).locator('pre').innerText(), /proposal_invalid/u);
+  const firstRoles = taskCards(page).nth(0).getByRole('region', { name: '任务角色进度' });
+  const secondRoles = taskCards(page).nth(1).getByRole('region', { name: '任务角色进度' });
+  assert.equal(await firstRoles.locator('[data-role="review"]').getAttribute('data-state'), 'done');
+  assert.equal(await secondRoles.locator('[data-role="testing"]').getAttribute('data-state'), 'running');
+  assert.equal(await secondRoles.locator('[data-role="review"]').getAttribute('data-state'), 'waiting');
   const estimate = page.getByText(/费用估算：未知.*未配置模型单价/u);
   assert.equal(await estimate.isVisible(), true);
   assert.equal(await page.locator('img').count(), 0); assert.equal(await page.evaluate(() => window.injected), undefined); assert.equal(await download(page).count(), 0);

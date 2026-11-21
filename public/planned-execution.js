@@ -3,6 +3,18 @@ const WORKING = new Set(['reserved', 'preparing', 'checking_environment', 'gener
 const STATES = { reserved: '已受理，等待准备', preparing: '准备工作区', checking_environment: '检查执行环境', generating: '编码与修订', self_check: '运行编码自检', validating: '独立测试与审查', restoring_delivery: '核对同版本历史交付，未调用模型', accepted: '本次检查已结束', diagnostic_passed: '诊断检查通过，未计为软件验收', failed: '开发执行失败', stopped: '已确认停止', timed_out: '已达到时长上限', cancel_requested: '已请求停止，等待确认', reconciliation_required: '状态待核对，尚未确认停止' };
 Object.assign(STATES, { running: '按依赖执行真实任务', proposal_rejected: '文件建议未通过，正在预算内纠正', merging: '合并已验收候选', pause_requested: '已请求暂停，等待在途任务保存', paused: '已暂停派发新任务', paused_recovery_ready: '安全暂停点已保存，等待恢复', recovery_requested: '正在核对安全暂停点并恢复任务' });
 const PREVIEW_STATES = { preparing: '准备演示副本', starting: '正在启动预览', running: '预览运行中', stopping: '已请求停止预览，等待确认', stopped: '预览已确认停止', reconciliation_required: '预览状态待核对，尚未确认停止' };
+const COMMIT = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
+const ROLES = [
+  { id: 'coding', title: '编码与自检', evidence: '查看编码记录' },
+  { id: 'testing', title: '独立测试', evidence: '查看测试结果' },
+  { id: 'review', title: '代码审查', evidence: '查看审查记录' },
+];
+const ROLE_STATES = {
+  coding: { waiting: '等待派发', running: '正在编码', checking: '正在自检', done: '候选已固定', failed: '自检未通过', self_incomplete: '自检未取得通过结论', incomplete: '本轮未固定候选', unknown: '状态待核对' },
+  testing: { waiting: '等待可测试的候选', ready: '等待开始检查', running: '正在检查', done: '独立测试已通过', failed: '检查未通过', incomplete: '未取得完整结果', unknown: '状态待核对' },
+  review: { waiting: '等待测试通过', running: '正在审查', done: '审查已完成', failed: '有阻塞意见', incomplete: '未取得有效结论', unknown: '状态待核对' },
+};
+const CONTROL_HOLDS = new Set(['paused', 'paused_recovery_ready', 'recovery_requested', 'cancel_requested', 'reconciliation_required', 'restoring_delivery']);
 const STYLE = `
 .planned-execution{margin-top:20px;border:1px solid #e2e9f3;border-radius:12px;background:#fff;color:#344c6d;font:13px/1.8 "Microsoft YaHei",sans-serif;min-width:0}.planned-execution *{box-sizing:border-box;min-width:0}.planned-execution [hidden]{display:none!important}
 .planned-execution .pe-head,.planned-execution .pe-body{padding:18px 20px}.planned-execution .pe-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;border-bottom:1px solid #e2e9f3}.planned-execution h2{margin:0;font-size:18px}.planned-execution h3{font-size:14px;margin:16px 0 8px}.planned-execution p,.planned-execution summary{overflow-wrap:anywhere;margin:8px 0}
@@ -11,7 +23,14 @@ const STYLE = `
 .planned-execution textarea{display:block;width:100%;min-height:84px;padding:8px;border:1px solid #ccd8e9;border-radius:6px;background:#fff;color:inherit;font:inherit;resize:vertical}
 .planned-execution .pe-note{padding:10px 12px;background:#f5f8ff;border-left:3px solid #92ade8;overflow-wrap:anywhere}.planned-execution .pe-error{background:#fff2f1;border-color:#bd635a;color:#98463e}.planned-execution .pe-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.planned-execution .pe-result[data-accepted=true]{color:#17856c;font-weight:600}.planned-execution details{border:1px solid #e2e8f1;border-radius:6px;padding:9px 12px;margin:12px 0}.planned-execution summary{cursor:pointer;font-weight:500}.planned-execution pre{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;max-height:300px;overflow:auto;padding:10px;background:#f7f9fc;font:12px/1.8 Consolas,monospace}.planned-execution ol{max-height:260px;overflow:auto;padding-left:24px}.planned-execution li{padding:5px 0;overflow-wrap:anywhere}.planned-execution time{display:block;font-size:11px;color:#73859f}
 .planned-execution .pe-preview{border:1px solid #dce5f3;border-radius:8px;padding:12px;margin:14px 0;background:#fafcff}.planned-execution .pe-preview h3{margin-top:0}.planned-execution .pe-preview-link{color:#315deb;overflow-wrap:anywhere}.planned-execution .pe-graph-scroll,.planned-execution .pe-command-scroll{max-width:100%;overflow:auto;overscroll-behavior-x:contain}.planned-execution .pe-graph-scroll{border:1px solid #e2e8f1;border-radius:6px;background:#f8faff}.planned-execution .pe-graph-canvas{position:relative;margin:0;isolation:isolate}.planned-execution .pe-graph-canvas svg{position:absolute;inset:0;pointer-events:none}.planned-execution .pe-task-node{position:absolute;width:210px;height:126px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:3px;text-align:left;background:#fff;overflow:hidden}.planned-execution .pe-task-node[aria-pressed=true]{border-color:#315deb;background:#eef3ff}.planned-execution .pe-task-node[data-status=completed]{border-left:4px solid #17856c}.planned-execution .pe-task-node[data-status=failed]{border-left:4px solid #bd635a}.planned-execution .pe-task-node span{width:100%;overflow-wrap:anywhere}.planned-execution .pe-graph-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.planned-execution .pe-task-node small{font-size:11px}.planned-execution .pe-command-table{border-collapse:collapse;width:100%;min-width:720px;font-size:12px}.planned-execution .pe-command-table th,.planned-execution .pe-command-table td{padding:7px 9px;border-bottom:1px solid #e2e8f1;text-align:left;overflow-wrap:anywhere;max-width:240px;vertical-align:top}.planned-execution .pe-command-table caption{text-align:left;padding:8px 0;color:#73859f}
-@media(max-width:600px){.planned-execution .pe-head,.planned-execution .pe-body{padding:15px 12px}.planned-execution .pe-head{gap:8px}.planned-execution .pe-head button{flex:none;padding:6px 8px}.planned-execution .pe-actions>*{flex:1 1 150px}.planned-execution .pe-primary{width:100%}.planned-execution pre{font-size:11px}}
+.planned-execution .pe-roles{margin:16px 0}.planned-execution .pe-roles h3,.planned-execution .pe-roles h4{margin:0;font-size:14px}.planned-execution .pe-role-context{margin:2px 0 8px;color:#526782}
+.planned-execution .pe-role-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;list-style:none;margin:0;padding:0}
+.planned-execution .pe-role-list li{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:8px 0 0;border-top:2px solid #bbc9db}
+.planned-execution .pe-role-list li:is([data-state=running],[data-state=checking]){border-color:#315deb;color:#2343a2}
+.planned-execution .pe-role-list li[data-state=done]{border-color:#17856c;color:#14624e}
+.planned-execution .pe-role-list li:is([data-state=failed],[data-state=incomplete],[data-state=self_incomplete]){border-color:#bd635a;color:#98463e}
+.planned-execution .pe-role-list button{margin-top:4px;color:#344c6d}
+@media(max-width:600px){.planned-execution .pe-head,.planned-execution .pe-body{padding:15px 12px}.planned-execution .pe-head{gap:8px}.planned-execution .pe-head button{flex:none;padding:6px 8px}.planned-execution .pe-actions>*{flex:1 1 150px}.planned-execution .pe-primary{width:100%}.planned-execution pre{font-size:11px}.planned-execution .pe-role-list{grid-template-columns:1fr}}
 `;
 const contextOf = raw => Object.fromEntries(['projectId', 'runId', 'specRevision', 'planRevision', 'planningStatus'].map(key => [key, typeof raw?.[key] === 'string' ? raw[key] : '']));
 const keyOf = value => JSON.stringify(value);
@@ -20,6 +39,59 @@ const printable = value => { if (value == null) return '尚无记录'; if (typeo
 function previewURL(value) {
   if (typeof value !== 'string' || !/^http:\/\/(?:localhost|127\.0\.0\.1):[0-9]{1,5}\/?$/iu.test(value)) return null;
   try { const url = new URL(value); return url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname) && url.port && Number(url.port) > 0 && Number(url.port) <= 65535 && url.pathname === '/' && !url.username && !url.password && !url.search && !url.hash ? url.href : null; } catch { return null; }
+}
+
+/** Display only milestones published for the same candidate and execution attempt. */
+export function executionRoleProgress(item, task, live = false) {
+  const stage = task ? task.stage : item.status;
+  const active = live && item.active === true && !CONTROL_HOLDS.has(item.status) && (!task || task.status === 'running');
+  const calls = (item.modelCalls ?? []).filter(call => !task || (task.attemptId && call.taskId === task.id && call.attemptId === task.attemptId));
+  const codingCall = calls.findLast(call => call.role === 'coding');
+  const snapshot = (item.reviewHistory ?? []).findLast(entry => task
+    ? task.attemptId && entry.taskId === task.id && entry.attemptId === task.attemptId
+    : entry.candidateCommit === item.candidateCommit);
+  const round = task ? codingCall?.attempt : (item.events ?? []).findLast(event => event.type === 'coding_round')?.round ?? codingCall?.attempt;
+  const writing = stage === 'generating' || stage === 'proposal_rejected';
+  const superseded = snapshot && Number.isSafeInteger(round) && round > snapshot.attempt;
+  const candidate = snapshot?.candidateCommit ?? (task ? task.candidateCommit : item.candidateCommit);
+  const commit = !writing && !superseded && COMMIT.test(candidate ?? '') ? candidate : null;
+  const checks = commit ? (task ? task.checks : item.checks) : null;
+  const reviewStatus = commit ? snapshot?.status ?? checks?.review : null;
+  const reviewing = Boolean(commit && (calls.some(call => call.role === 'review' && call.candidateCommit === commit)
+    || (!task && item.workflow?.stage === 'review')));
+  const tested = reviewing || reviewStatus === 'completed';
+  const testChecks = [...(checks?.http ?? []), ...(checks?.browser ?? [])];
+  const testError = commit && snapshot?.errors?.some(error => error.role === 'test' || error.role === 'browser');
+  const testFailed = testChecks.some(check => check.passed === false);
+  const hasBlockers = (snapshot?.issues ?? checks?.issues ?? []).some(issue => issue.severity === 'blocking' && issue.status !== 'resolved');
+  const unknown = item.status === 'reconciliation_required' || (item.active && !active && ['self_check', 'validating', 'generating', 'proposal_rejected'].includes(stage));
+
+  let coding = 'waiting';
+  if (active && writing) coding = 'running';
+  else if (active && stage === 'self_check') coding = 'checking';
+  else if (checks?.self?.some(check => check.passed === false)) coding = 'failed';
+  else if (commit && !task && item.status === 'failed' && item.workflow?.stage === 'self_check') coding = 'self_incomplete';
+  else if (commit) coding = 'done';
+  else if (unknown) coding = 'unknown';
+  else if (codingCall && (!item.active || task?.status === 'failed')) coding = 'incomplete';
+
+  let testing = commit ? 'ready' : 'waiting';
+  if (tested && (testError || testFailed)) testing = 'unknown';
+  else if (tested) testing = 'done';
+  else if (active && stage === 'validating' && commit) testing = 'running';
+  else if (testError) testing = 'incomplete';
+  else if (testFailed) testing = 'failed';
+  else if (unknown && stage === 'validating') testing = 'unknown';
+  else if (checks) testing = 'incomplete';
+
+  let review = 'waiting';
+  if (reviewStatus === 'completed') review = hasBlockers ? 'failed' : 'done';
+  else if (active && stage === 'validating' && reviewing) review = 'running';
+  else if (unknown && reviewing) review = 'unknown';
+  else if (reviewing || ['error', 'reconciliation_required'].includes(reviewStatus)) review = 'incomplete';
+
+  return { commit, coding, testing, review, codingEvidence: Boolean(codingCall || commit),
+    testingEvidence: Boolean(checks && (testChecks.length || testError)), reviewEvidence: Boolean(reviewing || (reviewStatus && reviewStatus !== 'not_started')) };
 }
 
 /** Only backend current/accepted facts grant actions; POST responses never grant a pass. */
@@ -33,6 +105,48 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
   function button(label, handler, cls) { const element = node('button', label, cls); element.type = 'button'; element.addEventListener('click', handler); return element; }
   function field(label, control) { const element = node('label'); control.setAttribute('aria-label', label); element.append(node('span', label), control); return element; }
   function section(label, parent) { const details = node('details'), pre = node('pre'); pre.tabIndex = 0; details.append(node('summary', label), pre); parent.append(details); return pre; }
+  function focusEvidence(details) {
+    details.open = true;
+    details.querySelector('summary').focus({ preventScroll: true });
+    details.scrollIntoView({ block: 'nearest' });
+  }
+  function createRoleMonitor(forTask = false) {
+    const title = forTask ? '任务角色进度' : '执行角色进度';
+    const element = node('section', null, 'pe-roles');
+    const scope = node('p', null, 'pe-role-context'), list = node('ul', null, 'pe-role-list');
+    const monitor = { element, scope, entries: [], progress: null };
+    element.setAttribute('aria-label', title);
+    element.append(node(forTask ? 'h4' : 'h3', title), scope, list);
+    for (const role of ROLES) {
+      const entry = node('li'), state = node('span');
+      entry.dataset.role = role.id;
+      entry.append(node('strong', role.title), state);
+      const action = forTask ? null : button(role.evidence, () => {
+        if (role.id === 'coding') {
+          const target = monitor.progress.coding === 'self_incomplete' ? refs.list : monitor.progress.commit ? refs.diff : refs.calls;
+          focusEvidence(target.closest('details'));
+        }
+        else focusEvidence((role.id === 'testing' ? refs.checks : refs.review).closest('details'));
+      });
+      if (action) entry.append(action);
+      monitor.entries.push({ role: role.id, entry, state, action });
+      list.append(entry);
+    }
+    return monitor;
+  }
+  function renderRoleMonitor(monitor, item, task) {
+    const progress = executionRoleProgress(item, task, fresh && currentRow(item));
+    monitor.progress = progress;
+    const contextNote = !fresh ? '待刷新核对' : !currentRow(item) ? '历史运行' : '';
+    const candidate = progress.commit ? '最近固定的提交 ' + progress.commit.slice(0, 12) : '本轮尚未固定候选';
+    setText(monitor.scope, [contextNote, candidate].filter(Boolean).join(' · '));
+    monitor.scope.title = progress.commit || '';
+    for (const { role, entry, state, action } of monitor.entries) {
+      entry.dataset.state = progress[role];
+      setText(state, ROLE_STATES[role][progress[role]]);
+      if (action) action.disabled = !progress[role + 'Evidence'];
+    }
+  }
   const base = () => `/api/projects/${encodeURIComponent(context.projectId)}/runs/${encodeURIComponent(context.runId)}/development-executions`;
   const proposalPath = () => `/api/projects/${encodeURIComponent(context.projectId)}/runs/${encodeURIComponent(context.runId)}/verification-plans`;
   const confirmed = () => context.planningStatus === 'confirmed' && HASH.test(context.specRevision) && HASH.test(context.planRevision);
@@ -161,6 +275,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     const scope = section('规格、来源和预算', setup), executionSelect = node('select');
     const recordSelect = field('开发执行记录', executionSelect); body.append(recordSelect);
     const empty = node('p', '尚无开发执行记录。'), detail = node('div'), result = node('p', null, 'pe-result'), status = node('p'), failure = node('p', null, 'pe-note pe-error'), facts = node('p'), actions = node('div', null, 'pe-actions');
+    const roleMonitor = createRoleMonitor();
     const failureHelpBox = node('div', null, 'pe-note pe-error'), failureTitle = node('strong'), failureDetail = node('p'), failureNext = node('p');
     const prepareRevision = button('准备清单修订', () => { const item = row(); if (mayReviseChecklist(item)) void reviseChecklist(item.id); }, 'pe-primary');
     const technicalFailure = button('展开技术检查', () => {
@@ -173,7 +288,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     const repairNote = node('textarea'), repairNoteField = field('修复说明（选填）', repairNote);
     repairNote.maxLength = 2000; repairNote.placeholder = '写明已观察到的症状或代码位置。说明会随修复请求发送给编码模型，请避免填写凭据。';
     const repairInfo = node('p', '修复会复用所选执行的源码。新代码会重新跑测试与审查。', 'pe-note');
-    const repair = button('保留代码并修复', () => { void perform('repair'); }), cancel = button('请求停止本次开发', () => { void perform('cancel'); }), download = node('a', '下载当前已验收源码', 'pe-download'); download.rel = 'noreferrer'; actions.append(repair, cancel, download); detail.append(result, status, failureHelpBox, failure, facts, repairInfo, repairNoteField, actions);
+    const repair = button('保留代码并修复', () => { void perform('repair'); }), cancel = button('请求停止本次开发', () => { void perform('cancel'); }), download = node('a', '下载当前已验收源码', 'pe-download'); download.rel = 'noreferrer'; actions.append(repair, cancel, download); detail.append(result, status, roleMonitor.element, failureHelpBox, failure, facts, repairInfo, repairNoteField, actions);
     const pause = button('暂停派发新任务', () => { void perform('pause'); }), resume = button('继续任务开发', () => { void perform('resume'); }), recover = button('从安全暂停点恢复', () => { void perform('recover'); }); actions.append(pause, resume, recover);
     const recoveryNote = node('p', '恢复会保留已完成任务和原有用量，只继续未完成任务；仍使用本次剩余额度和原时限。尚未确认停止的执行不能据此重新启动。', 'pe-note'); detail.append(recoveryNote);
     const previewBox = node('div', null, 'pe-preview'), previewStatus = node('p', null, 'pe-preview-status'), previewInfo = node('p', null, 'pe-note'), previewActions = node('div', null, 'pe-actions');
@@ -187,7 +302,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     const thead = node('thead'); thead.append(commandHead); commandTable.append(thead, commandBody); commandScroll.append(commandTable); commands.append(node('summary', '真实工具执行结果'), commandScroll); detail.append(commands);
     const binding = section('本次冻结预算与代码版本', detail), diff = section('本次代码差异', detail), checks = section('自检、HTTP与浏览器实际检查', detail), review = section('Review与阻塞问题', detail), calls = section('模型请求与实际用量', detail);
     const events = node('details'), list = node('ol'); events.open = !openVerification; events.append(node('summary', '真实执行日志'), list); detail.append(events); body.append(empty, detail); root.append(body); host.append(root);
-    refs = { refreshButton, state, errorBox, noticeBox, prepare, setup, recordSelect, cost, monetary, definitionSelect, consent, start, scope, executionSelect, empty, detail, result, status, failure, failureHelp: failureHelpBox, failureTitle, failureDetail, failureNext, prepareRevision, facts, repair, repairInfo, repairNote, repairNoteField, cancel, pause, resume, recover, recoveryNote, download, previewBox, previewStatus, previewInfo, previewStart, previewStop, previewAnchor, taskSection, taskList, graphNote, graphScroll, graphCanvas, commands, commandBody, binding, diff, checks, review, calls, list };
+    refs = { refreshButton, state, errorBox, noticeBox, prepare, setup, recordSelect, cost, monetary, definitionSelect, consent, start, scope, executionSelect, empty, detail, result, status, roleMonitor, failure, failureHelp: failureHelpBox, failureTitle, failureDetail, failureNext, prepareRevision, facts, repair, repairInfo, repairNote, repairNoteField, cancel, pause, resume, recover, recoveryNote, download, previewBox, previewStatus, previewInfo, previewStart, previewStop, previewAnchor, taskSection, taskList, graphNote, graphScroll, graphCanvas, commands, commandBody, binding, diff, checks, review, calls, list };
     definitionSelect.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } if (action) return; proposalId = definitionSelect.value; consent.checked = false; remember(); render(); });
     executionSelect.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } if (action) return; selectedId = executionSelect.value; selectionEdits++; previewRead = null; remember(); render(); notifyFailures(); void refresh(); });
     consent.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } render(); });
@@ -261,6 +376,8 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     refs.repairNote.disabled = !!action || !!pending || refs.repairNoteField.hidden;
     refs.repairInfo.hidden = refs.repairNoteField.hidden;
     refs.empty.hidden = !!item; refs.detail.hidden = !item; if (!item) return;
+    refs.roleMonitor.element.hidden = item.executionMode === 'task_dag';
+    if (!refs.roleMonitor.element.hidden) renderRoleMonitor(refs.roleMonitor, item);
     const passed = accepted(item); refs.result.dataset.accepted = String(passed); setText(refs.result, passed ? item.checkpoint?.restored === true ? '同版本历史验收已核对，交付资格已恢复；未重新运行测试。' : '当前规格的软件已通过本次验收' : item.status === 'accepted' ? '历史通过记录仅供查看；当前验收许可尚未确认。' : item.status === 'diagnostic_passed' ? '诊断检查通过，不代表当前软件通过验收。' : '当前软件尚未获得完整验收结论。');
     setText(refs.status, item.checkpoint?.restored === true ? '同版本历史交付已恢复' : STATES[item.status] || '未知执行状态，请刷新核对');
     const help = failureHelp(item);
@@ -283,7 +400,12 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     const currentTasks = new Set();
     for (const task of Array.isArray(item.tasks) ? item.tasks : []) {
       if (!ID.test(task.id || '')) continue; currentTasks.add(task.id); let view = taskNodes.get(task.id);
-      if (!view) { const card = node('details'), summary = node('summary'), info = node('p'), evidence = node('pre'); evidence.tabIndex = 0; card.append(summary, info, evidence); refs.taskList.append(card); view = { card, summary, info, evidence }; taskNodes.set(task.id, view); }
+      if (!view) {
+        const card = node('details'), summary = node('summary'), info = node('p'), evidence = node('pre'), roles = createRoleMonitor(true);
+        evidence.tabIndex = 0; card.append(summary, info, roles.element, evidence); refs.taskList.append(card);
+        view = { card, summary, info, evidence, roles }; taskNodes.set(task.id, view);
+      }
+      renderRoleMonitor(view.roles, item, task);
       setText(view.summary, `${task.title || task.id} · ${taskState(task)}`); setText(view.info, `任务 ${task.id}；依赖：${Array.isArray(task.dependsOn) && task.dependsOn.length ? task.dependsOn.join('、') : '无'}；代码：${task.candidateCommit ? task.candidateCommit.slice(0, 12) : '尚未固定'}。${task.error ? ` ${printable(task.error)}` : ''}`);
       setText(view.evidence, { baseCommit: task.baseCommit, candidateCommit: task.candidateCommit, attemptId: task.attemptId, errorCode: task.errorCode ?? null, error: task.error ?? null, usage: task.usage, checks: task.checks, diff: task.diff, history: task.history ?? [] });
     }
