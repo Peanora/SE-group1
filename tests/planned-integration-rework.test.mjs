@@ -25,7 +25,7 @@ function approved() {
 if (!process.env.TASKFLOW_INTEGRATION_REWORK_CHILD) {
   test('integration rework uses actual private gates and task transactions with inert transports', () => {
     const env = { ...process.env, TASKFLOW_INTEGRATION_REWORK_CHILD: '1', LLM_BASE_URL: '', LLM_MODEL: '', LLM_API_KEY: '' }; delete env.NODE_TEST_CONTEXT;
-    const child = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', import.meta.filename], { env, encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
+    const child = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', '--test-reporter=tap', import.meta.filename], { env, encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
     assert.equal(child.status, 0, child.stdout + child.stderr); assert.match(child.stdout, /# fail 0/u);
   });
 } else {
@@ -55,9 +55,17 @@ if (!process.env.TASKFLOW_INTEGRATION_REWORK_CHILD) {
         throw new Error('Review模型输出被截断。');
       }
       const appSource = input.files.find(file => file.path === 'src/app.mjs').content, fixed = appSource.includes('revision=2');
-      const issues = id === 'FINAL' && (!fixed || mode === 'repeat') ? [{ severity: 'blocking', file: 'src/app.mjs', line: 1, message: '上游业务文件存在需修复的阻塞。', evidence: appSource.split('\n')[0].trim() }] : [];
+      const upstreamMessage = '上游业务文件存在需修复的阻塞。';
+      const previousIssues = input.previousIssues ?? [];
+      const knownUpstream = previousIssues.find(issue => issue.file === 'src/app.mjs' && issue.message === upstreamMessage);
+      const upstreamStillOpen = id === 'FINAL' && (!fixed || mode === 'repeat');
+      const issues = upstreamStillOpen && !knownUpstream ? [{ severity: 'blocking', file: 'src/app.mjs', line: 1, message: upstreamMessage, evidence: appSource.split('\n')[0].trim() }] : [];
       if (mode === 'mixed' && id === 'FINAL') issues.push({ severity: 'blocking', file: 'docs/integration.md', line: 1, message: '集成自己负责的说明仍不完整。', evidence: input.files.find(file => file.path === 'docs/integration.md').content.split('\n')[0].trim() });
-      const value = { summary: 'Inert independent review fixture', issues, resolutions: (input.previousIssues ?? []).map(issue => ({ id: issue.id, status: fixed ? 'resolved' : 'open', reason: fixed ? '该业务文件已实际变更并复核。' : '代码未修复。' })) };
+      const resolutions = previousIssues.map(issue => {
+        const resolved = fixed && !(issue.id === knownUpstream?.id && upstreamStillOpen);
+        return { id: issue.id, status: resolved ? 'resolved' : 'open', reason: resolved ? '该业务文件已实际变更并复核。' : '原阻塞仍存在。' };
+      });
+      const value = { summary: 'Inert independent review fixture', issues, resolutions };
       if (mode === 'native-repair') return createProjectReviewModel({ config: { baseUrl: 'https://native-review.synthetic.invalid/v1', model: 'native-local-review', apiKey: '', thinking: undefined, jsonMode: true }, fetchImpl: async () => new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ ...value, issues: value.issues.map(({ evidence, ...issue }) => issue) }) } }], usage: { prompt_tokens: 3, completion_tokens: 4 } })) })(input);
       await input.onReceipt({ model: 'inert-review', finishReason: 'stop', usage: { inputTokens: 3, outputTokens: 4 }, content: JSON.stringify(value) }); return value;
     };
@@ -105,6 +113,10 @@ if (!process.env.TASKFLOW_INTEGRATION_REWORK_CHILD) {
   test('one rework round is bounded and a repeated independent blocker still denies delivery', async () => {
     const { record, code, manifest } = await execute('repeat'); assert.equal(record.status, 'failed'); assert.deepEqual(code, ['BASE', 'FINAL', 'BASE', 'FINAL']); assert.equal(record.reworks.length, 1);
     assert.equal(record.totalModelCalls, 8); assert.equal(isPlannedTaskRunAccepted(record, manifest), false); assert.equal(record.tasks[1].record.errorCode, 'integration_rework_required');
+    const [original] = record.tasks[1].history[0].versions.at(-1).acceptance.issues;
+    const review = record.tasks[1].record.versions.at(-1).acceptance.review;
+    assert.deepEqual(review.issues, []);
+    assert.deepEqual(review.resolutions.map(({ id, status }) => [id, status]), [[original.id, 'open']]);
   });
   test('revocation at the integration handoff cannot schedule a repair', async () => {
     const { record, code } = await execute('stale'); assert.equal(record.status, 'failed'); assert.deepEqual(code, ['BASE', 'FINAL']); assert.equal(record.reworks.length, 0);

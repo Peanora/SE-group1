@@ -53,8 +53,9 @@ async function fixture(t, options = {}) {
         startExecution: input => {
           contexts.push(structuredClone(input.task));
           verifyReservation(); coreCalls++;
-          const callEntries = [{ role: 'coding', kind: 'model', dispatched: true }, { role: 'review', kind: 'model', dispatched: true }];
-          const owned = { id: randomUUID(), ...input.binding, status: mode === 'fake-accepted' ? 'accepted' : 'failed', terminationConfirmed: true, totalModelCalls: 2, modelCalls: callEntries.map(item => ({ ...item, receiptPath: path.join(directory, 'private-receipt.json') })), versions: [], usage: { inputTokens: null, outputTokens: null }, workspace: path.join(directory, 'private-workspace'), reportPath: path.join(directory, 'private-report.json'), error: 'synthetic inert failure' };
+          const callEntries = [{ role: 'coding', kind: 'model', dispatched: true }, { role: 'review', kind: 'model', dispatched: true,
+            candidateCommit: options.versions?.at(0)?.commit, reviewRejection: options.reviewRejection }];
+          const owned = { id: randomUUID(), ...input.binding, status: mode === 'fake-accepted' ? 'accepted' : 'failed', terminationConfirmed: true, totalModelCalls: 2, modelCalls: callEntries.map(item => ({ ...item, receiptPath: path.join(directory, 'private-receipt.json') })), versions: structuredClone(options.versions ?? []), usage: { inputTokens: null, outputTokens: null }, workspace: path.join(directory, 'private-workspace'), reportPath: path.join(directory, 'private-report.json'), error: 'synthetic inert failure' };
           const gate = deferred(); releases.push(() => gate.resolve({ ...owned, status: modeCancelled ? 'stopped' : owned.status }));
           const result = mode === 'foreign' ? { ...owned, id: 'foreign-core', terminationConfirmed: false }
             : mode === 'malformed' ? null
@@ -185,6 +186,39 @@ test('fake accepted inert result cannot authorize source download or regain the 
   const f = await fixture(t, { mode: 'fake-accepted' }); const started = await f.service.start(await f.input()), state = await f.finished();
   assert.equal(state.executions[0].status, 'failed'); assert.equal(state.executions[0].actions.canDownload, false);
   await assert.rejects(f.service.download({ ...ids, executionId: started.execution.id }), error => error.code === 'not_accepted');
+});
+
+test('review history preserves original findings and same-ID resolutions across service restart', async t => {
+  const original = { id: 'ISSUE-fifo', file: 'src/app.mjs', line: 3, severity: 'blocking', status: 'open',
+    message: '跳过队首使后到候补先占位', evidence: 'return requested;', originCommit: '1'.repeat(40) };
+  const versions = [
+    { attempt: 1, commit: '1'.repeat(40), sourceHash: 'a'.repeat(64), acceptance: { issues: [original], errors: [],
+      review: { status: 'completed', summary: '队首规则缺失', resolutions: [], receiptPath: '/private/receipt' } } },
+    { attempt: 2, commit: '2'.repeat(40), sourceHash: 'b'.repeat(64), acceptance: { errors: [],
+      issues: [{ ...original, status: 'resolved', checkedCommit: '2'.repeat(40), resolution: '先选择 sequence 最小的候补' }],
+      review: { status: 'completed', summary: '复核关闭', resolutions: [{ id: original.id, status: 'resolved', reason: '队首先行' }] } } },
+    { attempt: 3, commit: '3'.repeat(40), sourceHash: 'c'.repeat(64), acceptance: { issues: [], errors: [{ role: 'review', code: 'invalid_model_response' }],
+      review: { status: 'error', error: '审查意见重复', diagnostic: { version: 1, reason: 'duplicate_issue', field: 'issues[1]' } } } },
+  ];
+  const rejection = { version: 1, reason: 'duplicate_issue', field: 'issues[1]' };
+  const f = await fixture(t, { versions, reviewRejection: { ...rejection, receiptPath: '/private/rejected-receipt' } });
+  await f.service.start(await f.input());
+  const state = await f.finished(), row = state.executions[0], history = row.reviewHistory;
+  assert.equal(history.length, 3);
+  assert.equal(history[0].issues[0].status, 'open');
+  assert.equal(history[1].issues[0].id, history[0].issues[0].id);
+  assert.equal(history[1].issues[0].status, 'resolved');
+  assert.equal(history[0].candidateCommit, versions[0].commit);
+  assert.equal(history[1].sourceHash, versions[1].sourceHash);
+  assert.equal(history[2].diagnostic.reason, 'duplicate_issue');
+  assert.deepEqual(row.modelCalls[1].reviewRejection, rejection);
+  assert.equal(row.modelCalls[1].candidateCommit, versions[0].commit);
+  assert.equal(JSON.stringify(row.modelCalls).includes('/private/rejected-receipt'), false);
+  assert.equal(JSON.stringify(history).includes('/private/receipt'), false);
+  assert.equal(row.accepted, false);
+  assert.equal(row.actions.canDownload, false);
+  await f.reopen();
+  assert.deepEqual((await f.service.list(ids)).executions[0].reviewHistory, history);
 });
 
 test('shutdown during uncooperative core preserves unknown ownership and reservation; late completion cannot unlock it', async t => {

@@ -14,7 +14,7 @@ const normalizedHash = value => hash(validateProjectFiles(value));
 if (process.env.TASKFLOW_CHECKPOINT_INDEPENDENT_CHILD !== '1') {
   test('independent checkpoint probes use real Git/core brands with trusted verification fixtures (not business acceptance)', async () => {
     await mkdir(evidence, { recursive: true }); const env = { ...process.env, TASKFLOW_CHECKPOINT_INDEPENDENT_CHILD: '1' }; delete env.NODE_TEST_CONTEXT;
-    const child = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', import.meta.filename], { env, encoding: 'utf8', timeout: 60000, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
+    const child = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', '--test-reporter=tap', import.meta.filename], { env, encoding: 'utf8', timeout: 60000, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
     await writeFile(path.join(evidence, 'child-tests.tap'), child.stdout); await writeFile(path.join(evidence, 'child-stderr.txt'), child.stderr);
     assert.equal(child.status, 0, child.stdout + child.stderr); assert.match(child.stdout, /# fail 0/u);
   });

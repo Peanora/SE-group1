@@ -35,7 +35,7 @@ function definition(tasks) { return { version: 1, id: 'dag-resources', name: 'Ta
 if (!process.env.TASKFLOW_TASK_SERVICE_CHILD) {
   test('task graph service retains actual full-run receipts/budget and restores only historical delivery, not parsed task brands', () => {
     const env = { ...process.env, TASKFLOW_TASK_SERVICE_CHILD: '1' }; delete env.NODE_TEST_CONTEXT; for (const key of Object.keys(env)) if (/^LLM_/iu.test(key)) delete env[key];
-    const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', import.meta.filename], { env, encoding: 'utf8', timeout: 120000, windowsHide: true, maxBuffer: 6 * 1024 * 1024 });
+    const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', '--test-reporter=tap', import.meta.filename], { env, encoding: 'utf8', timeout: 120000, windowsHide: true, maxBuffer: 6 * 1024 * 1024 });
     assert.equal(result.status, 0, result.stdout + result.stderr); assert.match(result.stdout, /# fail 0/u);
   });
 } else {
@@ -77,13 +77,19 @@ if (!process.env.TASKFLOW_TASK_SERVICE_CHILD) {
     t.after(async () => { gate.resolve(); barrier.resolve(); for (const item of services.reverse()) await item.shutdown(); assert.equal(path.dirname(root), path.resolve(os.tmpdir())); assert.ok(path.basename(root).startsWith('planned-task-service-')); await rm(root, { recursive: true, force: true }); });
     return { root, data, f, query, get service() { return service; }, async reopen() { await service.shutdown(); await verification.shutdown(); await open(); },
       async input() { return { ...ids, proposalId: approved.id, revision: approved.revision, contractRevision: (await service.list(ids)).capabilities.contractRevision }; },
-      async start() { const cap = (await service.list(ids)).capabilities; assert.equal(cap.budget.attemptModelCalls, 24); assert.equal(cap.budget.totalModelCalls, 72); assert.equal(cap.budget.taskLimit, 4); return (await service.start({ ...ids, proposalId: approved.id, revision: approved.revision, contractRevision: cap.contractRevision })).execution; },
+      async start() { const cap = (await service.list(ids)).capabilities; assert.equal(cap.budget.attemptModelCalls, 24); assert.equal(cap.budget.totalModelCalls, null); assert.equal(cap.budget.unlimited, true); assert.equal(cap.budget.taskLimit, 4); return (await service.start({ ...ids, proposalId: approved.id, revision: approved.revision, contractRevision: cap.contractRevision })).execution; },
       async row(id) { return (await service.list(ids)).executions.find(item => item.id === id); }, async done(id) { return until(async () => { const row = await this.row(id); return row && !row.active ? row : null; }); } };
   }
   test('four tasks are reserved once, actual two-way coding/merge completes, full-run cost/history survives two close/reopen downloads', async t => {
     const f = await fixture(t), started = await f.start(), row = await f.done(started.id);
     assert.equal(row.accepted, true, row.error || row.checkpoint.message); assert.equal(row.executionMode, 'task_dag'); assert.equal(row.maxConcurrentTasks, 2); assert.equal(row.tasks.length, 4); assert.ok(row.tasks.every(item => item.status === 'completed'));
     assert.equal(row.totalModelCalls, 8); assert.deepEqual(row.usage, { inputTokens: 20, outputTokens: 28 }); assert.equal(f.f.models, 8);
+    assert.equal(row.reviewHistory.length, 4);
+    assert.deepEqual(row.reviewHistory.map(item => item.taskId), row.tasks.map(item => item.id));
+    for (const review of row.reviewHistory) {
+      assert.equal(review.status, 'completed');
+      assert.equal(review.candidateCommit, row.tasks.find(item => item.id === review.taskId).candidateCommit);
+    }
     const [ledger] = f.query('SELECT * FROM budgets'); assert.equal(ledger.used_calls, 8); assert.equal(ledger.reserved_calls, 0); assert.equal(ledger.attempts, 1);
     const final = plannedTaskIntegration(f.f.originalGraph, f.f.manifest), checkpointControl = await createPlannedCheckpoints({ rootDir: path.join(f.root, 'planned'), hasCheckpoints: true });
     try {
@@ -99,14 +105,28 @@ if (!process.env.TASKFLOW_TASK_SERVICE_CHILD) {
     let archiveHash; const before = JSON.stringify(ledger);
     for (let generation = 0; generation < 3; generation++) {
       if (generation) await f.reopen(); const restored = await f.row(started.id); assert.equal(restored.accepted, true, restored.checkpoint.message); assert.equal(restored.checkpoint.restored, generation > 0);
+      assert.deepEqual(restored.reviewHistory, row.reviewHistory);
       const zip = (await f.service.download({ ...ids, executionId: started.id })).buffer, entries = readWebArchiveEntries(zip).entries;
       const history = JSON.parse(entries.get('delivery/task-execution.json').content), summary = JSON.parse(entries.get('delivery/verification.json').content);
       assert.equal(history.tasks.length, 4); assert.equal(history.totalModelCalls, 8); assert.equal(summary.modelCalls.length, 8); assert.deepEqual(summary.usage, { inputTokens: 20, outputTokens: 28 });
       assert.equal(history.maxConcurrentTasks, 2); assert.equal((await inspectPlannedArchive(zip)).taskAccepted, false); assert.equal(f.f.models, 8); assert.equal(JSON.stringify(f.query('SELECT * FROM budgets')[0]), before);
       const codeOnly = hash([...entries].filter(([name]) => !name.startsWith('delivery/')).map(([name, file]) => [name, file.sha256])); if (archiveHash) assert.equal(codeOnly, archiveHash); archiveHash = codeOnly;
     }
-    const db = new DatabaseSync(path.join(f.root, 'planned', 'planned.sqlite')); try { const saved = db.prepare('SELECT record FROM executions WHERE id=?').get(started.id), record = JSON.parse(saved.record); record.usage.inputTokens++; db.prepare('UPDATE executions SET record=? WHERE id=?').run(JSON.stringify(record), started.id); } finally { db.close(); }
+    const db = new DatabaseSync(path.join(f.root, 'planned', 'planned.sqlite'));
+    try {
+      const saved = db.prepare('SELECT record FROM executions WHERE id=?').get(started.id), record = JSON.parse(saved.record);
+      record.usage.inputTokens++;
+      // Read-only history must remain ordered even when delivery rejects a changed record.
+      const past = structuredClone(record.tasks[0].record);
+      past.attemptId = 'historical-attempt';
+      past.versions[0].commit = '0'.repeat(40);
+      record.tasks[0].history.push(past);
+      db.prepare('UPDATE executions SET record=? WHERE id=?').run(JSON.stringify(record), started.id);
+    } finally { db.close(); }
     await f.reopen(); const tampered = await f.row(started.id); assert.equal(tampered.accepted, false); assert.equal(tampered.actions.canDownload, false); assert.equal(f.f.models, 8);
+    assert.equal(tampered.reviewHistory[0].attemptId, 'historical-attempt');
+    assert.equal(tampered.reviewHistory[0].candidateCommit, '0'.repeat(40));
+    assert.equal(tampered.reviewHistory[1].candidateCommit, row.tasks[0].candidateCommit);
   });
   test('pause/continue is a backend batch checkpoint, preserves reservations, blocks publication while paused and never starts downstream early', async t => {
     const f = await fixture(t, true), started = await f.start(); await until(() => f.f.calls.includes('base'));

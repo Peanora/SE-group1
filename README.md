@@ -12,6 +12,8 @@
 
 ## 开发入口
 
+李文宇负责的代码审查模块提供预约候补队首的独立演示。在 Node.js 22.21 及以上环境运行 `node scripts/review-reservations.mjs --fixture`，会生成两个 Git 提交，展示源码位置、影响和同一问题编号的修复复核结果，逐提交报告保存在 `output/reservation-review/`。此模式使用离线模型响应。`--model` 模式使用本机 `LLM_*` 配置进行最多两次真实审查并产生模型用量。正式集成流程在 HTTP 和浏览器检查通过后审查同一提交。实现范围、基线依赖及验证记录见[代码审查交接](docs/tasks/project-code-review.md)。
+
 Agent 开发前阅读 [AGENTS.md](AGENTS.md)，其中包含完整开发流程、验证、需求变更、并行修改、数据保护和交接规范。[agent.md](agent.md) 是同一规范的兼容入口，正文统一维护在 AGENTS.md。
 
 当前进展和下一项验收见 [STATUS](docs/STATUS.md)。源码仓库：[Peanora/SE-group1](https://github.com/Peanora/SE-group1)。规范、源码、测试和无秘密的配置示例共同版本管理；`.env`、用户数据和本地产物不上传。

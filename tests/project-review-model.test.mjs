@@ -49,6 +49,41 @@ test('project Review binds evidence to actual lines and explicitly resolves ever
   assert.throws(() => validateProjectReviewResponse({ ...raw, issues: [{ ...issue, evidence: 'invented' }] }, { files, previousIssues }));
 });
 
+test('duplicate findings have a bounded diagnostic and cannot give the same finding two IDs', async () => {
+  const files = [{ path: 'src/queue.mjs', content: 'return waiting.find(row => row.id === requestedId);' }];
+  const issue = { file: files[0].path, line: 1, severity: 'blocking', message: '调度员可绕过队首，后加入的成员可先获得设备。' };
+  const raw = { ...clear, issues: [issue, { ...issue, severity: 'advisory', message: ' ' + issue.message }] };
+  const model = createProjectReviewModel({ config, fetchImpl: async () => reply(raw) });
+  let receipt;
+  await assert.rejects(model({ files, task: '必须按候补加入顺序提升。', allowHistoricalDuplicates: true, onReceipt: value => { receipt = value; } }), error => {
+    const feedback = getProjectReviewResponseFeedback(error);
+    assert.deepEqual(feedback, { version: 1, reason: 'duplicate_issue', field: 'issues[1]' });
+    assert.deepEqual(normalizeProjectReviewResponseFeedback(feedback), feedback);
+    return true;
+  });
+  assert.deepEqual(JSON.parse(receipt.content), raw);
+  const history = { files, allowHistoricalDuplicates: true };
+  const old = decodeProjectReviewResponseV2(receipt.content, history);
+  assert.equal(validateProjectReviewResponse(old, history).issues.length, 2);
+  assert.throws(() => validateProjectReviewResponse(old, { files }), /重复/u);
+  const distinct = { ...raw, issues: [issue, { ...issue, message: '空队列会返回未定义值，无法生成约定的冲突响应。' }] };
+  assert.equal(decodeProjectReviewResponseV2(JSON.stringify(distinct), { files }).issues.length, 2);
+});
+
+test('an existing finding must be rechecked under its original ID even if the new report downgrades severity', () => {
+  const files = [{ path: 'src/queue.mjs', content: 'return waiting.at(-1);' }];
+  const prior = { id: 'FIFO-1', file: files[0].path, line: 1, severity: 'blocking', message: '提升队尾会跳过先加入的成员。', evidence: files[0].content };
+  const context = { files, previousIssues: [prior] };
+  const issue = { file: prior.file, line: prior.line, severity: 'advisory', message: prior.message };
+  const resolutions = [{ id: prior.id, status: 'resolved', reason: '已复查。' }];
+  const repeated = { ...clear, issues: [issue], resolutions };
+  assert.throws(() => decodeProjectReviewResponseV2(JSON.stringify(repeated), context), error =>
+    getProjectReviewResponseFeedback(error)?.reason === 'duplicate_issue');
+  assert.throws(() => validateProjectReviewResponse({ ...repeated, issues: [{ ...issue, evidence: prior.evidence }] }, context), /重复/u);
+  const open = [{ id: prior.id, status: 'open', reason: '当前提交仍然从队尾选人。' }];
+  assert.deepEqual(decodeProjectReviewResponseV2(JSON.stringify({ ...clear, resolutions: open }), context).resolutions, open);
+});
+
 test('project Review transport errors hide credentials and cancellation rejects incomplete opinions', async () => {
   const files = [{ path: 'src/app.mjs', content: 'export const app = 1;' }];
   for (const fetchImpl of [async () => { throw new Error(config.apiKey); }, async () => new Response(config.apiKey, { status: 401 })]) {

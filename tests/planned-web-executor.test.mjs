@@ -40,7 +40,7 @@ const task = { title: '确认资源项目', requirements: ['读取资源'], task
 if (!process.env.TASKFLOW_PLANNED_CORE_CHILD) {
   test('planned execution independent probes keep real Git and branded manifests while mocking external verification infrastructure', () => {
     const env = { ...process.env, TASKFLOW_PLANNED_CORE_CHILD: '1' }; delete env.NODE_TEST_CONTEXT;
-    const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', import.meta.filename], { env, encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
+    const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--test', '--test-reporter=tap', import.meta.filename], { env, encoding: 'utf8', timeout: 180000, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
     assert.equal(result.status, 0, result.stdout + result.stderr); assert.match(result.stdout, /# fail 0/u);
   });
 } else {
@@ -111,9 +111,20 @@ if (!process.env.TASKFLOW_PLANNED_CORE_CHILD) {
           return new Response(JSON.stringify({ choices: [{ finish_reason: mode === 'native-review-length' ? 'length' : 'stop', message: { content } }], usage: { prompt_tokens: 7, completion_tokens: 11 } }));
         } })(selected);
       }
-      if (mode === 'blocking-history') return createProjectReviewModel({ config: { baseUrl: 'https://review.synthetic.invalid/v1', model: 'synthetic-native-review', apiKey: '', thinking: undefined, jsonMode: true }, fetchImpl: async () => {
+      if (['blocking-history', 'duplicate-recheck', 'advisory', 'regressed-blocker'].includes(mode)) return createProjectReviewModel({ config: { baseUrl: 'https://review.synthetic.invalid/v1', model: 'synthetic-native-review', apiKey: '', thinking: undefined, jsonMode: true }, fetchImpl: async () => {
         const issue = { severity: 'blocking', file: 'src/app.mjs', line: 1, message: '需要修复原业务条件' };
-        const body = { summary: '明确native格式回归', issues: call === 1 ? [issue] : [], ...(call === 2 ? {} : { resolutions: input.previousIssues.map(item => ({ id: item.id, status: 'resolved', reason: '当前候选已核对原问题' })) }) };
+        if (mode === 'advisory') issue.severity = 'advisory';
+        const duplicate = mode === 'duplicate-recheck' && call > 1;
+        const body = { summary: '明确native格式回归', issues: duplicate ? [issue, issue] : call === 1 ? [issue] : [],
+          ...(mode === 'blocking-history' && call === 2 ? {} : { resolutions: input.previousIssues.map(item => ({ id: item.id, status: 'resolved', reason: '当前候选已核对原问题' })) }) };
+        if (mode === 'regressed-blocker') {
+          if (call === 1) body.issues.push({ ...issue, message: '列表未过滤归档资源' });
+          else {
+            const open = body.resolutions[call === 2 ? 1 : 0];
+            open.status = 'open';
+            open.reason = '本提交仍会返回不符合约定的资源';
+          }
+        }
         return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(body) } }], usage: { prompt_tokens: 7, completion_tokens: 11 } }));
         } })(input);
       if (['truncated-review-history', 'unknown-review-history', 'truncated-current-review'].includes(mode) && call === 1) {
@@ -124,7 +135,6 @@ if (!process.env.TASKFLOW_PLANNED_CORE_CHILD) {
       const value = { summary: '独立审查', issues: mode === 'repeated-review-failure' && call === 1 ? [issue] : [],
         resolutions: input.previousIssues.map(item => ({ id: item.id, status: mode === 'repeated-review-failure' ? 'open' : 'resolved', reason: '当前候选已核对原问题' })),
         model: 'synthetic-review', usage: { inputTokens: 7, outputTokens: 11 } };
-      if (mode === 'blocking-history' && call === 2) value.resolutions = [];
       if (mode !== 'no-review-receipt') await input.onReceipt({ model: value.model, finishReason: mode === 'unknown-finish-current-review' ? 'unknown' : 'stop', usage: value.usage, content: JSON.stringify(value) });
       return value;
     };
@@ -190,6 +200,8 @@ if (!process.env.TASKFLOW_PLANNED_CORE_CHILD) {
     const f = await execute(t, 'truncated-review-history');
     assert.equal(f.record.status, 'failed'); assert.equal(f.record.versions.length, 1); assert.equal(f.seen.code, 1); assert.equal(f.seen.review, 1);
     assert.equal(f.record.versions[0].acceptance.review.status, 'error'); assert.equal(isPlannedWebTaskAccepted(f.record, f.compiled), false);
+    assert.equal(f.record.versions[0].acceptance.status, 'incomplete');
+    assert.equal(f.record.acceptanceStatus, 'incomplete');
     assert.equal(f.record.totalModelCalls, 2); assert.deepEqual(f.record.usage, { inputTokens: 16, outputTokens: 4101 });
     const failed = f.record.modelCalls.find(call => call.role === 'review');
     assert.equal(failed.finishReason, 'length'); assert.equal(failed.requestState, 'completed'); assert.equal(failed.terminationConfirmed, true);
@@ -232,8 +244,52 @@ if (!process.env.TASKFLOW_PLANNED_CORE_CHILD) {
   });
   test('one malformed Review cannot erase the complete previous blocking issue history', async t => {
     const f = await execute(t, 'blocking-history'); assert.equal(f.seen.review, 3); assert.equal(f.seen.previous[1].length, 1); assert.deepEqual(f.seen.previous[2].map(item => item.id), f.seen.previous[1].map(item => item.id));
-    assert.equal(f.record.versions[0].acceptance.status, 'changes_requested'); assert.equal(f.record.versions.length, 2); assert.equal(f.seen.code, 2); assert.equal(f.record.versions[1].acceptance.review.status, 'completed');const reviews=f.record.modelCalls.filter(c=>c.role==='review');assert.equal(reviews[1].candidateCommit,reviews[2].candidateCommit);assert.equal(reviews[1].reviewRejection.reason,'missing_fields');
+    const [first, fixed] = f.record.versions;
+    assert.equal(first.acceptance.status, 'changes_requested');
+    assert.equal(first.acceptance.issues[0].status, 'open');
+    assert.equal(f.record.versions.length, 2); assert.equal(f.seen.code, 2);
+    const [closed] = fixed.acceptance.issues;
+    assert.equal(closed.id, first.acceptance.issues[0].id);
+    assert.equal(closed.originCommit, first.commit);
+    assert.equal(closed.checkedCommit, fixed.commit);
+    assert.equal(closed.status, 'resolved');
+    assert.equal(fixed.acceptance.review.status, 'completed');
+    const reviews = f.record.modelCalls.filter(call => call.role === 'review');
+    assert.equal(reviews[1].candidateCommit, reviews[2].candidateCommit);
+    assert.equal(reviews[1].reviewRejection.reason, 'missing_fields');
     assert.equal(f.record.status, 'accepted'); assert.equal(isPlannedWebTaskAccepted(f.record, f.compiled), true);
+  });
+  test('a duplicate opinion cannot close a previous blocker when the Review budget runs out', async t => {
+    const f = await execute(t, 'duplicate-recheck', { maxCalls: 2, maxReviewCalls: 2 });
+    const [first, recheck] = f.record.versions;
+    assert.notEqual(first.commit, recheck.commit);
+    assert.equal(recheck.acceptance.status, 'incomplete');
+    assert.equal(recheck.acceptance.review.diagnostic.reason, 'duplicate_issue');
+    assert.deepEqual(recheck.acceptance.issues, first.acceptance.issues);
+    assert.equal(recheck.acceptance.issues[0].status, 'open');
+    assert.equal(isPlannedWebTaskAccepted(f.record, f.compiled), false);
+    await inspectPlannedSource({ rootDir: f.outputDir, reportPath: f.record.reportPath, binding, writablePaths: ['src/app.mjs'], expectedRecord: f.record });
+  });
+  test('a source-bound advisory is retained without blocking delivery', async t => {
+    const f = await execute(t, 'advisory');
+    const { acceptance, commit } = f.record.versions[0];
+    assert.equal(acceptance.issues[0].severity, 'advisory');
+    assert.equal(acceptance.issues[0].originCommit, commit);
+    assert.equal(acceptance.review.openBlockingIssues, 0);
+    assert.equal(isPlannedWebTaskAccepted(f.record, f.compiled), true);
+  });
+  test('a blocker closed on the second commit is rechecked alongside its peer on the third commit', async t => {
+    const f = await execute(t, 'regressed-blocker', { maxCalls: 3, maxReviewCalls: 3, timeoutMs: 30000 });
+    const [first, second, third] = f.record.versions;
+    const [a, b] = first.acceptance.issues.map(issue => issue.id);
+    assert.deepEqual(second.acceptance.issues.map(issue => [issue.id, issue.status]), [[a, 'resolved'], [b, 'open']]);
+    assert.deepEqual(JSON.parse(f.seen.feedbacks[2]).issues.map(issue => issue.id), [b]);
+    assert.deepEqual(f.seen.previous[2].map(issue => issue.id), [a, b]);
+    assert.deepEqual(third.acceptance.issues.map(issue => [issue.id, issue.status, issue.checkedCommit]),
+      [[a, 'open', third.commit], [b, 'resolved', third.commit]]);
+    assert.equal(third.acceptance.review.openBlockingIssues, 1);
+    assert.equal(isPlannedWebTaskAccepted(f.record, f.compiled), false);
+    await inspectPlannedSource({ rootDir: f.outputDir, reportPath: f.record.reportPath, binding, writablePaths: ['src/app.mjs'], expectedRecord: f.record });
   });
   test('repair reuses owned source only and rechecks all historical blocking on a new candidate', async t => {
     const prior = await execute(t, 'blocking-history');
