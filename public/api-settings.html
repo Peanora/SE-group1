@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light">
+  <title>API 服务 · Taskflow</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='12' height='12' rx='3' fill='%235135aa'/%3E%3Crect x='17' y='9' width='12' height='12' rx='3' fill='%237866bb'/%3E%3Crect x='7' y='19' width='12' height='12' rx='3' fill='%23b7a9df'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/workbench-theme.css"><link rel="stylesheet" href="/agent-settings.css">
+  <script type="module" src="/agent-settings.js"></script>
+</head>
+<body class="agent-settings-page tf-product" data-settings-page="api">
+  <a class="skip-link" href="#agent-settings-main">跳到 API 服务</a>
+  <aside class="settings-sidebar" aria-label="工作台导航">
+    <a class="settings-brand" href="/" aria-label="Taskflow 工作台首页"><span class="tf-brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><strong>Taskflow</strong></a>
+    <p class="settings-nav-label">工作空间</p>
+    <nav class="settings-navigation">
+      <a href="/"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>项目工作台</a>
+      <a href="/agent-settings.html"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="7" width="16" height="13" rx="4"/><path d="M12 3v4M8 12h.01M16 12h.01M8 16h8"/></svg>Agent 角色</a>
+      <a href="/api-settings.html" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7 3 12l5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>API 服务</a>
+    </nav>
+    <div class="settings-sidebar-foot"><span></span>本地工作空间</div>
+  </aside>
+  <div class="settings-shell">
+    <header class="settings-topbar"><span>工作台 <b aria-hidden="true">/</b> <strong>API 服务</strong></span><a href="/">返回项目</a></header>
+    <main id="agent-settings-main" class="settings-main">
+      <div class="settings-heading"><div><h1>API 服务</h1><p>集中管理模型地址、名称和访问密钥。</p></div><button id="add-agent-provider" type="button" class="button button-primary" disabled><span aria-hidden="true">＋</span> 添加服务</button></div>
+      <p id="agent-settings-error" class="settings-message settings-error" role="alert" hidden></p>
+      <p id="agent-settings-notice" class="settings-message" role="status">正在读取配置…</p>
+      <section id="api-services-section" class="settings-paper" aria-labelledby="providers-heading" hidden>
+        <div class="settings-paper-heading"><div><h2 id="providers-heading">已配置的服务 <span id="provider-count" class="settings-count">0</span></h2><p>在 Agent 角色页分配使用。</p></div></div>
+        <div class="settings-environment"><span class="settings-status-dot" aria-hidden="true"></span><span>环境默认</span><strong id="environment-status">正在核对服务端配置</strong></div>
+        <p id="agent-providers-empty" class="settings-empty">还没有 API 服务。添加服务地址和模型，然后为 Agent 分配。</p>
+        <div id="agent-providers" class="settings-provider-list"></div>
+      </section>
+      <div class="settings-page-note"><p>保存配置不会发起模型请求或产生模型用量。远程服务需要密钥，localhost、127.0.0.1 本机服务可留空。</p><button id="reload-agent-settings" type="button" class="text-button">重新载入配置</button><span>将替换本页尚未保存的修改</span></div>
+    </main>
+  </div>
+  <dialog id="provider-dialog" class="settings-drawer" aria-labelledby="provider-dialog-heading">
+    <form id="provider-form">
+      <header class="settings-drawer-heading"><div><h2 id="provider-dialog-heading">添加 API 服务</h2><p>兼容 Chat Completions 的模型接口</p></div><button type="button" class="settings-close" data-close-provider aria-label="关闭服务编辑">×</button></header>
+      <div class="settings-drawer-content">
+        <p id="provider-error" class="settings-message settings-error" role="alert" hidden></p>
+        <fieldset id="provider-fields" class="settings-fields">
+          <legend class="visually-hidden">服务配置</legend>
+          <label for="provider-name">服务名称</label><input id="provider-name" name="name" maxlength="80" autocomplete="off" placeholder="例如：团队主模型" required>
+          <label for="provider-url">API 基础地址</label><input id="provider-url" name="baseUrl" type="url" maxlength="2000" autocomplete="off" spellcheck="false" placeholder="https://your-service.example/v1" aria-describedby="provider-url-note" required><small id="provider-url-note">填写基础地址，不包含 /chat/completions。</small>
+          <label for="provider-model">模型名称</label><input id="provider-model" name="model" maxlength="200" autocomplete="off" spellcheck="false" placeholder="服务实际支持的模型名称" required>
+          <label for="provider-key">API 密钥</label><input id="provider-key" name="apiKey" type="password" maxlength="4096" autocomplete="new-password" spellcheck="false" aria-describedby="provider-key-note"><small id="provider-key-note">密钥仅保存在本机服务端，页面不会回填。</small>
+          <label id="provider-clear-label" class="settings-checkbox" for="provider-clear" hidden><input id="provider-clear" name="clearKey" type="checkbox">清除已有密钥</label>
+          <details class="settings-advanced"><summary>接口参数</summary><div class="settings-advanced-fields"><label for="provider-json">JSON 输出</label><select id="provider-json" name="jsonMode"><option value="true">发送 JSON 模式参数</option><option value="false">不发送 JSON 模式参数</option></select><label for="provider-thinking">思考参数</label><select id="provider-thinking" name="thinking"><option value="">不发送</option><option value="disabled">disabled</option><option value="enabled">enabled</option></select></div></details>
+        </fieldset>
+      </div>
+      <footer class="settings-drawer-footer"><button type="button" class="button button-outline" data-close-provider>取消</button><button id="save-provider" class="button button-primary" type="submit">保存并应用</button></footer>
+    </form>
+  </dialog>
+</body>
+</html>

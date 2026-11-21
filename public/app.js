@@ -270,7 +270,13 @@ function workflowSteps() {
 }
 function renderDeliveryProgress() {
   const steps = workflowSteps();
-  const upcoming = steps.find(step => ['working', 'failed'].includes(step.state)) ?? steps.find(step => step.state !== 'done');
+  const upcoming = steps.find(step => step.state === 'failed') ?? steps.find(step => step.state === 'working')
+    ?? steps.find(step => step.state !== 'done');
+  const current = upcoming ?? steps.at(-1);
+  $('#delivery-current-title').textContent = current.title;
+  $('#delivery-current-state').textContent = current.text;
+  $('#delivery-current-state').dataset.state = current.state;
+  $('#delivery-done-count').textContent = `${steps.filter(step => step.state === 'done').length} / ${steps.length} 完成`;
   const markup = steps.map(({ id, title, state: status, text, detail }, index) => `<li><button type="button" class="delivery-step" data-delivery-step="${id}" data-focus-key="delivery-${id}" data-state="${status}" ${upcoming?.id === id ? 'aria-current="step"' : ''} ${state.selectionPending || !state.project && id !== 'source' ? 'disabled' : ''}><span aria-hidden="true">${index + 1}</span><strong>${title}</strong><span class="delivery-state">${escape(text)}</span><small>${escape(detail)}</small></button></li>`).join('');
   if (deliveryMarkup !== markup) {
     deliveryMarkup = markup;
@@ -466,7 +472,7 @@ function renderProjects() {
 function renderHeader() {
   $('#project-title').textContent = state.project?.name || '需求编排工作台';
   $('#breadcrumb-project').textContent = state.project?.name || '新项目';
-  $('#project-description').textContent = state.project ? `${state.project.source?.filename || '需求文档'}　${state.project.source?.content?.length?.toLocaleString('zh-CN') || 0} 字　每次编排保留独立运行记录` : '把需求整理成清晰的规格、开发任务与交接文档。';
+  $('#project-description').textContent = state.project ? `${state.project.source?.filename || '需求文档'}　${state.project.source?.content?.length?.toLocaleString('zh-CN') || 0} 字` : '从需求规划到开发验收。';
   $('#source-button').disabled = !state.project;
   $('#onboarding').hidden = !!state.project;
   const runs = sortedRuns();
@@ -528,7 +534,7 @@ function renderControls() {
   $('#run-status').className = `status-tag status-${status}`;
   const clarificationPending = specClarificationPending(run);
   const count = run?.stages?.filter((stage) => stage.status === 'succeeded' && !(clarificationPending && stage.id === 'spec')).length || 0;
-  $('#run-progress').textContent = run ? `${count} / ${run.stages.length} 个阶段已完成${clarificationPending ? '，整理设计规格等待补充' : run.status === 'paused' ? '，当前任务完成后暂停' : ''}` : '导入需求后开始';
+  $('#run-progress').textContent = run ? `${count} / ${run.stages.length} 个规划阶段已完成${clarificationPending ? '，整理设计规格等待补充' : run.status === 'paused' ? '，当前任务完成后暂停' : ''}` : '导入需求后开始';
   $('#workflow-subtitle').textContent = run ? `${run.mode === 'model' ? '模型规划' : '本地规则规划'}　运行 ${run.id.slice(-8)}${run.workflowVersion === 2 ? '　两次人工确认' : '　旧版流程'}` : '六个阶段，两次确认，保留每版依据';
   $('#workflow-confirmation-legend').textContent = run && run.workflowVersion !== 2 ? '旧版流程：导出前确认' : '先确认规格，再确认计划';
   $('#source-history-notice').hidden = !historical;

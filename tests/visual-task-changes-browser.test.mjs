@@ -149,7 +149,8 @@ for (const width of [1440, 390]) test(`真实Edge ${width}px：从任务图编�
   assert.equal(exported.tasks[1].title, changedTitle);
   assert.equal(exported.planRevision, run.planRevision);
   const flow = page.locator('#delivery-workflow');
-  assert.equal(await flow.getByRole('button').count(), 9);
+  await flow.locator('summary').click();
+  assert.equal(await flow.locator('#delivery-steps').getByRole('button').count(), 9);
   assert.equal(await flow.locator('[data-delivery-step="plan-approval"]').getAttribute('data-state'), 'done');
   await flow.locator('[data-delivery-step="coding"]').click();
   const prepare = page.getByRole('button', { name: '去准备验收清单', exact: true });
@@ -199,6 +200,7 @@ test('全流程以当前版本的实际记录更新，并定位验收清单、�
   await page.route(`**${base}/development-executions`, route => route.fulfill({ json: { capabilities: { canStart: approved, contractRevision: revision,
     model: { name: 'fixture' }, budget, reason: approved ? '' : '必须先认可当前联合HTTP与浏览器验收定义。' }, executions: execution ? [execution] : [] } }));
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).click();
+  await page.locator('#delivery-workflow > summary').click();
   const step = id => page.locator(`[data-delivery-step="${id}"]`);
   await step('verification').getByText('待准备清单', { exact: true }).waitFor();
   await page.getByRole('button', { name: '打开验收清单', exact: true }).click();

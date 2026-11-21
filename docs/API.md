@@ -472,6 +472,8 @@ repair用于当前失败候选具有有效、完整、同代码版本的阻塞Re
 可信内部可使用`createApp({verificationPlanningService?,verificationPlanningRootDir?})`注入；null禁用提案接口。不能确认提案检查点时禁止需求发布或项目删除，不降级绕过。服务初始化失败与close均关闭已创建的相关控制器；这些选项不通过HTTP暴露。
 ## 多角色 Agent 与 API 配置
 
+网页 `/agent-settings.html` 编辑角色绑定，`/api-settings.html` 管理服务。两页分别读取同一份配置快照并提交整体版本，服务端以同一个 `revision` 拒绝跨页并发覆盖。
+
 `GET /api/agent-settings` 返回 `{revision,providers,roles,roleDefinitions,environment}`。仅本机工作台可访问；启用团队账号后仅负责人可读写。`providers[]` 含 `id,name,baseUrl,model,hasKey,jsonMode,thinking`，不返回密钥。`roles` 使用 `spec,engineering,verification,coding,review` 五个角色，值为服务 id 或 `env`（沿用环境配置）。`environment` 仅含默认服务的公开配置。
 
 `PUT /api/agent-settings` 接受整体 `{revision,providers,roles}`，成功返回新的脱敏视图。每个服务含 `id,name,baseUrl,model,jsonMode,thinking`，可另传 `apiKey` 与 `clearKey`。密钥省略或空白保留已有值；`clearKey:true` 显式清除。本机地址可无密钥，远程服务须有密钥。已绑定服务不能被删除。`revision` 过期返回 409，字段、地址、绑定或凭据无效返回 400，跨源或非本机请求拒绝。保存配置不请求外部模型。

@@ -1,5 +1,15 @@
 # 首版验证记录
 
+## 2026-11-21 工作台改版与设置分离
+
+- `npm run check` 通过，共 264 个脚本。
+- `node --test --test-concurrency=2 tests/workspace-ui-browser.test.mjs tests/visual-task-changes-browser.test.mjs tests/requirement-clarification-browser.test.mjs` 通过 17/17。真实 Edge 覆盖既有工作区、焦点和草稿保留、计划修订、需求澄清与九步展开后定位验收证据。日志 `output/workbench-redesign/workbench-final.log`。
+- 启用本机当前 MXC 后，`node --test tests/homepage-workflow-browser.test.mjs` 通过 3/3，无跳过。覆盖桌面和 390px 的首屏摘要、键盘展开、刷新折叠，以及使用本机模型夹具的浏览器失败返工、Review 阻塞返工、预览、ZIP 下载及恢复。日志 `output/workbench-redesign/homepage-final.log`。
+- `node --test tests/agent-settings-browser.test.mjs` 通过 3/3。真实 Edge 和临时配置存储验证两个入口的配置隔离、API 抽屉与焦点、跨页并发保护和密码保留、读取失败重试、未保存导航提示、长列表删除反馈和取消删除零写入。`node --test tests/agent-settings.test.mjs tests/agent-settings-http.test.mjs` 通过 14/14。日志 `output/workbench-redesign/settings-browser-final.log` 和 `settings-http.log`。
+- 实际 Edge 截图放在 `output/workbench-redesign/`。工作台和两个设置入口分别检查 1440px 和 390px，工作台额外检查 320px。使用临时项目与测试配置，无异常横向溢出、页面错误或实际供应商模型请求。现有 4317 服务的首页、两个设置路由及主题 CSS 均返回 200。
+
+回归覆盖本轮改动及相邻流程。完整 `npm test` 与真实外部模型未在本轮运行。
+
 ## 2026-11-21 网页多角色与 API 配置
 
 基准 `631e2e055ff9a9400035e981908fbaf41f901b30`。用户原有 `docs/tasks/team-delivery-plan.md` 改动保留。实现记录见 [本轮任务](tasks/agent-api-settings.md)。模型调用仅发往本机夹具，未使用真实供应商密钥或付费 API。所有测试使用临时数据目录。

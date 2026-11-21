@@ -53,6 +53,12 @@ const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', re
 const endpoint = server => `http://127.0.0.1:${server.address().port}`;
 const native = process.env.TASKFLOW_TEST_REAL_SANDBOX === '1' && !!process.env.EXECUTION_SANDBOX_EXE;
 const stage = (page, id) => page.locator(`[data-delivery-step="${id}"]`);
+const flow = page => page.locator('#delivery-workflow');
+async function openFlow(page) {
+  const summary = flow(page).locator('> summary');
+  await summary.waitFor();
+  if (!await flow(page).evaluate(element => element.open)) await summary.click();
+}
 
 test('active development takes precedence over a locked definition and earlier failed drafts', () => {
   const run = { specRevision: 'spec', planRevision: 'plan',
@@ -68,7 +74,7 @@ test('active development takes precedence over a locked definition and earlier f
   assert.equal(history.find(step => step.id === 'verification').text, '历史版本');
 });
 
-test('homepage shows the whole workflow before a project exists on desktop and mobile', { timeout: 45000 }, async t => {
+test('homepage keeps the current step compact and opens the complete workflow with the keyboard on desktop and mobile', { timeout: 45000 }, async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'tf-homepage-'));
   let app, browser;
   t.after(async () => {
@@ -86,7 +92,19 @@ test('homepage shows the whole workflow before a project exists on desktop and m
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 844 });
     await page.goto(endpoint(app.server));
-    await page.getByRole('heading', { name: '项目流程图', exact: true }).waitFor();
+    const summary = flow(page).locator('> summary');
+    await summary.waitFor();
+    await page.locator('#delivery-current-title').getByText('需求输入', { exact: true }).waitFor();
+    assert.equal(await flow(page).evaluate(element => element.tagName), 'DETAILS');
+    assert.equal(await flow(page).evaluate(element => element.open), false);
+    assert.match(await summary.innerText(), /查看完整流程/u);
+    assert.equal(await page.locator('#delivery-current-state').innerText(), '尚未开始');
+    assert.match(await page.locator('#delivery-done-count').innerText(), /0\s*\/\s*9/u);
+    assert.equal(await stage(page, 'source').isVisible(), false);
+    for (const name of ['Agent 角色', 'API 服务']) assert.equal(await page.getByRole('link', { name, exact: true }).filter({ visible: true }).count(), 1);
+    await summary.focus();
+    await page.keyboard.press('Enter');
+    assert.equal(await flow(page).evaluate(element => element.open), true);
     await stage(page, 'source').waitFor();
     const nodes = page.locator('[data-delivery-step]:visible');
     assert.deepEqual(await nodes.evaluateAll(elements => elements.map(element => element.dataset.deliveryStep)),
@@ -99,6 +117,26 @@ test('homepage shows the whole workflow before a project exists on desktop and m
     assert.equal(await page.getByRole('textbox', { name: '你想做什么？' }).isVisible(), true);
     await page.keyboard.press('Escape');
   }
+  await stage(page, 'source').click();
+  await page.getByRole('textbox', { name: '你想做什么？' }).fill(request);
+  await page.getByRole('button', { name: '创建项目', exact: true }).click();
+  await flow(page).locator('> summary').click();
+  assert.equal(await flow(page).evaluate(element => element.open), false);
+  await page.locator('#mode-select').selectOption('local');
+  await page.locator('#start-run').click();
+  await page.locator('#delivery-current-title').getByText('设计规格', { exact: true }).waitFor();
+  await page.locator('#delivery-current-state').getByText('等待补充需求', { exact: true }).waitFor();
+  assert.match(await page.locator('#delivery-done-count').innerText(), /1\s*\/\s*9/u);
+  assert.equal(await flow(page).evaluate(element => element.open), false, '后端进入人工确认停点时不强行展开流程');
+  const { projects: [project] } = await (await page.request.get(endpoint(app.server) + '/api/projects')).json();
+  const { project: saved } = await (await page.request.get(endpoint(app.server) + '/api/projects/' + project.id)).json();
+  assert.equal(saved.runs.at(-1).status, 'awaiting_spec');
+  assert.equal(Boolean(saved.runs.at(-1).spec.clarificationRequired || saved.runs.at(-1).specQuestions.some(question => question.blocking && !question.answer?.trim())), true);
+  await openFlow(page);
+  await stage(page, 'spec').getByText('等待补充需求', { exact: true }).waitFor();
+  await page.reload();
+  await page.locator('#delivery-current-state').getByText('等待补充需求', { exact: true }).waitFor();
+  assert.equal(await flow(page).evaluate(element => element.open), false, '刷新后默认回到紧凑摘要');
   assert.deepEqual(errors, []);
 });
 
@@ -181,6 +219,7 @@ test('homepage follows automatic repair of a failed browser round and a blocked 
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.goto(endpoint(app.server));
+  await openFlow(page);
   await stage(page, 'source').click();
   await page.getByRole('textbox', { name: '你想做什么？' }).fill(request);
   await page.getByRole('button', { name: '创建项目', exact: true }).click();
@@ -212,6 +251,7 @@ test('homepage follows automatic repair of a failed browser round and a blocked 
   assert.equal(additional.status(), 202);
   await page.waitForFunction(async url => (await (await fetch(url)).json()).proposals.at(-1)?.status === 'failed', verificationApi);
   await page.reload();
+  await openFlow(page);
   await stage(page, 'verification').getByText('待确认清单', { exact: true }).waitFor();
   await stage(page, 'verification').click();
   await verification.getByLabel('测试提案记录', { exact: true }).selectOption(verifiedDraft.id);
@@ -233,6 +273,7 @@ test('homepage follows automatic repair of a failed browser round and a blocked 
   assert.ok(locked.proposals.some(row => row.status === 'approved'));
   assert.ok(locked.proposals.every(row => row.current === false));
   await page.reload();
+  await openFlow(page);
   await stage(page, 'coding').getByText('正在编码', { exact: true }).waitFor({ timeout: 15000 });
   assert.equal(await stage(page, 'verification').getAttribute('data-state'), 'done');
   assert.equal(await stage(page, 'coding').getAttribute('aria-current'), 'step');
@@ -282,6 +323,7 @@ test('homepage follows automatic repair of a failed browser round and a blocked 
   assert.ok(zip.includes(Buffer.from('src/app.mjs')));
   assert.ok(zip.includes(Buffer.from("request.method !== 'GET'")));
   await page.reload();
+  await openFlow(page);
   await stage(page, 'delivery').getByText('可预览与下载', { exact: true }).waitFor();
   await stage(page, 'delivery').click();
   await download.waitFor();

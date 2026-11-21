@@ -9,22 +9,25 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%23315deb'/%3E%3Cpath d='M10 11h20M20 11v18m-8-8h16' stroke='white' stroke-width='3' fill='none'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/workspace.css">
+  <link rel="stylesheet" href="/workbench-theme.css">
   <script type="module" src="/app.js"></script>
 </head>
-<body>
+<body class="tf-product tf-workbench">
   <a class="skip-link" href="#main">跳到工作区</a>
   <aside class="sidebar" aria-label="项目导航">
     <a class="brand" href="/" aria-label="Taskflow 需求编排台首页">
-      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M8 7h16M16 7v18M8 16h16"/><rect x="4" y="3" width="8" height="8" rx="2"/><rect x="20" y="12" width="8" height="8" rx="2"/><rect x="12" y="21" width="8" height="8" rx="2"/></svg></span>
-      <span><strong>Taskflow</strong><small>需求编排台</small></span>
+      <span class="tf-brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span><strong>Taskflow</strong><small>研发工作台</small></span>
     </a>
     <button class="new-project-button" id="new-project"><span aria-hidden="true">＋</span> 新建项目</button>
     <div class="sidebar-section-title"><span>项目</span><span id="project-count">0</span></div>
     <nav id="project-list" class="project-list" aria-label="项目列表"></nav>
-    <div class="sidebar-bottom">
-      <a href="/agent-settings.html" class="sidebar-help">Agent 与 API 配置</a>
-      <button id="help-button" class="sidebar-help"><span aria-hidden="true">?</span> 使用说明</button>
-      <div class="workspace-label"><span class="local-indicator"></span><div><strong>本地工作区</strong><small>需求规划与开发交接</small></div></div>
+    <div class="sidebar-bottom tf-sidebar-bottom">
+      <nav class="tf-settings-links" aria-label="模型设置">
+        <a href="/agent-settings.html" class="sidebar-help"><span class="tf-nav-icon tf-icon-roles" aria-hidden="true"></span>Agent 角色</a>
+        <a href="/api-settings.html" class="sidebar-help"><span class="tf-nav-icon tf-icon-api" aria-hidden="true"></span>API 服务</a>
+      </nav>
+      <button id="help-button" class="sidebar-help"><span class="tf-nav-icon tf-icon-help" aria-hidden="true">?</span>使用说明</button>
     </div>
   </aside>
 
@@ -41,26 +44,25 @@
         <div class="heading-actions"><label class="visually-hidden" for="run-select">选择运行记录</label><select id="run-select" disabled><option>尚无运行记录</option></select><button class="button button-outline" id="source-button" disabled>查看需求</button></div>
       </section>
 
-      <section id="delivery-workflow" class="delivery-workflow" aria-labelledby="delivery-workflow-heading">
-        <h2 id="delivery-workflow-heading">项目流程图</h2>
-        <ol id="delivery-steps"></ol>
-      </section>
-
-      <details class="workspace-scope"><summary>平台范围与使用说明</summary><p class="field-note" id="platform-default-notice">当前统一按浏览器网页应用规划，Windows通过浏览器使用。技术方案由平台提供，无需填写；不生成原生桌面安装包。</p></details>
       <section id="onboarding" class="onboarding" aria-labelledby="onboarding-title">
         <div class="document-illustration" aria-hidden="true"><svg viewBox="0 0 64 76"><path d="M12 2h28l14 15v55H12Z"/><path d="M40 2v17h14M22 32h22M22 43h22M22 54h14"/></svg><span>.md</span></div>
-        <div class="onboarding-copy"><h2 id="onboarding-title">从一份软件需求开始</h2><p>上传文档或粘贴文字。先核对并确认规格，再审阅开发计划，确认后导出文档。</p><div class="onboarding-actions"><button class="button button-primary" id="onboarding-import">导入需求文档</button><button class="text-button" id="onboarding-sample">载入示例需求</button></div></div>
-        <div class="onboarding-formats"><strong>支持 Markdown、TXT、Word</strong><span>本地规则模式无需配置密钥</span></div>
+        <div class="onboarding-copy"><h2 id="onboarding-title">从一份软件需求开始</h2><p>粘贴需求，或导入 Markdown、TXT、Word 文档。核对规格和计划后，就能继续准备验收。</p><div class="onboarding-actions"><button class="button button-primary" id="onboarding-import">导入需求文档</button><button class="text-button" id="onboarding-sample">载入示例需求</button></div></div>
       </section>
-
+      <section id="workspace-context" class="workspace-context" aria-label="当前进度与下一步" hidden>
+        <div><span id="run-status" class="status-tag status-idle">尚未开始</span><span id="run-progress">导入需求后开始</span><h2 id="workspace-context-title">先导入一份软件需求</h2><p id="workspace-context-note">选择项目后，在这里查看当前步骤和需要处理的问题。</p></div>
+        <button type="button" class="button button-primary" id="workspace-next-root" data-workspace-next>处理当前步骤</button>
+      </section>
+      <details id="delivery-workflow" class="delivery-workflow">
+        <summary aria-controls="delivery-steps">
+          <span class="tf-flow-summary"><span class="tf-flow-label">项目流程</span><span id="delivery-current-title">需求输入</span><span id="delivery-current-state">尚未开始</span></span>
+          <span class="tf-flow-actions"><span id="delivery-done-count">0 / 9 完成</span><span class="tf-flow-action">查看完整流程</span></span>
+        </summary>
+        <ol id="delivery-steps" aria-label="项目流程图"></ol>
+      </details>
       <section class="workspace-run-tools" aria-label="规划运行控制">
         <div class="workflow-controls"><label class="visually-hidden" for="mode-select">规划模式</label><select id="mode-select"><option value="local">本地规则模式</option><option value="model" disabled>模型模式（未配置）</option></select><button class="button button-outline" id="pause-button" hidden>暂停</button><button class="button button-primary" id="start-run" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 8 6-8 6Z"/></svg><span>开始编排</span></button><a class="button button-primary" id="download-bundle" hidden>下载文档包</a></div>
         <p id="planning-charge-notice" class="workspace-charge-notice" hidden></p>
         <details class="workspace-budget"><summary>模型预算与用量详情</summary><p id="planning-model-notice" role="status" hidden></p></details>
-      </section>
-      <section id="workspace-context" class="workspace-context" aria-label="当前进度与下一步">
-        <div><span id="run-status" class="status-tag status-idle">尚未开始</span><span id="run-progress">导入需求后开始</span><h2 id="workspace-context-title">先导入一份软件需求</h2><p id="workspace-context-note">选择项目后，在这里查看当前步骤和需要处理的问题。</p></div>
-        <button type="button" class="button button-primary" id="workspace-next-root" data-workspace-next>处理当前步骤</button>
       </section>
       <nav id="workspace-nav" class="workspace-nav" role="tablist" aria-label="项目工作区">
         <button type="button" id="workspace-tab-plan" role="tab" data-workspace-view="plan" aria-controls="workspace-plan" aria-selected="true">规划与确认</button>
@@ -132,6 +134,7 @@
       <p id="verification-plans-unavailable" hidden>当前服务未开放验收清单。</p>
       </section>
       </div>
+      <details class="workspace-scope"><summary>平台范围</summary><p class="field-note" id="platform-default-notice">当前统一按浏览器网页应用规划，Windows通过浏览器使用。技术方案由平台提供，无需填写；不生成原生桌面安装包。</p></details>
     </main>
   </div>
 
