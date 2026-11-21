@@ -34,24 +34,27 @@ test('refuses to carry a previous candidate through a new round or its early fai
   };
   let progress = executionRoleProgress(item, null, true);
   assert.deepEqual([progress.commit, progress.coding, progress.testing, progress.review], [null, 'running', 'waiting', 'waiting']);
+  assert.equal(progress.lastFixedCommit, firstCommit);
   assert.equal(progress.testingEvidence, false);
   assert.equal(progress.reviewEvidence, false);
 
   Object.assign(item, { status: 'failed', active: false });
   progress = executionRoleProgress(item, null, true);
   assert.deepEqual([progress.commit, progress.coding, progress.testing, progress.review], [null, 'incomplete', 'waiting', 'waiting']);
+  assert.equal(progress.lastFixedCommit, firstCommit);
 });
 
 test('distinguishes failed tests, Review blockers and missing or inconsistent results', () => {
   const snapshot = { attempt: 1, candidateCommit: firstCommit, status: 'not_started' };
   const item = {
-    status: 'failed', active: false, candidateCommit: firstCommit, reviewHistory: [snapshot],
+    status: 'validating', active: true, candidateCommit: firstCommit, reviewHistory: [snapshot],
     workflow: { stage: 'testing' }, checks: { browser: [{ passed: false }] },
   };
-  let progress = executionRoleProgress(item);
+  let progress = executionRoleProgress(item, null, true);
   assert.equal(progress.testing, 'failed');
   assert.equal(progress.review, 'waiting');
 
+  Object.assign(item, { status: 'failed', active: false });
   snapshot.status = 'completed';
   snapshot.issues = [blockingIssue];
   item.workflow.stage = 'review';
@@ -64,6 +67,21 @@ test('distinguishes failed tests, Review blockers and missing or inconsistent re
   assert.equal(progress.testing, 'done');
   snapshot.status = 'error';
   assert.equal(executionRoleProgress(item).review, 'incomplete');
+});
+
+test('whole and task self-check failures leave independent testing unstarted', () => {
+  const whole = { status: 'failed', active: false, candidateCommit: firstCommit, workflow: { stage: 'self_check' }, checks: null };
+  const task = { id: 'A', attemptId: 'current-a', status: 'failed', stage: 'failed', candidateCommit: firstCommit, checks: null };
+  const graph = {
+    status: 'failed', active: false,
+    reviewHistory: [{ taskId: task.id, attemptId: task.attemptId, candidateCommit: firstCommit, status: 'not_started' }],
+  };
+  for (const progress of [executionRoleProgress(whole), executionRoleProgress(graph, task)]) {
+    assert.equal(progress.commit, firstCommit);
+    assert.equal(progress.coding, 'self_incomplete');
+    assert.equal(progress.testing, 'not_started');
+    assert.equal(progress.testingEvidence, false);
+  }
 });
 
 test('a task uses its own live attempt and cannot inherit another task or older attempt', () => {

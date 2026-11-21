@@ -1,5 +1,17 @@
 # 首版验证记录
 
+## 2026-11-21 角色进度和证据回归
+
+- `npm run check` 检查 257 个脚本，全部通过。
+- 设置 `TASKFLOW_TEST_REAL_SANDBOX=1` 和本机 Windows 隔离执行程序后，运行 `node --test --test-concurrency=2 tests/planned-role-progress.test.mjs tests/planned-execution-panel.test.mjs tests/planned-task-panel.test.mjs tests/homepage-workflow-browser.test.mjs tests/reservation-review-demo.test.mjs`。52 项通过，零失败或跳过。日志见 `output/repair-diagnosis/role-progress-final-20261121-173508602.tap`。
+- 真实 Edge 验证桌面和 390px 下的状态、候选提交、错误详情、轮询和键盘焦点。首页流程用本机固定模型响应，在 Windows 隔离环境完成浏览器检查失败及 Review 阻塞后的返工、预览和 ZIP 下载。本轮覆盖上述五个测试文件。
+
+## 2026-11-21 预约候选同版诊断
+
+- 在全新的临时目录中按原冻结清单复跑候选 `5342d192c37e80384db2283c5887f6a71874d07b`。清单 SHA256 为 `eb10c5089efb367fec0df5175491fc2c1ae724bbdfce3c661e09da4414dfc31b`。使用仓库 HTTP 和浏览器验证器串行执行。HTTP/SQLite 78/78，桌面和窄屏真实 Edge 103/103，两个进程组均确认停止。候选和原输入快照的哈希核对一致。摘要见 `output/repair-diagnosis/reservations-isolated-recheck-2026-11-21T09-28-41-113Z-14e2621f.json`。
+- 同版源码复核定位到 `src/bookings.mjs` 的首次预约保存裁剪后的引用，幂等重放却比较请求原值。单独使用新临时库追加诊断，带首尾空格的合法引用第一次提交返回 201。使用同一键重发原 JSON，预期返回 200 和 `replayed: true`，实际是 409 `idempotency_conflict`。复现进程确认停止。摘要见 `output/repair-diagnosis/reservations-replay-probe-502b45c8.json`。
+- 源码复核还发现 `src/waitlist.mjs` 在提升时更新既有审计行的内部预约关联，有待按只追加约定处理。两次运行均使用本地隔离验证器，模型调用为零。正式 Review 和源码包交付仍待修复后的候选通过完整验收。
+
 ## 2026-11-19 首页项目流程图
 
 - 五个相关测试文件共 66 项通过，无失败或跳过。真实 Edge 检查 1440px 与 390px 流程图、键盘发起新建、节点跳转、清单修订后返回确认，以及输入草稿和焦点。使用本地固定模型响应与真实 Windows 隔离执行，完成一次浏览器检查失败及一次 Review 阻塞后的自动返工，最终预览并下载 ZIP。

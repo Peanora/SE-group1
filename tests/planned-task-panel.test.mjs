@@ -93,6 +93,10 @@ async function publish(page, row) { await page.evaluate(row => { window.states.a
 
 for (const width of [1440, 390]) test(`new task panel ${width}px shows separate real task source, checks, blockers and safe evidence without layout overflow`, async t => {
   const page = await pageFor(t, width), row = taskRow(); row.tasks[1].error = marker; row.tasks[1].errorCode = 'proposal_invalid';
+  const task = row.tasks[1];
+  const candidateCommit = task.candidateCommit;
+  task.candidateCommit = null;
+  row.reviewHistory = [{ taskId: task.id, attemptId: task.attemptId, candidateCommit, status: 'not_started' }];
   await page.evaluate(() => { window.states.a.dev.capabilities.costEstimate = { known: false, amount: null, currency: null, reason: '未配置模型单价' }; });
   await setupTasks(page, [row]);
   assert.match(await page.locator('.pe-note').first().innerText(), /后端/u);
@@ -109,14 +113,24 @@ for (const width of [1440, 390]) test(`new task panel ${width}px shows separate 
   const firstRoles = taskCards(page).nth(0).getByRole('region', { name: '任务角色进度' });
   const secondRoles = taskCards(page).nth(1).getByRole('region', { name: '任务角色进度' });
   assert.equal(await firstRoles.locator('[data-role="review"]').getAttribute('data-state'), 'done');
-  assert.equal(await secondRoles.locator('[data-role="testing"]').getAttribute('data-state'), 'running');
+  assert.equal(await secondRoles.locator('[data-role="testing"]').getAttribute('data-state'), 'failed');
   assert.equal(await secondRoles.locator('[data-role="review"]').getAttribute('data-state'), 'waiting');
+  assert.equal(await secondRoles.locator('.pe-role-context').getAttribute('title'), candidateCommit);
+  assert.equal(JSON.parse(await taskCards(page).nth(1).locator('pre').innerText()).candidateCommit, candidateCommit);
   const estimate = page.getByText(/费用估算：未知.*未配置模型单价/u);
   assert.equal(await estimate.isVisible(), true);
   assert.equal(await page.locator('img').count(), 0); assert.equal(await page.evaluate(() => window.injected), undefined); assert.equal(await download(page).count(), 0);
   assert.equal(await pause(page).isEnabled(), true); assert.equal(await resume(page).isDisabled(), true);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
   await page.screenshot({ path: path.join(evidence, `tasks-${width}.png`), fullPage: true });
+
+  task.candidateCommit = candidateCommit;
+  task.stage = 'generating';
+  await publish(page, row);
+  assert.equal(await secondRoles.locator('.pe-role-context').getAttribute('title'), '');
+  const previousEvidence = JSON.parse(await taskCards(page).nth(1).locator('pre').innerText());
+  assert.equal(previousEvidence.candidateCommit, null);
+  assert.equal(previousEvidence.lastFixedCandidateCommit, candidateCommit);
 });
 
 test('each new frozen task-budget field change withdraws previously granted fee consent', async t => {

@@ -11,7 +11,7 @@ const ROLES = [
 ];
 const ROLE_STATES = {
   coding: { waiting: '等待派发', running: '正在编码', checking: '正在自检', done: '候选已固定', failed: '自检未通过', self_incomplete: '自检未取得通过结论', incomplete: '本轮未固定候选', unknown: '状态待核对' },
-  testing: { waiting: '等待可测试的候选', ready: '等待开始检查', running: '正在检查', done: '独立测试已通过', failed: '检查未通过', incomplete: '未取得完整结果', unknown: '状态待核对' },
+  testing: { waiting: '等待可测试的候选', ready: '等待开始检查', not_started: '本轮未开始测试', running: '正在检查', done: '独立测试已通过', failed: '检查未通过', incomplete: '未取得完整结果', unknown: '状态待核对' },
   review: { waiting: '等待测试通过', running: '正在审查', done: '审查已完成', failed: '有阻塞意见', incomplete: '未取得有效结论', unknown: '状态待核对' },
 };
 const CONTROL_HOLDS = new Set(['paused', 'paused_recovery_ready', 'recovery_requested', 'cancel_requested', 'reconciliation_required', 'restoring_delivery']);
@@ -30,6 +30,7 @@ const STYLE = `
 .planned-execution .pe-role-list li[data-state=done]{border-color:#17856c;color:#14624e}
 .planned-execution .pe-role-list li:is([data-state=failed],[data-state=incomplete],[data-state=self_incomplete]){border-color:#bd635a;color:#98463e}
 .planned-execution .pe-role-list button{margin-top:4px;color:#344c6d}
+.planned-execution .pe-role-list button[aria-disabled=true]{color:#526782;background:#f7f9fc;cursor:default}
 @media(max-width:600px){.planned-execution .pe-head,.planned-execution .pe-body{padding:15px 12px}.planned-execution .pe-head{gap:8px}.planned-execution .pe-head button{flex:none;padding:6px 8px}.planned-execution .pe-actions>*{flex:1 1 150px}.planned-execution .pe-primary{width:100%}.planned-execution pre{font-size:11px}.planned-execution .pe-role-list{grid-template-columns:1fr}}
 `;
 const contextOf = raw => Object.fromEntries(['projectId', 'runId', 'specRevision', 'planRevision', 'planningStatus'].map(key => [key, typeof raw?.[key] === 'string' ? raw[key] : '']));
@@ -54,14 +55,15 @@ export function executionRoleProgress(item, task, live = false) {
   const writing = stage === 'generating' || stage === 'proposal_rejected';
   const superseded = snapshot && Number.isSafeInteger(round) && round > snapshot.attempt;
   const candidate = snapshot?.candidateCommit ?? (task ? task.candidateCommit : item.candidateCommit);
-  const commit = !writing && !superseded && COMMIT.test(candidate ?? '') ? candidate : null;
+  const lastFixedCommit = COMMIT.test(candidate ?? '') ? candidate : null;
+  const commit = writing || superseded ? null : lastFixedCommit;
   const checks = commit ? (task ? task.checks : item.checks) : null;
   const reviewStatus = commit ? snapshot?.status ?? checks?.review : null;
   const reviewing = Boolean(commit && (calls.some(call => call.role === 'review' && call.candidateCommit === commit)
     || (!task && item.workflow?.stage === 'review')));
   const tested = reviewing || reviewStatus === 'completed';
   const testChecks = [...(checks?.http ?? []), ...(checks?.browser ?? [])];
-  const testError = commit && snapshot?.errors?.some(error => error.role === 'test' || error.role === 'browser');
+  const testingErrors = commit ? (snapshot?.errors ?? []).filter(error => error.role === 'test' || error.role === 'browser') : [];
   const testFailed = testChecks.some(check => check.passed === false);
   const hasBlockers = (snapshot?.issues ?? checks?.issues ?? []).some(issue => issue.severity === 'blocking' && issue.status !== 'resolved');
   const unknown = item.status === 'reconciliation_required' || (item.active && !active && ['self_check', 'validating', 'generating', 'proposal_rejected'].includes(stage));
@@ -70,17 +72,18 @@ export function executionRoleProgress(item, task, live = false) {
   if (active && writing) coding = 'running';
   else if (active && stage === 'self_check') coding = 'checking';
   else if (checks?.self?.some(check => check.passed === false)) coding = 'failed';
-  else if (commit && !task && item.status === 'failed' && item.workflow?.stage === 'self_check') coding = 'self_incomplete';
+  else if (commit && stage === 'failed' && (task ? !checks : item.workflow?.stage === 'self_check')) coding = 'self_incomplete';
   else if (commit) coding = 'done';
   else if (unknown) coding = 'unknown';
   else if (codingCall && (!item.active || task?.status === 'failed')) coding = 'incomplete';
 
   let testing = commit ? 'ready' : 'waiting';
-  if (tested && (testError || testFailed)) testing = 'unknown';
+  if (tested && (testingErrors.length || testFailed)) testing = 'unknown';
   else if (tested) testing = 'done';
-  else if (active && stage === 'validating' && commit) testing = 'running';
-  else if (testError) testing = 'incomplete';
   else if (testFailed) testing = 'failed';
+  else if (testingErrors.length) testing = 'incomplete';
+  else if (active && stage === 'validating' && commit) testing = 'running';
+  else if (coding === 'failed' || coding === 'self_incomplete') testing = 'not_started';
   else if (unknown && stage === 'validating') testing = 'unknown';
   else if (checks) testing = 'incomplete';
 
@@ -90,8 +93,12 @@ export function executionRoleProgress(item, task, live = false) {
   else if (unknown && reviewing) review = 'unknown';
   else if (reviewing || ['error', 'reconciliation_required'].includes(reviewStatus)) review = 'incomplete';
 
-  return { commit, coding, testing, review, codingEvidence: Boolean(codingCall || commit),
-    testingEvidence: Boolean(checks && (testChecks.length || testError)), reviewEvidence: Boolean(reviewing || (reviewStatus && reviewStatus !== 'not_started')) };
+  return { commit, lastFixedCommit, coding, testing, testingErrors, review, codingEvidence: Boolean(codingCall || commit),
+    testingEvidence: Boolean(testChecks.length || testingErrors.length), reviewEvidence: Boolean(reviewing || (reviewStatus && reviewStatus !== 'not_started')) };
+}
+
+function evidenceCandidate(progress) {
+  return { candidateCommit: progress.commit, lastFixedCandidateCommit: progress.commit ? undefined : progress.lastFixedCommit ?? undefined };
 }
 
 /** Only backend current/accepted facts grant actions; POST responses never grant a pass. */
@@ -122,6 +129,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
       entry.dataset.role = role.id;
       entry.append(node('strong', role.title), state);
       const action = forTask ? null : button(role.evidence, () => {
+        if (!monitor.progress?.[role.id + 'Evidence']) return;
         if (role.id === 'coding') {
           const target = monitor.progress.coding === 'self_incomplete' ? refs.list : monitor.progress.commit ? refs.diff : refs.calls;
           focusEvidence(target.closest('details'));
@@ -144,8 +152,9 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     for (const { role, entry, state, action } of monitor.entries) {
       entry.dataset.state = progress[role];
       setText(state, ROLE_STATES[role][progress[role]]);
-      if (action) action.disabled = !progress[role + 'Evidence'];
+      if (action) action.setAttribute('aria-disabled', String(!progress[role + 'Evidence']));
     }
+    return progress;
   }
   const base = () => `/api/projects/${encodeURIComponent(context.projectId)}/runs/${encodeURIComponent(context.runId)}/development-executions`;
   const proposalPath = () => `/api/projects/${encodeURIComponent(context.projectId)}/runs/${encodeURIComponent(context.runId)}/verification-plans`;
@@ -377,7 +386,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     refs.repairInfo.hidden = refs.repairNoteField.hidden;
     refs.empty.hidden = !!item; refs.detail.hidden = !item; if (!item) return;
     refs.roleMonitor.element.hidden = item.executionMode === 'task_dag';
-    if (!refs.roleMonitor.element.hidden) renderRoleMonitor(refs.roleMonitor, item);
+    const roleProgress = refs.roleMonitor.element.hidden ? null : renderRoleMonitor(refs.roleMonitor, item);
     const passed = accepted(item); refs.result.dataset.accepted = String(passed); setText(refs.result, passed ? item.checkpoint?.restored === true ? '同版本历史验收已核对，交付资格已恢复；未重新运行测试。' : '当前规格的软件已通过本次验收' : item.status === 'accepted' ? '历史通过记录仅供查看；当前验收许可尚未确认。' : item.status === 'diagnostic_passed' ? '诊断检查通过，不代表当前软件通过验收。' : '当前软件尚未获得完整验收结论。');
     setText(refs.status, item.checkpoint?.restored === true ? '同版本历史交付已恢复' : STATES[item.status] || '未知执行状态，请刷新核对');
     const help = failureHelp(item);
@@ -387,7 +396,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
       setText(refs.failureTitle, help.title); setText(refs.failureDetail, help.detail); setText(refs.failureNext, help.nextStep);
       refs.prepareRevision.hidden = !mayReviseChecklist(item);
     }
-    setText(refs.facts, `代码提交：${item.candidateCommit || '尚未固定'}；模型调用${count(item.totalModelCalls)}；输入${count(item.usage?.inputTokens)}、输出${count(item.usage?.outputTokens)} token。`);
+    setText(refs.facts, `最近固定的提交 ${item.candidateCommit || '暂无'}。模型调用 ${count(item.totalModelCalls)} 次，输入${count(item.usage?.inputTokens)}、输出${count(item.usage?.outputTokens)} token。`);
     refs.repair.disabled = !mayRepair(item); refs.cancel.disabled = !mayCancel(item); refs.download.hidden = !mayDownload(item); if (!refs.download.hidden) refs.download.href = `${base()}/${encodeURIComponent(item.id)}/download`; else refs.download.removeAttribute('href');
     if (openVerification) { refs.repair.hidden = refs.repairNoteField.hidden; refs.cancel.hidden = !item.active; refs.previewBox.hidden = !passed && !item.preview; }
     const preview = previewOf(item), link = previewLink(item), previewKnown = preview && Object.hasOwn(PREVIEW_STATES, preview.state);
@@ -405,14 +414,19 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
         evidence.tabIndex = 0; card.append(summary, info, roles.element, evidence); refs.taskList.append(card);
         view = { card, summary, info, evidence, roles }; taskNodes.set(task.id, view);
       }
-      renderRoleMonitor(view.roles, item, task);
-      setText(view.summary, `${task.title || task.id} · ${taskState(task)}`); setText(view.info, `任务 ${task.id}；依赖：${Array.isArray(task.dependsOn) && task.dependsOn.length ? task.dependsOn.join('、') : '无'}；代码：${task.candidateCommit ? task.candidateCommit.slice(0, 12) : '尚未固定'}。${task.error ? ` ${printable(task.error)}` : ''}`);
-      setText(view.evidence, { baseCommit: task.baseCommit, candidateCommit: task.candidateCommit, attemptId: task.attemptId, errorCode: task.errorCode ?? null, error: task.error ?? null, usage: task.usage, checks: task.checks, diff: task.diff, history: task.history ?? [] });
+      const taskProgress = renderRoleMonitor(view.roles, item, task);
+      setText(view.summary, `${task.title || task.id} · ${taskState(task)}`);
+      setText(view.info, `任务 ${task.id}。依赖 ${Array.isArray(task.dependsOn) && task.dependsOn.length ? task.dependsOn.join('、') : '无'}。${task.error ? ` ${printable(task.error)}` : ''}`);
+      setText(view.evidence, { baseCommit: task.baseCommit, ...evidenceCandidate(taskProgress), attemptId: task.attemptId, errorCode: task.errorCode ?? null, error: task.error ?? null, usage: task.usage, checks: task.checks, testingErrors: taskProgress.testingErrors, diff: task.diff, history: task.history ?? [] });
     }
     for (const [id, view] of taskNodes) if (!currentTasks.has(id)) { view.card.remove(); taskNodes.delete(id); }
     renderGraph(item); renderCommands(item);
     setText(refs.binding, { binding: item.binding, budget: item.budget, baseCommit: item.baseCommit, candidateCommit: item.candidateCommit, proposalId: item.proposalId, revision: item.revision }); setText(refs.diff, item.diff || '尚无代码差异。');
-    setText(refs.checks, { self: item.checks?.self ?? null, http: item.checks?.http ?? null, browser: item.checks?.browser ?? null }); setText(refs.review, { status: item.checks?.review ?? '尚未检查', issues: item.checks?.issues ?? [], history: item.reviewHistory ?? [] }); setText(refs.calls, item.modelCalls ?? []);
+    const evidenceVersion = roleProgress ? evidenceCandidate(roleProgress) : { candidateCommit: item.candidateCommit };
+    setText(refs.checks, { ...evidenceVersion,
+      self: item.checks?.self ?? null, http: item.checks?.http ?? null, browser: item.checks?.browser ?? null, errors: roleProgress?.testingErrors ?? [] });
+    setText(refs.review, { ...evidenceVersion, status: item.checks?.review ?? '尚未检查', issues: item.checks?.issues ?? [], history: item.reviewHistory ?? [] });
+    setText(refs.calls, item.modelCalls ?? []);
     const present = new Set(); for (const [index, event] of (Array.isArray(item.events) ? item.events : []).entries()) { const id = `${item.id}:${event.sequence ?? index}`; present.add(id); let eventNode = eventNodes.get(id); if (!eventNode) { const li = node('li'), time = node('time'), message = node('span'); li.append(time, message); refs.list.append(li); eventNode = { li, time, message }; eventNodes.set(id, eventNode); } setText(eventNode.time, `#${event.sequence ?? index + 1} ${event.at || '时间未知'}`); setText(eventNode.message, event.message); }
     for (const [id, eventNode] of eventNodes) if (!present.has(id)) { eventNode.li.remove(); eventNodes.delete(id); }
   }

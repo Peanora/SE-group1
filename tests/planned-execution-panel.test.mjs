@@ -317,6 +317,7 @@ test('role progress follows the selected candidate and opens its evidence with t
     assert.equal(await role('testing').getAttribute('data-state'), 'done');
     assert.equal(await monitor.locator('.pe-role-context').getAttribute('title'), commit);
     const action = monitor.getByRole('button', { name: '查看审查记录', exact: true });
+    const reviewDetail = page.locator('details').filter({ has: page.getByText('Review与阻塞问题', { exact: true }) });
     await action.focus();
     await refresh(page);
     assert.equal(await page.evaluate(() => document.activeElement.textContent), '查看审查记录');
@@ -325,6 +326,9 @@ test('role progress follows the selected candidate and opens its evidence with t
     assert.equal(await page.evaluate(() => document.activeElement.parentElement.open), true);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
 
+    await reviewDetail.locator('summary').click();
+    assert.equal(await reviewDetail.getAttribute('open'), null);
+    await action.focus();
     await page.evaluate(id => {
       const row = window.states.a.dev.executions.find(execution => execution.id === id);
       row.status = 'generating';
@@ -335,10 +339,51 @@ test('role progress follows the selected candidate and opens its evidence with t
     assert.equal(await role('testing').getAttribute('data-state'), 'waiting');
     assert.equal(await action.isDisabled(), true);
     assert.equal(await monitor.locator('.pe-role-context').getAttribute('title'), '');
+    assert.equal(await action.evaluate(button => document.activeElement === button), true);
+    await page.keyboard.press('Enter');
+    assert.equal(await reviewDetail.getAttribute('open'), null);
+    const testsDetail = page.locator('details').filter({ has: page.getByText('自检、HTTP与浏览器实际检查', { exact: true }) });
+    for (const detail of [testsDetail, reviewDetail]) {
+      const previousEvidence = JSON.parse(await detail.locator('pre').textContent());
+      assert.equal(previousEvidence.candidateCommit, null);
+      assert.equal(previousEvidence.lastFixedCandidateCommit, commit);
+    }
 
     await records(page).selectOption(previous.id);
     await monitor.getByText(/历史运行/u).waitFor();
     assert.equal(await role('testing').getAttribute('data-state'), 'failed');
     assert.equal(await action.isDisabled(), true);
   }
+});
+
+test('test evidence includes errors for the selected candidate even without completed checks', async t => {
+  const page = await pageFor(t);
+  const commit = '2'.repeat(40);
+  const oldError = { role: 'test', code: 'earlier_attempt', terminationConfirmed: true };
+  const browserError = { role: 'browser', code: 'verification_failed', terminationConfirmed: true };
+  const reviewError = { role: 'review', code: 'invalid_model_response', terminationConfirmed: true };
+  const current = execution({
+    status: 'validating', candidateCommit: commit,
+    checks: { http: [], browser: [] }, workflow: { stage: 'testing' },
+    reviewHistory: [
+      { attempt: 1, candidateCommit: '1'.repeat(40), status: 'not_started', errors: [oldError] },
+      { attempt: 2, candidateCommit: commit, status: 'not_started', errors: [browserError, reviewError] },
+    ],
+  });
+  await page.evaluate(row => { window.states.a.dev.executions = [row]; }, current);
+  await refresh(page);
+
+  const monitor = page.getByRole('region', { name: '执行角色进度' });
+  assert.equal(await monitor.locator('[data-role="testing"]').getAttribute('data-state'), 'incomplete');
+  const button = monitor.getByRole('button', { name: '查看测试结果', exact: true });
+  assert.equal(await button.isEnabled(), true);
+  await button.click();
+
+  const detail = page.locator('details').filter({ has: page.getByText('自检、HTTP与浏览器实际检查', { exact: true }) });
+  assert.equal(await detail.getAttribute('open'), '');
+  const evidence = JSON.parse(await detail.locator('pre').textContent());
+  assert.equal(evidence.candidateCommit, commit);
+  assert.deepEqual(evidence.http, []);
+  assert.deepEqual(evidence.browser, []);
+  assert.deepEqual(evidence.errors, [browserError]);
 });
