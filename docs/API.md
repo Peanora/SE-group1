@@ -1,5 +1,13 @@
 # 本地原型接口约定
 
+## 自动交付入口
+
+`GET /api/health` 的 `automaticDelivery` 提供能力可用性、启动条件是否就绪和各阶段预算。 `POST /api/projects/:projectId/runs` 可在 `mode:"model"` 下携带 `automaticDelivery:{modelUsageConfirmed:true}`。仅接受本机请求，启用团队权限时须由负责人发起。省略该字段会使用人工确认。自动入口的规格、工程与验收清单预算分别为 4、5、3 次模型请求，系统更低的上限优先。开发仅启动一次，其整体或逐任务预算沿用研发服务。
+
+`GET /api/projects/:projectId/runs/:runId/automatic-delivery` 返回 `enabled`，启用时还返回 `status`、`stage`、`message`、`updatedAt` 和 `downloadAvailable`。阶段使用首页节点 ID，状态为 `queued`、`running`、`needs_clarification`、`failed`、`interrupted` 或 `completed`。已启动的清单和开发分别返回 `proposalId`、`executionId`。业务澄清使用原有规划动作，提交后继续当前运行。下载仍走原研发下载接口，并核对当前执行的交付授权。
+
+自动流程依次调用同版本规格、计划和验收定义的现有校验门禁，并记录自动确认依据。正在自动推进时，互斥的手工审批、发布和开发启动返回 409。工作台重启后继续核对已有开发执行，规划或清单阶段的未完成自动运行记为中断，保留历史和原请求状态。
+
 规划预览保持最长三分钟的本机运行时限。工作台启动时会核对已记录输出超限、进程终止且源码完整的预览停止结果，恢复活动槽并保留原停止证据。停止未知的记录仍待协调。规划预览的交互输出总量由工作台配置为 4 MiB，独立验收和已验收源码的版本绑定沿用原规则。
 
 ## 代码审查历史与诊断

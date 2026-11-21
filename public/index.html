@@ -48,21 +48,22 @@
 
       <section id="onboarding" class="onboarding" aria-labelledby="onboarding-title">
         <div class="document-illustration" aria-hidden="true"><svg viewBox="0 0 64 76"><path d="M12 2h28l14 15v55H12Z"/><path d="M40 2v17h14M22 32h22M22 43h22M22 54h14"/></svg><span>.md</span></div>
-        <div class="onboarding-copy"><h2 id="onboarding-title">从一份软件需求开始</h2><p>粘贴需求，或导入 Markdown、TXT、Word 文档。核对规格和计划后，就能继续准备验收。</p><div class="onboarding-actions"><button class="button button-primary" id="onboarding-import">导入需求文档</button><button class="text-button" id="onboarding-sample">载入示例需求</button></div></div>
+        <div class="onboarding-copy"><h2 id="onboarding-title">从一份软件需求开始</h2><p>粘贴需求，或导入 Markdown、TXT、Word 文档。启动自动开发后，在这里跟踪进度和源码交付。</p><div class="onboarding-actions"><button class="button button-primary" id="onboarding-import">导入需求文档</button><button class="text-button" id="onboarding-sample">载入示例需求</button></div></div>
       </section>
       <section id="workspace-context" class="workspace-context" aria-label="当前进度与下一步" hidden>
         <div><span id="run-status" class="status-tag status-idle">尚未开始</span><span id="run-progress">导入需求后开始</span><h2 id="workspace-context-title">先导入一份软件需求</h2><p id="workspace-context-note">选择项目后，在这里查看当前步骤和需要处理的问题。</p></div>
-        <button type="button" class="button button-primary" id="workspace-next-root" data-workspace-next>处理当前步骤</button>
+        <div class="workspace-context-actions"><button type="button" class="button button-primary" id="workspace-next-root" data-workspace-next>处理当前步骤</button><a class="button button-primary" id="automatic-download" hidden>下载已验收源码</a></div>
       </section>
       <details id="delivery-workflow" class="delivery-workflow">
         <summary aria-controls="delivery-steps">
-          <span class="tf-flow-summary"><span class="tf-flow-label">项目流程</span><span id="delivery-current-title">需求输入</span><span id="delivery-current-state">尚未开始</span></span>
+          <span class="tf-flow-summary"><span class="tf-flow-label">项目流程</span><span id="delivery-current-title">需求输入</span><span id="delivery-current-state" aria-live="polite">尚未开始</span></span>
           <span class="tf-flow-actions"><span id="delivery-done-count">0 / 9 完成</span><span class="tf-flow-action">查看完整流程</span></span>
         </summary>
         <ol id="delivery-steps" aria-label="项目流程图"></ol>
       </details>
-      <section class="workspace-run-tools" aria-label="规划运行控制">
-        <div class="workflow-controls"><label class="visually-hidden" for="mode-select">规划模式</label><select id="mode-select"><option value="local">本地规则模式</option><option value="model" disabled>模型模式（未配置）</option></select><button class="button button-outline" id="pause-button" hidden>暂停</button><button class="button button-primary" id="start-run" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 8 6-8 6Z"/></svg><span>开始编排</span></button><a class="button button-primary" id="download-bundle" hidden>下载文档包</a></div>
+      <section class="workspace-run-tools" aria-label="运行控制">
+        <div class="workflow-controls"><button type="button" class="button button-primary" id="start-automatic" hidden>自动开发并交付</button><label class="visually-hidden" for="mode-select">手动规划模式</label><select id="mode-select"><option value="local">本地规则模式</option><option value="model" disabled>模型模式（未配置）</option></select><button class="button button-outline" id="pause-button" hidden>暂停</button><button class="button button-outline" id="start-run" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 8 6-8 6Z"/></svg><span>开始编排</span></button><a class="button button-outline" id="download-bundle" hidden>下载文档包</a></div>
+        <p id="automatic-unavailable" class="workspace-charge-notice" hidden></p>
         <p id="planning-charge-notice" class="workspace-charge-notice" hidden></p>
         <details class="workspace-budget"><summary>模型预算与用量详情</summary><p id="planning-model-notice" role="status" hidden></p></details>
       </section>
@@ -154,6 +155,18 @@
     </form>
   </dialog>
 
+  <dialog id="automatic-delivery-dialog" class="help-dialog" aria-labelledby="automatic-delivery-title">
+    <form id="automatic-delivery-form">
+      <header class="dialog-header"><h2 id="automatic-delivery-title">启动自动交付</h2><button type="button" class="icon-button" data-close-dialog aria-label="关闭"><span class="close-symbol">×</span></button></header>
+      <div class="dialog-body help-content">
+        <p>系统会整理需求、拟订计划与验收清单，再自动编码、测试、审查和返工。遇到必须补充的业务信息时，会在工作台显示具体问题。完成后可下载当前通过验收的源码。</p>
+        <p id="automatic-budget"></p>
+        <label class="automatic-consent"><input type="checkbox" id="automatic-consent" required><span>我同意本次运行按所示上限调用已配置的模型服务。</span></label>
+      </div>
+      <footer class="dialog-footer"><button type="button" class="button button-outline" data-close-dialog>取消</button><button type="submit" class="button button-primary" id="confirm-automatic" disabled>启动自动交付</button></footer>
+    </form>
+  </dialog>
+
   <dialog id="source-dialog" class="source-dialog" aria-labelledby="source-title"><header class="dialog-header"><div><p class="page-context">所选运行的需求快照</p><h2 id="source-title">需求文档</h2></div><button class="icon-button" data-close-dialog aria-label="关闭"><span class="close-symbol">×</span></button></header><div class="source-dialog-body"><pre id="source-content"></pre></div><footer class="dialog-footer"><button class="button button-outline" data-close-dialog>关闭</button><button class="button button-primary" id="revise-source">修改当前项目需求</button></footer></dialog>
 
   <dialog id="help-dialog" class="help-dialog" aria-labelledby="help-title">
@@ -161,9 +174,8 @@
     <div class="dialog-body help-content">
       <ol>
         <li><strong>说需求。</strong>写一句话或上传文档。系统有问题时，按你的想法回答。</li>
-        <li><strong>看方案。</strong>核对要做的功能和开发安排，再确认。</li>
-        <li><strong>确认怎么验收。</strong>看看每项功能要达到什么效果，认可清单。</li>
-        <li><strong>开发与测试。</strong>查看模型用量后开始。结果出来后，页面会显示下一步。</li>
+        <li><strong>启动自动交付。</strong>先核对并同意模型用量。使用手动编排可以逐版审阅规格、计划和验收清单。</li>
+        <li><strong>跟踪进度。</strong>打开流程图查看开发、独立测试、代码审查和返工。工作台会显示需要补充的需求问题。</li>
         <li><strong>预览与下载。</strong>当前版本通过后，可以先试用，再拿到源码。</li>
       </ol>
       <p>点击首页流程图的节点可打开对应工作区。任务图、文档和日志在「开发任务」中查看。</p>

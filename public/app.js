@@ -14,10 +14,11 @@ import { deliverySteps } from './delivery-workflow.js';
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const escape = (value = '') => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const state = { health: null, projects: [], project: null, run: null, stageId: 'spec', taskId: null, artifactName: 'task.md', tab: 'events', raw: false, busy: false, epoch: 0, selectionPending: false, pollTimer: null, feedback: '', importFile: null, filename: 'requirements.md' };
+const state = { health: null, projects: [], project: null, run: null, automatic: null, stageId: 'spec', taskId: null, artifactName: 'task.md', tab: 'events', raw: false, busy: false, epoch: 0, selectionPending: false, pollTimer: null, feedback: '', importFile: null, filename: 'requirements.md' };
 let sourceReadyProject = '';
 let deliveryMarkup = '';
 let executionMarkup = '';
+let expandedAutomaticRun = '';
 const notices = createWorkspaceNotices({ errorBanner: $('#error-banner'), errorText: $('#error-text'), dismissButton: $('#dismiss-error'), toast: $('#toast'),
   getContext: () => ({ projectId: state.project?.id || '', runId: state.run?.id || '' }), locate: locateWorkspaceProblem });
 const workspaceLayout = createWorkspaceLayout({ getContext: () => ({ projectId: state.selectionPending ? '' : state.project?.id || '', runId: state.run?.id || '', busy: state.busy, runStatus: state.run?.status, historical: historicalRun() }),
@@ -42,6 +43,16 @@ function historicalRun(run = state.run) {
   return !!run && (run.sourceSuperseded === true || (state.project?.currentSourceRevision !== undefined
     && (run.sourceRevision !== state.project.currentSourceRevision || (run.sourceGeneration ?? 0) !== state.project.sourceGeneration)));
 }
+function automaticStatus() {
+  if (state.selectionPending || !state.run?.automaticDelivery || historicalRun()) return null;
+  return state.automatic?.runId === state.run.id ? state.automatic.result : {
+    status: 'queued', stage: 'source', message: '正在读取自动交付进度。',
+  };
+}
+function automaticOwnsRun() {
+  return ['queued', 'running', 'needs_clarification'].includes(automaticStatus()?.status);
+}
+function automaticClarifying() { return automaticStatus()?.status === 'needs_clarification'; }
 function executionContext() {
   if (state.selectionPending) return { projectId: '', runId: '', specRevision: '', planRevision: '', planningStatus: 'unconfirmed' };
   const run = state.run;
@@ -70,7 +81,8 @@ function syncExecutionPanel() {
   if (available && !verificationPlans) {
     verificationPlans = createVerificationPlans({ api: verificationApi, getContext: executionContext, onError: error => showError(error, 'verification'),
       onUpdate: renderDeliveryProgress, onApproved: () => { openDeliveryStage('coding'); void plannedPanel?.refresh(); }, autoRepairOnPropose: true,
-      failureRecovery: state.health.verificationPlanning.failureRecovery === true, canEdit: () => !state.health?.teamAccess?.enabled || state.actorRole === 'owner' });
+      failureRecovery: state.health.verificationPlanning.failureRecovery === true, canEdit: () => !state.health?.teamAccess?.enabled || state.actorRole === 'owner',
+      automated: automaticOwnsRun });
     verificationContextKey = next; void verificationPlans.mount($('#verification-plans-host'));
   } else if (verificationPlans && next !== verificationContextKey) { verificationContextKey = next; void verificationPlans.refresh(); }
   const plannedAvailable = available && state.health?.plannedExecution?.available === true && state.health.plannedExecution.profile === 'planned-web-v1';
@@ -80,6 +92,7 @@ function syncExecutionPanel() {
     plannedPanel = createPlannedExecutionPanel({ api: plannedApi, getContext: executionContext, onError: error => showError(error, 'planned'),
       onFailure: ({ message, context }) => notices.error(message, { source: 'planned', context }),
       onUpdate: renderDeliveryProgress, openVerification: () => openDeliveryStage('verification'), reviseChecklist: prepareChecklistRevision,
+      automated: automaticOwnsRun,
       canReviseChecklist: () => !state.busy && !state.selectionPending && (!state.health?.teamAccess?.enabled || state.actorRole === 'owner') });
     plannedContextKey = next; void plannedPanel.mount($('#planned-execution-host'));
   } else if (plannedPanel && next !== plannedContextKey) { plannedContextKey = next; void plannedPanel.refresh(); }
@@ -264,20 +277,27 @@ function specClarificationPending(run = state.run) {
 function issueCoversSpecQuestions(run = state.run) {
   return specClarificationPending(run) && run?.planningIssue?.stageId === 'spec' && !run.planningIssue.fromInput;
 }
-function runStatusLabel(run = state.run) { return !run ? '' : specClarificationPending(run) ? '等待补充需求' : STATUS[run.status] || run.status; }
+function runStatusLabel(run = state.run) {
+  if (!run) return '';
+  const automatic = { queued: '自动交付准备中', running: '自动交付中', needs_clarification: '等待补充需求', completed: '已通过验收', failed: '自动交付失败', interrupted: '自动交付已中断' }[run.automaticDelivery?.status];
+  return automatic || (specClarificationPending(run) ? '等待补充需求' : STATUS[run.status] || run.status);
+}
 function workflowSteps() {
   return deliverySteps({ project: state.project, run: state.selectionPending ? null : state.run, historical: historicalRun(),
-    verification: verificationPlans?.workflowProgress(), development: plannedPanel?.workflowProgress() });
+    verification: verificationPlans?.workflowProgress(), development: plannedPanel?.workflowProgress(), automatic: automaticStatus() });
 }
 function renderDeliveryProgress() {
   const steps = workflowSteps();
-  const upcoming = steps.find(step => step.state === 'failed') ?? steps.find(step => step.state === 'working')
+  const automatic = automaticStatus();
+  const upcoming = (automatic && automatic.status !== 'completed' ? steps.find(step => step.id === automatic.stage) : null)
+    ?? steps.find(step => step.state === 'failed') ?? steps.find(step => step.state === 'working')
     ?? steps.find(step => step.state !== 'done');
   const current = upcoming ?? steps.at(-1);
   $('#delivery-current-title').textContent = current.title;
-  $('#delivery-current-state').textContent = current.text;
+  if ($('#delivery-current-state').textContent !== current.text) $('#delivery-current-state').textContent = current.text;
   $('#delivery-current-state').dataset.state = current.state;
   $('#delivery-done-count').textContent = `${steps.filter(step => step.state === 'done').length} / ${steps.length} 完成`;
+  if (automatic && expandedAutomaticRun !== state.run.id) { expandedAutomaticRun = state.run.id; $('#delivery-workflow').open = true; }
   const markup = steps.map(({ id, title, state: status, text, detail }, index) => `<li><button type="button" class="delivery-step" data-delivery-step="${id}" data-focus-key="delivery-${id}" data-state="${status}" ${upcoming?.id === id ? 'aria-current="step"' : ''} ${state.selectionPending || !state.project && id !== 'source' ? 'disabled' : ''}><span aria-hidden="true">${index + 1}</span><strong>${title}</strong><span class="delivery-state">${escape(text)}</span><small>${escape(detail)}</small></button></li>`).join('');
   if (deliveryMarkup !== markup) {
     deliveryMarkup = markup;
@@ -315,7 +335,15 @@ function renderExecutionFlow(steps) {
 }
 function renderWorkspaceContext(steps = workflowSteps()) {
   const run = state.run, historical = historicalRun(), context = $('#workspace-context');
+  const automatic = automaticStatus(), download = $('#automatic-download');
+  const downloadReady = automatic?.status === 'completed' && automatic.downloadAvailable === true && Boolean(automatic.executionId);
+  download.hidden = !downloadReady;
+  if (downloadReady) download.href = `${basePath()}/development-executions/${encodeURIComponent(automatic.executionId)}/download`;
+  else download.removeAttribute('href');
   let title = '开始整理项目需求', note = '先选择规划模式，再开始编排。模型模式会按显示的预算产生用量。', action = '查看规划控制', kind = 'start';
+  if (!$('#start-automatic').hidden && !$('#start-automatic').disabled) {
+    title = '从这份需求开始开发'; note = '确认一次模型用量后，系统自动推进开发和独立验收。'; action = '查看启动选项';
+  }
   if (historical) { title = '正在查看历史需求版本'; note = '历史内容只读。修改需求和再次规划会创建新的版本，原记录保留。'; action = '查看当前需求'; kind = 'source'; }
   else if (['awaiting_spec', 'awaiting_review'].includes(run?.status) && run.planningIssue) {
     title = '规划还有信息需要确认'; note = '逐题填写，提交后模型会自动核对是否还需要补充。'; action = '查看问题'; kind = 'review';
@@ -357,9 +385,32 @@ function renderWorkspaceContext(steps = workflowSteps()) {
   } else if (run?.status === 'paused') {
     title = '规划已暂停'; note = '查看已完成阶段和暂停状态，确认后可继续推进。'; action = '查看暂停状态'; kind = 'process';
   }
-  context.dataset.status = run?.status || 'idle';
-  $('#workspace-context-title').textContent = title; $('#workspace-context-note').textContent = note;
+  let visualStatus = run?.status || 'idle';
+  if (automatic) {
+    const current = steps.find(step => step.id === automatic.stage) || steps[0];
+    const presentation = {
+      queued: ['自动交付已启动', '自动交付', 'running', '查看执行进度'],
+      running: [current.text, '自动推进中', 'running', '查看执行进度'],
+      needs_clarification: ['等待补充需求', '需要回答', 'awaiting_spec', '查看问题'],
+      failed: ['自动交付未通过', '未通过', 'failed', '查看失败阶段'],
+      interrupted: ['自动交付已中断', '已中断', 'failed', '查看中断阶段'],
+      completed: [downloadReady ? '已通过验收，可下载源码' : '自动验收已通过', '已验收', 'succeeded', '查看交付'],
+    }[automatic.status];
+    if (presentation) {
+      const [caption, label, status, nextAction] = presentation;
+      title = caption; action = nextAction; visualStatus = status;
+      note = automatic.status === 'completed' && !downloadReady ? '源码暂不可下载。打开交付核对当前版本和预览状态。' : automatic.message || current.detail || current.text;
+      kind = automatic.status === 'needs_clarification' ? 'clarify' : `delivery:${current.id}`;
+      $('#run-status').textContent = label;
+      $('#run-status').className = `status-tag status-${status}`;
+      $('#run-progress').textContent = `${steps.filter(step => step.state === 'done').length} / ${steps.length} 个步骤已完成`;
+    }
+  }
+  context.dataset.status = visualStatus;
+  if ($('#workspace-context-title').textContent !== title) $('#workspace-context-title').textContent = title;
+  if ($('#workspace-context-note').textContent !== note) $('#workspace-context-note').textContent = note;
   const button = $('[data-workspace-next]'); button.textContent = action; button.dataset.nextKind = kind;
+  button.className = `button ${downloadReady ? 'button-outline' : 'button-primary'}`;
   button.disabled = !state.project || state.busy || state.selectionPending;
 }
 function focusWorkspaceTarget(target) {
@@ -414,6 +465,11 @@ function locateWorkspaceProblem({ source = 'planning', stageId, target } = {}) {
 }
 function handleWorkspaceNext() {
   const kind = $('[data-workspace-next]').dataset.nextKind;
+  if (kind === 'clarify') {
+    locateWorkspaceProblem({ source: 'planning', stageId: state.run?.planningIssue?.stageId ?? 'spec',
+      target: $('#spec-repair-host').hidden ? '#review-heading' : '#spec-repair-host' });
+    return;
+  }
   if (kind === 'reviseChecklist') { void plannedPanel?.reviseCurrentChecklist(); return; }
   if (kind?.startsWith('delivery:')) { openDeliveryStage(kind.slice('delivery:'.length)); return; }
   if (kind === 'source') { workspaceLayout.show('source'); return; }
@@ -423,7 +479,7 @@ function handleWorkspaceNext() {
   if (kind === 'review' && state.run?.planningIssue) { locateWorkspaceProblem({ source: 'planning', stageId: state.run.planningIssue.stageId }); return; }
   if (kind === 'process') { $('#workflow-details').open = true; $('#stage-inspector').setAttribute('tabindex', '-1'); $('#stage-inspector').focus({ preventScroll: true }); }
   else if (kind === 'review') { const heading = $('#review-heading'); heading?.setAttribute('tabindex', '-1'); heading?.scrollIntoView({ block: 'nearest' }); heading?.focus({ preventScroll: true }); }
-  else $('#start-run').focus({ preventScroll: true });
+  else focusWorkspaceTarget($('#start-automatic').hidden || $('#start-automatic').disabled ? $('#start-run') : $('#start-automatic'));
 }
 async function prepareChecklistRevision(executionId) {
   if (!state.run || historicalRun() || state.busy || state.selectionPending || !/^[A-Za-z0-9_-]{1,128}$/u.test(executionId)) return;
@@ -443,7 +499,8 @@ async function prepareChecklistRevision(executionId) {
 }
 const planningReview = createPlanningReview({
   container: $('#review-banner'), getState: () => ({ ...state, run: historicalRun() ? { ...state.run, sourceSuperseded: true } : state.run,
-    busy: state.busy || state.selectionPending, taskEditorOpen: $('#task-edit-dialog').open }), submit: reviewAction,
+    busy: state.busy || state.selectionPending || automaticOwnsRun() && !automaticClarifying(),
+    taskEditorOpen: $('#task-edit-dialog').open }), submit: reviewAction,
   refresh: async () => {
     const id = state.run?.id; const epoch = state.epoch;
     const { run } = await api(basePath());
@@ -470,7 +527,8 @@ async function openFeatureEditor() {
   $('.source-changes .sc-feature')?.scrollIntoView({ block: 'start' });
 }
 const specRepair = createSpecRepair({
-  container: $('#spec-repair-host'), getState: () => ({ run: historicalRun() ? { ...state.run, sourceSuperseded: true } : state.run, busy: state.busy || state.selectionPending }),
+  container: $('#spec-repair-host'), getState: () => ({ run: historicalRun() ? { ...state.run, sourceSuperseded: true } : state.run,
+    busy: state.busy || state.selectionPending || automaticOwnsRun() && !automaticClarifying() }),
   submit: reviewAction, refresh: async () => {
     const id = state.run?.id, epoch = state.epoch;
     const { run } = await api(basePath());
@@ -480,7 +538,8 @@ const specRepair = createSpecRepair({
 const planningIssue = createPlanningIssue({
   container: $('#planning-issue-host'),
   getState: () => ({ run: historicalRun() ? null : state.run, busy: state.busy || state.selectionPending,
-    canEdit: !state.health?.teamAccess?.enabled || state.actorRole === 'owner' }),
+    canEdit: (!state.health?.teamAccess?.enabled || state.actorRole === 'owner') && (!automaticOwnsRun() || automaticClarifying()),
+    allowModelExplanation: !state.run?.automaticDelivery }),
   submit: reviewAction,
 });
 
@@ -539,14 +598,24 @@ function renderControls() {
   const charge = $('#planning-charge-notice');
   charge.hidden = $('#mode-select').value !== 'model';
   charge.textContent = `模型模式会产生用量。${specLimitText}。${engineeringLimitText}。`;
-  const historical = historicalRun(run), active = !historical && ACTIVE.has(run?.status);
+  const automatic = automaticStatus(), automaticActive = automaticOwnsRun();
+  const historical = historicalRun(run), active = !historical && (ACTIVE.has(run?.status) || automaticActive);
   const changing = state.busy || state.selectionPending;
+  const autoConfig = state.health?.automaticDelivery, autoStart = $('#start-automatic');
+  const mayOwn = !state.health?.teamAccess?.enabled || state.actorRole === 'owner';
+  const knownAutoBudget = ['specificationMaxCalls', 'engineeringMaxCalls', 'verificationMaxAttempts'].every(key => Number.isSafeInteger(autoConfig?.[key]) && autoConfig[key] > 0);
+  autoStart.hidden = !autoConfig || !mayOwn;
+  const autoReady = autoConfig?.available === true && autoConfig.ready !== false && knownAutoBudget;
+  autoStart.disabled = !state.project || changing || active || planningPending || !autoReady;
+  const autoUnavailable = $('#automatic-unavailable');
+  autoUnavailable.hidden = autoStart.hidden || autoReady;
+  autoUnavailable.textContent = autoConfig?.reason || '自动交付暂不可用。请核对 Agent 角色的模型服务配置。';
   $$('[data-delete-project]').forEach(button => { button.disabled = changing || planningPending && button.dataset.deleteProject === state.project?.id; });
   $('#start-run').disabled = !state.project || changing || active || planningPending || ($('#mode-select').value === 'model' && (!knownSpecBudget || !knownBudget));
   $('#start-run span').textContent = run ? '再次编排' : '开始编排';
   $('#mode-select').disabled = changing || active;
   $('#failure-select').disabled = changing || active;
-  $('#pause-button').hidden = historical || !['running', 'paused'].includes(run?.status);
+  $('#pause-button').hidden = historical || automaticActive || !['running', 'paused'].includes(run?.status);
   $('#pause-button').textContent = run?.status === 'paused' ? '恢复执行' : '暂停';
   $('#pause-button').disabled = changing;
   $('#refresh-button').disabled = state.busy;
@@ -559,10 +628,11 @@ function renderControls() {
   const clarificationPending = specClarificationPending(run);
   const count = run?.stages?.filter((stage) => stage.status === 'succeeded' && !(clarificationPending && stage.id === 'spec')).length || 0;
   $('#run-progress').textContent = run ? `${count} / ${run.stages.length} 个规划阶段已完成${clarificationPending ? '，整理设计规格等待补充' : run.status === 'paused' ? '，当前任务完成后暂停' : ''}` : '导入需求后开始';
-  $('#workflow-subtitle').textContent = run ? `${run.mode === 'model' ? '模型规划' : '本地规则规划'}　运行 ${run.id.slice(-8)}${run.workflowVersion === 2 ? '　两次人工确认' : '　旧版流程'}` : '六个阶段，两次确认，保留每版依据';
-  $('#workflow-confirmation-legend').textContent = run && run.workflowVersion !== 2 ? '旧版流程：导出前确认' : '先确认规格，再确认计划';
+  $('#workflow-subtitle').textContent = run ? `${run.automaticDelivery ? '自动交付' : run.mode === 'model' ? '模型规划' : '本地规则规划'}　运行 ${run.id.slice(-8)}${run.automaticDelivery ? '' : run.workflowVersion === 2 ? '　两次人工确认' : '　旧版流程'}` : '六个阶段，保留每版依据';
+  $('#workflow-confirmation-legend').textContent = run?.automaticDelivery ? '自动校验规格与计划' : run && run.workflowVersion !== 2 ? '旧版流程：导出前确认' : '先确认规格，再确认计划';
   $('#source-history-notice').hidden = !historical;
   planningReview.render(); specRepair.render();
+  if (automaticActive && automatic?.status !== 'needs_clarification') $('#review-banner').hidden = true;
   const issueOpen = planningIssue.render();
   if (issueOpen) $('#spec-repair-host').hidden = true;
   if (issueCoversSpecQuestions(run) && (issueOpen || run.planningIssue.qa?.length === 0 || run.planningIssue.qa?.some(item => item.previousAnswer))) $('#review-banner').hidden = true;
@@ -602,7 +672,7 @@ function renderInspector() {
   const localRecovery = failure?.canUseLocal ? `<button class="button button-outline" data-use-local-engineering ${state.busy ? 'disabled' : ''}>改用本地规则生成架构与任务（不调用模型）</button>` : '';
   const html = `<div class="inspector-eyebrow"><span>阶段详情</span><span class="status-tag status-${escape(visualStatus)}">${escape(visualLabel)}</span></div><h3 class="inspector-title">${escape(stage.title)}</h3><p class="inspector-description">${escape(fallback.description)}</p><dl class="inspector-info"><dt>前置依赖</dt><dd>${stage.dependsOn.length ? stage.dependsOn.map((id) => escape(stageTitle(id))).join('、') : '无，可直接启动'}</dd><dt>尝试次数</dt><dd>${stage.attempt || '尚未执行'}</dd><dt>执行用时</dt><dd>${duration(stage)}</dd><dt>输出产物</dt><dd>${outputHtml}</dd></dl>${stage.error ? `<div class="stage-error">${escape(failureText)}${recovery}${localRecovery}${state.run?.status === 'failed' && stage.status === 'failed' ? `<button class="button button-outline" data-retry="${escape(stage.id)}" data-focus-key="retry-${escape(stage.id)}" ${retryDisabled ? 'disabled' : ''}>${escape(retryLabel)}</button>` : ''}</div>` : ''}<p class="inspector-note">${escape(note)}</p>`;
   replacePreservingFocus($('#stage-inspector'), html);
-  if (historicalRun()) $$('[data-retry], [data-revalidate-spec], [data-revalidate-engineering], [data-use-local-engineering]', $('#stage-inspector')).forEach(button => { button.disabled = true; });
+  if (historicalRun() || automaticOwnsRun()) $$('[data-retry], [data-revalidate-spec], [data-revalidate-engineering], [data-use-local-engineering]', $('#stage-inspector')).forEach(button => { button.disabled = true; });
 }
 function emptyContent(icon, title, description) { return `<div class="empty-records">${ICONS[icon] || ICONS.log}<strong>${escape(title)}</strong><p>${escape(description)}</p></div>`; }
 function renderEvents() {
@@ -628,7 +698,7 @@ function taskLayout(tasks) {
 function renderTasks() {
   const simulation = simulatedTasks.selection(), preview = simulation ? null : planningReview.taskDraft();
   const owner = !state.health?.teamAccess?.enabled || state.actorRole === 'owner';
-  const editable = owner && !simulation && !historicalRun() && canEditPlanTasks(state.run);
+  const editable = owner && !simulation && !historicalRun() && !automaticOwnsRun() && canEditPlanTasks(state.run);
   const note = preview ? '蓝色是改动的任务，橙色是需要一起核对的下游任务。' : !owner ? '当前账户只能查看任务。' : simulation ? '正在查看模拟记录。请返回开发任务图修改计划。'
     : historicalRun() ? '历史需求版本只读。' : editable && state.run.status === 'succeeded' ? '修改后保存为新计划版本，再重新确认计划和验收清单。' : editable ? '选中任务即可修改。' : '计划生成并进入审阅后可以修改任务。';
   const toolbar = `<div class="task-change-toolbar"><div><strong>开发任务</strong><p>${note}</p></div><div>${simulation ? '<button type="button" class="button button-outline" data-return-task-plan>返回任务计划</button>' : ''}<button type="button" class="button button-outline" data-edit-selected-task ${!editable || state.busy || state.selectionPending ? 'disabled' : ''}>修改此任务</button><button type="button" class="button button-primary" data-add-feature ${!owner || !state.project || state.busy || state.selectionPending ? 'disabled' : ''}>新增功能</button></div></div>`;
@@ -724,23 +794,31 @@ function rememberSelection() {
 function selectedSource() { return state.run?.sourceSnapshot ?? state.project?.source; }
 function updateRun(run) {
   const previousStatus = state.run?.status;
+  const previousAutomaticStatus = state.run?.automaticDelivery?.status;
   state.run = run;
   if (state.project) { const i = state.project.runs.findIndex((item) => item.id === run.id); if (i === -1) state.project.runs.push(run); else state.project.runs[i] = run; }
   rememberSelection();
   if (run.status === 'failed' && previousStatus !== 'failed') state.stageId = run.stages.find((stage) => stage.status === 'failed')?.id || state.stageId;
-  if (previousStatus !== run.status) renderHeader();
+  if (previousStatus !== run.status || previousAutomaticStatus !== run.automaticDelivery?.status) renderHeader();
   renderRun();
-  if (previousStatus !== run.status) refreshProjects().catch(() => {});
+  if (previousStatus !== run.status || previousAutomaticStatus !== run.automaticDelivery?.status) refreshProjects().catch(() => {});
 }
 function schedulePoll() {
   clearTimeout(state.pollTimer);
-  if (state.run && (state.run.status === 'running' || state.run.stages?.some((stage) => stage.status === 'running'))) state.pollTimer = setTimeout(pollRun, 650);
+  if (state.run && (automaticOwnsRun() || state.run.status === 'running' || state.run.stages?.some((stage) => stage.status === 'running'))) {
+    state.pollTimer = setTimeout(pollRun, automaticClarifying() ? 1600 : 650);
+  } else if (automaticStatus()?.status === 'completed') state.pollTimer = setTimeout(pollRun, 3000);
 }
 async function pollRun() {
   const epoch = state.epoch; const id = state.run?.id;
   if (!id || !state.project) return;
-  try { const { run } = await api(`${basePath()}`); if (epoch !== state.epoch || id !== state.run?.id) return; updateRun(run); schedulePoll(); }
-  catch (error) { if (epoch !== state.epoch) return; showError(error); state.pollTimer = setTimeout(pollRun, 2500); }
+  const base = basePath();
+  try {
+    const [{ run }, automatic] = await Promise.all([api(base), state.run.automaticDelivery && !historicalRun() ? api(`${base}/automatic-delivery`, { cache: 'no-store' }) : null]);
+    if (epoch !== state.epoch || id !== state.run?.id) return;
+    if (automatic?.enabled === true) state.automatic = { runId: id, result: automatic };
+    updateRun(run); schedulePoll();
+  } catch (error) { if (epoch !== state.epoch) return; showError(error); state.pollTimer = setTimeout(pollRun, 2500); }
 }
 async function refreshProjects() { const { projects } = await api('/api/projects'); state.projects = projects; renderProjects(); }
 async function deleteProject(id) {
@@ -771,40 +849,42 @@ async function selectProject(id, { runId } = {}) {
   try {
     const { project } = await api(`/api/projects/${encodeURIComponent(id)}`);
     if (epoch !== state.epoch) return;
-    state.selectionPending = false;
+    state.selectionPending = false; state.automatic = null;
     state.project = { ...project, runs: project.runs || [] }; state.run = state.project.runs.find((run) => run.id === runId) || sortedRuns()[0] || null;
     rememberSelection();
     state.stageId = state.run?.status === 'failed' ? state.run.stages.find((stage) => stage.status === 'failed')?.id || 'spec' : 'spec';
     state.taskId = null; state.artifactName = 'task.md'; clearError(); renderAll(); schedulePoll();
   } catch (error) { if (epoch === state.epoch) showError(error); }
-  finally { if (epoch === state.epoch) { state.selectionPending = false; renderHeader(); renderControls(); syncExecutionPanel(); } }
+  finally { if (epoch === state.epoch) { state.selectionPending = false; renderHeader(); renderControls(); syncExecutionPanel(); schedulePoll(); } }
 }
 async function selectRun(id) {
   clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   state.selectionPending = true; renderControls(); syncExecutionPanel();
-  try { const { run } = await api(`/api/projects/${encodeURIComponent(state.project.id)}/runs/${encodeURIComponent(id)}`); if (epoch !== state.epoch) return; state.selectionPending = false; state.artifactName = 'task.md'; state.taskId = null; updateRun(run); renderHeader(); schedulePoll(); }
+  try { const { run } = await api(`/api/projects/${encodeURIComponent(state.project.id)}/runs/${encodeURIComponent(id)}`); if (epoch !== state.epoch) return; state.selectionPending = false; state.automatic = null; state.artifactName = 'task.md'; state.taskId = null; updateRun(run); renderHeader(); schedulePoll(); }
   catch (error) { if (epoch === state.epoch) showError(error); }
-  finally { if (epoch === state.epoch) { state.selectionPending = false; renderHeader(); renderControls(); syncExecutionPanel(); } }
+  finally { if (epoch === state.epoch) { state.selectionPending = false; renderHeader(); renderControls(); syncExecutionPanel(); schedulePoll(); } }
 }
-async function startRun(expectedSource) {
+async function startRun(expectedSource, { automatic = false } = {}) {
   if (!state.project || state.busy || state.selectionPending || (!historicalRun() && ACTIVE.has(state.run?.status))) return;
-  if ($('#start-run').disabled) return;
+  if ($(automatic ? '#start-automatic' : '#start-run').disabled) return;
   workspaceLayout.show('plan');
   clearError(); setBusy(true); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   state.selectionPending = true; syncExecutionPanel();
   try {
     const source = expectedSource || { revision: state.project.currentSourceRevision, generation: state.project.sourceGeneration };
-    const options = { mode: $('#mode-select').value, expectedSourceRevision: source.revision, expectedSourceGeneration: source.generation }; if ($('#failure-select').value) options.failOnceStage = $('#failure-select').value;
+    const options = { mode: automatic ? 'model' : $('#mode-select').value, expectedSourceRevision: source.revision, expectedSourceGeneration: source.generation };
+    if (automatic) options.automaticDelivery = { modelUsageConfirmed: true };
+    else if ($('#failure-select').value) options.failOnceStage = $('#failure-select').value;
     const { run } = await api(`/api/projects/${encodeURIComponent(state.project.id)}/runs`, { method: 'POST', body: JSON.stringify(options) });
     if (epoch !== state.epoch) return;
     state.selectionPending = false;
     state.stageId = 'intake'; state.taskId = null; state.artifactName = 'task.md'; state.tab = 'events';
-    updateRun(run); renderHeader(); schedulePoll(); toast('编排已启动，可以点击节点查看过程');
+    updateRun(run); renderHeader(); schedulePoll(); toast(automatic ? '已启动自动交付，正在处理需求。' : '编排已启动，可以点击节点查看过程');
   } catch (error) { if (epoch === state.epoch) showError(error); }
-  finally { if (epoch === state.epoch) { state.selectionPending = false; syncExecutionPanel(); } setBusy(false); }
+  finally { if (epoch === state.epoch) { state.selectionPending = false; syncExecutionPanel(); schedulePoll(); } setBusy(false); }
 }
 async function runAction(action, stageId) {
-  if (!state.run || historicalRun() || state.busy || state.selectionPending) return;
+  if (!state.run || historicalRun() || state.busy || state.selectionPending || automaticOwnsRun()) return;
   setBusy(true); clearError(); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   try {
     const { run } = await api(`${basePath()}/action`, { method: 'POST', body: JSON.stringify({ action, ...(stageId ? { stageId } : {}), ...(action === 'approve' ? { feedback: state.feedback } : {}) }) });
@@ -818,13 +898,16 @@ async function runAction(action, stageId) {
 async function reviewAction(action, payload) {
   if (historicalRun()) throw new Error('这次运行属于历史需求输入，不能再修订或确认。请基于当前输入重新编排。');
   if (!state.run || state.busy || state.selectionPending) throw new Error('上一项操作或运行切换尚未结束，请稍后重试。');
+  if (automaticOwnsRun() && (!automaticClarifying() || !['answer_planning_issue', 'clarify_spec', 'revise_spec', 'supplement_spec'].includes(action))) {
+    throw new Error('当前运行由自动交付推进。需要补充需求时，请在「查看问题」提交回答。');
+  }
   setBusy(true); clearError(); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   try {
     const { run } = await api(`${basePath()}/action`, { method: 'POST', body: JSON.stringify({ action, ...payload }) });
     if (epoch !== state.epoch) throw new Error('当前运行已切换。草稿已保留，请重新核对所选记录。');
     updateRun(run); renderHeader(); schedulePoll();
     return run;
-  } finally { setBusy(false); }
+  } finally { if (epoch === state.epoch) schedulePoll(); setBusy(false); }
 }
 
 function openProjectDialog({ sample = false, revise = false } = {}) {
@@ -879,6 +962,21 @@ $('#project-form').addEventListener('submit', createProject);
 $('#file-input').addEventListener('change', (event) => importFile(event.target.files[0]));
 $('#clear-file').addEventListener('click', resetFile);
 $('#start-run').addEventListener('click', () => { void startRun(); });
+$('#start-automatic').addEventListener('click', () => {
+  const { specificationMaxCalls, engineeringMaxCalls, verificationMaxAttempts } = state.health.automaticDelivery;
+  $('#automatic-budget').textContent = `规格最多 ${specificationMaxCalls} 次，工程设计最多 ${engineeringMaxCalls} 次，验收清单最多 ${verificationMaxAttempts} 次。整体验收的编码及审查合计最多 6 次，按任务开发时合计最多 48 次。`;
+  $('#automatic-consent').checked = false;
+  $('#confirm-automatic').disabled = true;
+  $('#automatic-delivery-dialog').showModal();
+  $('#automatic-consent').focus();
+});
+$('#automatic-consent').addEventListener('change', event => { $('#confirm-automatic').disabled = !event.target.checked; });
+$('#automatic-delivery-form').addEventListener('submit', event => {
+  event.preventDefault();
+  if (!$('#automatic-consent').checked || $('#start-automatic').disabled) return;
+  $('#automatic-delivery-dialog').close();
+  void startRun(undefined, { automatic: true });
+});
 $('[data-workspace-next]').addEventListener('click', handleWorkspaceNext);
 $('#delivery-steps').addEventListener('click', event => {
   const step = event.target.closest('[data-delivery-step]');

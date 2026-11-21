@@ -12,7 +12,7 @@ function checkSummary(checks) {
     .map(([name, rows]) => `${name} ${rows.filter(row => row.passed === true).length}/${rows.length}`).join('，');
 }
 
-export function deliverySteps({ project, run, historical, verification, development }) {
+export function deliverySteps({ project, run, historical, verification, development, automatic }) {
   const step = (id, title, state, text, detail = '') => ({ id, title, state, text, detail });
   const waiting = (id, title, text = '尚未开始') => step(id, title, 'idle', text);
   const stage = id => run?.stages?.find(item => item.id === id);
@@ -76,5 +76,29 @@ export function deliverySteps({ project, run, historical, verification, developm
     coding = step('coding', '编写代码', 'waiting', development?.canStart ? '待开始开发' : '暂未就绪', development?.canStart ? '' : development?.reason);
   }
   steps.push(coding, testing, delivery);
-  return steps;
+  if (!automatic || historical) return steps;
+
+  const index = steps.findIndex(item => item.id === automatic.stage);
+  const running = automatic.status === 'queued' || automatic.status === 'running';
+  const delivered = automatic.status === 'completed' && automatic.downloadAvailable === true;
+  const confirmedText = { source: '已导入', spec: '规格已生成', 'spec-approval': '规格已校验', plan: '计划已生成', 'plan-approval': '计划已校验',
+    verification: '清单已校验', coding: '候选已生成', testing: '验收通过' };
+  const activeText = { source: '正在读取需求', spec: '正在整理', 'spec-approval': '正在校验规格', plan: '正在规划', 'plan-approval': '正在校验计划',
+    verification: '正在准备清单', coding: '正在开发', testing: '正在检查候选', delivery: '正在核对交付' };
+  return steps.map((item, position) => {
+    if (item.id === 'delivery' && delivered) return step(item.id, item.title, 'done', '可预览与下载');
+    if ((position < index || delivered) && item.id !== 'delivery') {
+      return step(item.id, item.title, 'done', confirmedText[item.id], item.state === 'done' ? item.detail : '');
+    }
+    if (position === index) {
+      if (running) return step(item.id, item.title, 'working', item.state === 'working' ? item.text : activeText[item.id], item.state === 'working' ? item.detail : '');
+      if (automatic.status === 'needs_clarification') return step(item.id, item.title, 'waiting', '等待补充需求', item.detail);
+      if (automatic.status === 'failed' || automatic.status === 'interrupted') {
+        return step(item.id, item.title, 'failed', automatic.status === 'interrupted' ? '运行已中断' : '执行未通过', item.detail);
+      }
+    }
+    if (item.id === 'delivery' && item.state === 'done') return waiting(item.id, item.title, '等待核对交付');
+    if (running && position > index && index >= 0 && item.state !== 'idle') return waiting(item.id, item.title);
+    return item;
+  });
 }

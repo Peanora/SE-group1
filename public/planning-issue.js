@@ -53,7 +53,7 @@ export function createPlanningIssue({ container, getState, submit }) {
   }
 
   function render() {
-    const { run, busy, canEdit } = getState();
+    const { run, busy, canEdit, allowModelExplanation = true } = getState();
     const issue = run?.planningIssue;
     const visible = Array.isArray(issue?.qa) && run.id === openedRun && !run.sourceSuperseded;
     container.hidden = !visible;
@@ -89,12 +89,12 @@ export function createPlanningIssue({ container, getState, submit }) {
     save.hidden = proceed.hidden = !canEdit;
     save.disabled = locked || !issue.canSave || answered === 0;
     proceed.disabled = locked || !issue.canContinue || answered !== inputs.length;
-    retry.hidden = !canEdit || !issue.allowQuestions || !(issue.explanationError || explainFailed);
+    retry.hidden = !canEdit || !allowModelExplanation || !issue.allowQuestions || !(issue.explanationError || explainFailed);
     retry.disabled = locked || !issue.canExplain;
     recover.hidden = !canEdit || !(issue.canRebuild || issue.canRetrySpec);
     recover.disabled = locked;
 
-    const willExplain = canEdit && issue.autoExplain && !automaticAttempts.has(current);
+    const willExplain = canEdit && allowModelExplanation && issue.autoExplain && !automaticAttempts.has(current);
     status.textContent = pending === 'explain' || willExplain ? '正在请模型生成需要确认的问题…'
       : ['continue', 'retrySpec'].includes(pending) ? '正在用已保存的信息重新整理规格…'
         : pending === 'save' ? '正在保存回答…'
@@ -113,7 +113,7 @@ export function createPlanningIssue({ container, getState, submit }) {
       if (automaticAttempts.size > 30) automaticAttempts.delete(automaticAttempts.values().next().value);
       queueMicrotask(() => {
         const latest = getState();
-        if (key(latest.run) === current && latest.run.id === openedRun && !latest.busy && latest.canEdit) void act('explain', true);
+        if (key(latest.run) === current && latest.run.id === openedRun && !latest.busy && latest.canEdit && latest.allowModelExplanation !== false) void act('explain', true);
         else automaticAttempts.delete(current);
       });
     }
@@ -121,9 +121,9 @@ export function createPlanningIssue({ container, getState, submit }) {
   }
 
   async function act(action, automatic = false) {
-    const { run, busy, canEdit } = getState();
+    const { run, busy, canEdit, allowModelExplanation = true } = getState();
     const current = key(run), issue = run?.planningIssue;
-    if (!current || busy || !canEdit || pending) return;
+    if (!current || busy || !canEdit || pending || action === 'explain' && !allowModelExplanation) return;
     const payload = { issueId: issue.id };
     if (action === 'explain') payload.automatic = automatic;
     else {

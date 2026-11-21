@@ -22,7 +22,7 @@ const httpStepOverflow = detail => Number.isSafeInteger(detail?.httpSteps) && Nu
   ? `这份草案有 ${detail.httpSteps} 个接口步骤，上限是 ${detail.maxHttpSteps} 个。` : '';
 
 /** HTTP test definitions only. Server facts never become software acceptance in this component. */
-export function createVerificationPlans({ api, getContext, onError = () => {}, onUpdate = () => {}, onApproved = () => {}, failureRecovery = false, canEdit = () => true, autoRepairOnPropose = false }) {
+export function createVerificationPlans({ api, getContext, onError = () => {}, onUpdate = () => {}, onApproved = () => {}, failureRecovery = false, canEdit = () => true, autoRepairOnPropose = false, automated = () => false }) {
   if (typeof api !== 'function' || typeof getContext !== 'function') throw new TypeError('测试提案面板需要api和运行上下文。');
   let root, refs, mounted = false, destroyed = false, timer, epoch = 0, readId = 0, action = null, pending = null;
   let context = contextValue(null), key = '', data = null, fresh = false, loading = false, error = '', errorKind = '', notice = '', consentKey = '';
@@ -80,14 +80,14 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
   }
   function validCost() {
     const cap = data?.capabilities, budget = cap?.budget;
-    return fresh && !shouldRecoverLogin() && action?.kind !== 'recover-login' && pending?.kind !== 'recover-login'
+    return !automated() && fresh && !shouldRecoverLogin() && action?.kind !== 'recover-login' && pending?.kind !== 'recover-login'
       && data?.coverage === 'structural_only' && confirmed() && cap?.canPropose === true && HASH.test(cap.contractRevision || '')
       && typeof cap.model === 'string' && !!cap.model.trim() && cap.model.length <= 200
       && Number.isInteger(budget?.maxAttempts) && budget.maxAttempts >= 1 && budget.maxAttempts <= 3
       && Number.isInteger(budget.remainingAttempts) && budget.remainingAttempts >= 1 && budget.remainingAttempts <= budget.maxAttempts
       && Number.isInteger(budget.timeoutMs) && budget.timeoutMs >= 1 && budget.timeoutMs <= 60000;
   }
-  const canImport = () => canEdit() && fresh && confirmed() && data?.coverage === 'structural_only' && data.capabilities?.canImportDefinition === true && HASH.test(data.capabilities.contractRevision || '');
+  const canImport = () => !automated() && canEdit() && fresh && confirmed() && data?.coverage === 'structural_only' && data.capabilities?.canImportDefinition === true && HASH.test(data.capabilities.contractRevision || '');
   function shouldRecoverLogin() {
     return !action && !pending && !openingDraft && canImport() && data.capabilities.canRecoverLogin === true
       && !loginRecoveries.has(sessionKey(context)) && !draft?.touched && !saved.importJSON.trim() && !saved.importFeedback.trim()
@@ -176,7 +176,7 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     finally { if (isCurrent(token)) { openingDraft = false; render(); } }
   }
   function allowed(kind) {
-    const row = selected(); if (action || !fresh) return false;
+    const row = selected(); if (automated() || action || !fresh) return false;
     if (kind === 'propose') return validCost() && refs.consent.checked;
     if (kind === 'recover-login') return shouldRecoverLogin();
     if (kind === 'import') return canImport() && !!saved.importJSON.trim() && !!saved.importFeedback.trim();
@@ -226,7 +226,7 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
   function render() {
     if (!refs || destroyed) return;
     refs.body.hidden = !context.projectId || !context.runId;
-    refs.state.textContent = refs.body.hidden ? '请先选择项目和规划运行。' : action?.kind === 'recover-login' ? '正在补上测试账号的登录步骤…'
+    refs.state.textContent = refs.body.hidden ? '请先选择项目和规划运行。' : automated() ? '自动流程负责准备和校验本次清单。' : action?.kind === 'recover-login' ? '正在补上测试账号的登录步骤…'
       : loading && !data ? '正在读取测试提案…' : !fresh ? '尚未取得当前提案许可，请刷新核对。' : data?.capabilities?.reason || '仅审阅HTTP结构测试定义，尚未运行。';
     refs.errorBox.hidden = !error; refs.errorBox.textContent = error; refs.noticeBox.hidden = !notice; refs.noticeBox.textContent = notice;
     const cap = data?.capabilities, budget = cap?.budget;

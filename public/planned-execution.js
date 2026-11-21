@@ -143,7 +143,7 @@ export function executionVersionEvidence(item) {
 }
 
 /** Only backend current/accepted facts grant actions; POST responses never grant a pass. */
-export function createPlannedExecutionPanel({ api, getContext, onError = () => {}, onFailure = () => {}, onUpdate = () => {}, openVerification, reviseChecklist, canReviseChecklist = () => true }) {
+export function createPlannedExecutionPanel({ api, getContext, onError = () => {}, onFailure = () => {}, onUpdate = () => {}, openVerification, reviseChecklist, canReviseChecklist = () => true, automated = () => false }) {
   if (typeof api !== 'function' || typeof getContext !== 'function') throw new TypeError('规划开发面板需要api和当前规划上下文。');
   let root, refs, destroyed = false, mounted = false, timer, epoch = 0, readSerial = 0, action = null, pending = null;
   let context = contextOf(null), key = '', data = null, proposals = null, fresh = false, loading = false, error = '', notice = '', consentKey = '';
@@ -215,6 +215,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     && (!Array.isArray(data?.capabilities?.supportedProposalIds) || data.capabilities.supportedProposalIds.includes(item.id))) : [];
   const selectedDefinition = () => definitions().find(item => item.id === proposalId);
   function validBudget() {
+    if (automated()) return false;
     const cap = data?.capabilities, budget = cap?.budget;
     const taskLimit = budget?.taskLimit ?? 1, attemptCalls = budget?.attemptModelCalls ?? (budget?.maxCalls ?? 0) + (budget?.maxReviewCalls ?? 0);
     const validAggregate = budget?.unlimited === true
@@ -250,9 +251,9 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     && definitions().some(proposal => proposal.id === item.proposalId && proposal.revision === item.revision);
   const mayCancel = item => fresh && !action && (!pending || pending.kind === 'recover' && pending.id === item?.id && currentToken(pending))
     && currentRow(item) && item.active === true && (WORKING.has(item.status) || item.status === 'reconciliation_required' && item.actions?.canRetryCancellation === true) && item.actions?.canCancel === true;
-  const mayTaskControl = (item, kind) => fresh && !action && !pending && currentRow(item) && item.active === true && item.executionMode === 'task_dag'
+  const mayTaskControl = (item, kind) => !automated() && fresh && !action && !pending && currentRow(item) && item.active === true && item.executionMode === 'task_dag'
     && (kind === 'pause' ? item.status === 'running' && item.actions?.canPause === true : ['pause_requested', 'paused'].includes(item.status) && item.actions?.canResume === true);
-  const mayRecover = item => fresh && !loading && !action && !pending && currentRow(item) && item.active === true && item.executionMode === 'task_dag'
+  const mayRecover = item => !automated() && fresh && !loading && !action && !pending && currentRow(item) && item.active === true && item.executionMode === 'task_dag'
     && ['paused', 'paused_recovery_ready'].includes(item.status) && item.actions?.canRecover === true;
   const mayRepair = item => fresh && !loading && !action && !pending && !previewsBlock() && currentRow(item) && item.active === false && ['failed', 'stopped', 'timed_out'].includes(item.status)
     && item.actions?.canRepair === true && /^[a-f0-9]{40}$/u.test(item.candidateCommit || '') && validBudget() && !checklistBlocksDefinition() && refs.consent.checked
@@ -261,7 +262,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
   const mayStopPreview = item => previewFresh() && scoped(item) && previewOf(item)?.active === true && previewOf(item)?.actions?.canStop === true && item.actions?.canStopPreview === true;
   const mayDownload = item => accepted(item) && !loading && !previewsBlock() && item.actions?.canDownload === true;
   const latestExecution = () => rows().findLast(item => currentRow(item) && item.active) ?? rows().findLast(currentRow);
-  const mayReviseChecklist = item => typeof reviseChecklist === 'function' && canReviseChecklist() && fresh && !loading && !action && !pending && !previewsBlock()
+  const mayReviseChecklist = item => !automated() && typeof reviseChecklist === 'function' && canReviseChecklist() && fresh && !loading && !action && !pending && !previewsBlock()
     && item === latestExecution() && currentRow(item) && item.active === false && failureHelp(item)?.action === 'review_checklist';
   function workflowProgress() {
     if (!fresh || keyOf(contextOf(getContext())) !== key) return {};

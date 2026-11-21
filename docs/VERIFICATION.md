@@ -1,5 +1,13 @@
 # 首版验证记录
 
+## 2026-11-21 自动交付
+
+- `npm run check` 检查 268 个脚本通过。本轮集成后的 `npm test` 共 1381 项，1293 通过、88 条可选场景跳过、0 失败。随后对最终进度与就绪检查改动复验自动交付 HTTP 和原生浏览器。
+- `node --test tests/automatic-delivery-http.test.mjs` 通过 4/4。覆盖本机与单次用量确认、保留手动路径、同一次运行澄清续跑、交付门禁和清单用量耗尽。
+- 在本机 MXC 和 Edge 下设置 `TASKFLOW_TEST_REAL_SANDBOX=1`、`EXECUTION_SANDBOX_EXE` 后运行 `node --test tests/automatic-delivery-browser.test.mjs`。首次验证及后续复验均通过。小组公告需求从网页输入，仅提交一次业务答复。首个候选浏览器失败后自动修复，第二个候选收到审查阻塞，第三个候选关闭该问题。复验候选 `ded1bef9a4a266eb47b4498a822864f46af03193` 通过自检 5/5、HTTP 5/5、桌面/窄屏 Edge 9/9 和同版本独立代码审查。实际五个模型适配器共向本机夹具发送 9 次请求；候选通过后网页下载 ZIP，刷新仍能读取进度。未调用外部付费模型。
+- 首次通过候选 `bc3851856fe2170680c50543e6bf68b576413f07` 的源码 ZIP 留在 `output/automatic-delivery-demo/automatic-announcement-source.zip`。用 `npm run planned:verify -- --archive output/automatic-delivery-demo/automatic-announcement-source.zip` 免费复验接口 5/5 和 Edge 9/9。全新解包后 `npm start`，验证公告 GET 200、POST 405、桌面及 390px 正文和正常停止。
+- 原工作台、澄清、执行面板和清单等 Edge 回归 71 项通过，1 项可选原生测试跳过。模型服务故障、预算耗尽和停止未知均不得升级为完成；本轮没有变更现有项目存档或数据库结构。
+
 ## 2026-11-21 需求与验收可视化
 
 - `npm run check` 通过，共 265 个脚本。

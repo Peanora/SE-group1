@@ -14,6 +14,7 @@ import { loginContinuationDraft, loginRevisionNote, loginRevisionTask, previousL
 import { reconcileEndedPreviews } from './lib/preview-output-recovery.mjs';
 import { createAgentSettings } from './lib/agent-settings.mjs';
 import { createAgentPlanner } from './lib/agent-planner.mjs';
+import { AUTOMATIC_BUDGET, createAutomaticDelivery } from './lib/automatic-delivery.mjs';
 import { repeatedCounterSteps } from './public/verification-draft.js';
 
 import { DEFAULT_STACK, PLATFORM_DEFAULTS } from './lib/platform-defaults.mjs';
@@ -116,7 +117,7 @@ export async function createApp(options = {}) {
   const verificationRoot = path.resolve(options.verificationPlanningRootDir ?? path.join(store.directory, 'verification-planning'));
   const plannedRoot = path.resolve(options.plannedExecutionRootDir ?? path.join(store.directory, 'planned-executions'));
   const verificationRecovery = createVerificationRecovery({ root: verificationRoot, getPlanning: (projectId, runId) => store.getPersistedRun(projectId, runId) });
-  let sourceChangeService, verificationPlanningService, plannedExecutionService, teamAccess, localReleasesService, plannedDatasetService, evolutionService;
+  let sourceChangeService, verificationPlanningService, plannedExecutionService, teamAccess, localReleasesService, plannedDatasetService, evolutionService, automaticDelivery;
   try {
     verificationPlanningService = options.verificationPlanningService === null ? null : options.verificationPlanningService ?? await (await import('./lib/verification-planning-service.mjs')).createVerificationPlanningService({
       rootDir: verificationRoot,
@@ -165,7 +166,25 @@ export async function createApp(options = {}) {
       }),
     });
     if (options.teamEnabled ?? process.env.TASKFLOW_TEAM_MODE === '1') teamAccess = await (await import('./lib/team-access.mjs')).createTeamAccess({ rootDir: path.resolve(options.teamRootDir ?? path.join(store.directory, 'team-access')) });
-  } catch (cause) { await Promise.allSettled([evolutionService?.shutdown(), localReleasesService?.shutdown(), plannedDatasetService?.close(), simulationService.shutdown(), orchestrator.shutdown(), executionService?.shutdown(), verificationPlanningService?.shutdown(), plannedExecutionService?.shutdown(), teamAccess?.close()]); throw cause; }
+    automaticDelivery = createAutomaticDelivery({
+      store, orchestrator, verification: verificationPlanningService, planned: plannedExecutionService, recovery: verificationRecovery,
+      getSettingsRevision: () => agentSettings.view().revision,
+      checkProject: projectId => orchestrator.withProjectCheckpoint(projectId, () => {
+        const services = [executionService, verificationPlanningService, plannedExecutionService].filter(Boolean);
+        const check = index => index === services.length ? undefined : services[index].withProjectCheckpoint(projectId, () => check(index + 1));
+        return check(0);
+      }),
+      preflight: () => {
+        if (!planner.getModelConfig().configured) throw new HttpError(409, '请在 Agent 角色中配置需求分析模型。');
+        try {
+          for (const role of ['engineering', 'verification', 'coding', 'review']) agentSettings.resolve(role);
+        } catch { throw new HttpError(409, '请在 Agent 角色中配置工程规划、测试设计、编码和代码审查后再启动。'); }
+        if (plannedExecutionService.canPrepare?.() === false) throw new HttpError(409, '代码隔离执行或交付凭据尚不可用。请检查本机执行配置后再启动。');
+      },
+    });
+    orchestrator.assertAutomaticDispatch = automaticDelivery.assertDispatch;
+    await automaticDelivery.init();
+  } catch (cause) { await automaticDelivery?.shutdown(); await Promise.allSettled([evolutionService?.shutdown(), localReleasesService?.shutdown(), plannedDatasetService?.close(), simulationService.shutdown(), orchestrator.shutdown(), executionService?.shutdown(), verificationPlanningService?.shutdown(), plannedExecutionService?.shutdown(), teamAccess?.close()]); throw cause; }
   const fixedAdmission = (projectId, work) => {
     if (typeof verificationPlanningService?.withProjectCheckpoint !== 'function' || typeof plannedExecutionService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '尚不能核对测试提案和研发执行状态。');
     return verificationPlanningService.withProjectCheckpoint(projectId, () => plannedExecutionService.withProjectCheckpoint(projectId, work));
@@ -232,6 +251,7 @@ export async function createApp(options = {}) {
             agentSettings: { available: true, version: 1 },
             engineeringRouteContractRevision: { available: true, version: 1 },
             planningIssueConversation: { available: true, version: 3 },
+            automaticDelivery: { available: automaticDelivery.available, ...automaticDelivery.readiness(), ...AUTOMATIC_BUDGET },
             modelPlanning: { engineeringMaxCalls: orchestrator.engineeringMaxCalls, engineeringCallLimit: orchestrator.engineeringMaxCalls !== null, engineeringTimeoutMs: orchestrator.engineeringTimeoutMs,
               engineeringTotalTimeoutMs: orchestrator.engineeringTotalTimeoutMs,
               specificationMaxCalls: orchestrator.specificationMaxCalls, specificationCallLimit: orchestrator.specificationMaxCalls !== null, specificationTimeoutMs: orchestrator.specificationTimeoutMs },
@@ -267,6 +287,12 @@ export async function createApp(options = {}) {
           throw new HttpError(405, '该接口不支持此请求方法。');
         }
         const projectId = segments[2];
+        if (!['GET', 'HEAD'].includes(method) && automaticDelivery.ownsProject(projectId)) {
+          const savingInput = segments[3] === 'changes' && (segments.length === 4 || segments.length === 5 && segments[4] === 'parse');
+          const stoppingExecution = segments[3] === 'runs' && segments[5] === 'development-executions' && segments.length === 8 && segments[7] === 'cancel';
+          const planningAction = segments[3] === 'runs' && segments.length === 6 && segments[5] === 'action' && method === 'POST';
+          if (!savingInput && !stoppingExecution && !planningAction) throw new HttpError(409, '当前项目正在自动交付，操作将在本次运行结束后开放。');
+        }
         if (segments[3] === 'local-releases') {
           requireLocalExecutionRequest(request, server); store.get(projectId);
           if (!localReleasesService) throw new HttpError(404, '当前服务尚未开放本机业务版本。');
@@ -331,10 +357,20 @@ export async function createApp(options = {}) {
           throw new HttpError(['GET', 'POST'].includes(method) ? 404 : 405, '未找到该变更接口或请求方法不受支持。');
         }
         if (segments[3] !== 'runs') throw new HttpError(404, '未找到该接口。');
-        if (segments.length === 4 && method === 'POST') return respond(response, 201, { run: await orchestrator.createRun(projectId, await readJson(request)) });
+        if (segments.length === 4 && method === 'POST') {
+          const input = await readJson(request);
+          if (!Object.hasOwn(input, 'automaticDelivery')) return respond(response, 201, { run: await orchestrator.createRun(projectId, input) });
+          requireLocalExecutionRequest(request, server);
+          const subject = teamAccess ? teamAccess.executionSubject(request.headers.cookie) : createLocalExecutionSubject();
+          return respond(response, 201, { run: await automaticDelivery.start(projectId, input, subject) });
+        }
         const runId = segments[4];
         const { project, run } = store.getRun(projectId, runId);
         if (segments.length === 5 && method === 'GET') return respond(response, 200, { run: await orchestrator.describeRun(project, run) });
+        if (segments.length === 6 && segments[5] === 'automatic-delivery' && method === 'GET') {
+          requireLocalExecutionRequest(request, server);
+          return respond(response, 200, await automaticDelivery.status(project, run));
+        }
         if (segments[5] === 'simulations') {
           requireLocalExecutionRequest(request, server);
           if (segments.length === 6 && method === 'GET') {
@@ -553,6 +589,13 @@ export async function createApp(options = {}) {
         }
         if (segments.length === 6 && segments[5] === 'action' && method === 'POST') {
           const input = await readJson(request);
+          if (automaticDelivery.ownsProject(projectId)) {
+            const clarification = automaticDelivery.ownsRun(projectId, runId) && run.automaticDelivery?.status === 'needs_clarification';
+            if (!clarification || !['answer_planning_issue', 'clarify_spec', 'revise_spec', 'supplement_spec'].includes(input.action)) {
+              throw new HttpError(409, '当前项目由自动流程推进。有待澄清的业务问题时，可提交答复。');
+            }
+            automaticDelivery.assertDispatch(run);
+          }
           const apply = () => orchestrator.action(projectId, runId, input, { assertAccess: () => { requestChecks.get(request)?.(); } });
           let updated;
           if (input.action === 'revise_plan' && run.status === 'succeeded') {
@@ -598,6 +641,7 @@ export async function createApp(options = {}) {
   server.headersTimeout = 15_000;
   const close = () => {
     if (!closing) closing = (async () => {
+      await automaticDelivery.shutdown();
       const lifecycle = await Promise.allSettled([evolutionService?.shutdown(), localReleasesService?.shutdown(), plannedDatasetService?.close()]);
       const results = [...lifecycle, ...await Promise.allSettled([simulationService.shutdown(), orchestrator.shutdown(), executionService?.shutdown(), sourceChangeService?.shutdown(), verificationPlanningService?.shutdown(), plannedExecutionService?.shutdown()])];
       if (server.listening) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));

@@ -179,6 +179,11 @@
 .tf-workbench .delivery-step :is(.delivery-state,small) { color: var(--tf-muted); }
 
 .tf-workbench .workspace-run-tools { margin-bottom: 12px; }
+.tf-workbench .workspace-context-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.tf-workbench .workspace-context-actions .button-outline { color: #f3edff; border-color: #a89cbb; }
+.tf-workbench .workspace-context-actions .button-outline:hover { color: var(--tf-accent); }
+.tf-workbench .automatic-consent { display: flex; align-items: flex-start; gap: 9px; }
+.tf-workbench .automatic-consent input { flex: none; margin-top: 0.35em; accent-color: var(--tf-accent); }
 .tf-workbench .workspace-budget { color: var(--tf-muted); }
 .tf-workbench .workspace-nav { border: 1px solid var(--tf-line); border-radius: 9px 9px 0 0; }
 .tf-workbench .workspace-nav button { color: var(--tf-muted); }
@@ -216,6 +221,7 @@
   border-color: #dfd4f4;
 }
 .tf-workbench .workspace:has(:is(#workspace-source,#workspace-execution):not([hidden])) .workspace-context .button-primary:focus-visible { outline-color: #8568d8; }
+.tf-workbench .workspace:has(:is(#workspace-source,#workspace-execution):not([hidden])) .workspace-context-actions .button-outline { color: var(--tf-accent); border-color: var(--tf-line); }
 .tf-workbench :is(#workspace-source,#workspace-execution) .workspace-section-heading h2 {
   margin: 0;
   font-size: 20px;
