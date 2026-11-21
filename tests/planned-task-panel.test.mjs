@@ -149,7 +149,7 @@ test('each new frozen task-budget field change withdraws previously granted fee 
 
 test('unsupported definitions and invalid task costs cannot enable start or historical delivery', async t => {
   const page = await pageFor(t);
-  for (const [name, value] of [['taskLimit', 0], ['taskLimit', 9], ['taskLimit', 1.5], ['attemptModelCalls', 23], ['maxConcurrency', 0], ['maxConcurrency', 3], ['timeoutMs', 1200001], ['remainingModelCalls', 23]]) {
+  for (const [name, value] of [['taskLimit', 0], ['taskLimit', 9], ['taskLimit', 1.5], ['attemptModelCalls', 23], ['maxConcurrency', 0], ['maxConcurrency', 3], ['timeoutMs', 3600001], ['remainingModelCalls', 23]]) {
     await setupTasks(page); await page.evaluate(({ name, value }) => { window.states.a.dev.capabilities.budget[name] = value; }, { name, value }); await refresh(page);
     assert.equal(await consent(page).isDisabled(), true, `${name}=${value}`); assert.equal(await start(page).isDisabled(), true, `${name}=${value}`);
   }

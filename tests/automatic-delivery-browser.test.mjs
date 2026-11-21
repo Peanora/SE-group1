@@ -84,6 +84,15 @@ test('automatic delivery in Edge pauses only for the missing business answer and
       calls.push(role);
       const round = calls.filter(call => call === role).length;
       let output = { engineering: plan, verification: definition }[role];
+      if (role === 'verification') {
+        if (round === 1) {
+          output = structuredClone(definition);
+          output.steps[0].dependsOn = ['missing-earlier-step'];
+        } else {
+          assert.equal(round, 2);
+          assert.match(input.retryFeedback, /missing-earlier-step/u);
+        }
+      }
       if (role === 'spec') {
         if (round === 2) assert.ok(input.document.includes(announcement));
         output = round === 1 ? { ...spec, requirements: [], questions: [question] } : spec;
@@ -234,7 +243,7 @@ test('automatic delivery in Edge pauses only for the missing business answer and
   assert.equal(valid.resolutions[0].status, 'resolved');
   assert.equal(valid.candidateCommit, execution.candidateCommit);
   assert.equal(new Set(execution.reviewHistory.map(item => item.candidateCommit)).size, 3);
-  assert.deepEqual(calls, ['spec', 'spec', 'engineering', 'verification', 'coding', 'coding', 'review', 'coding', 'review']);
+  assert.deepEqual(calls, ['spec', 'spec', 'engineering', 'verification', 'verification', 'coding', 'coding', 'review', 'coding', 'review']);
 
   await page.reload();
   await page.locator('#delivery-done-count').getByText(/9\s*\/\s*9/u).waitFor();

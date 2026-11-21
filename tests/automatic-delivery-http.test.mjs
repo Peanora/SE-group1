@@ -67,8 +67,9 @@ async function fixture(t, { clarify = false, verificationDefinition = definition
     dependencies: { createModel: () => async input => {
       calls.verification++;
       assert.equal(input.binding.specRevision.length, 64);
-      await input.onReceipt({ model: config.model, finishReason: 'stop', usage, content: JSON.stringify(verificationDefinition) });
-      return { proposal: verificationDefinition, model: config.model, usage, policyHash: verificationModelPolicy.hash, coverage: 'structural_only' };
+      const proposal = typeof verificationDefinition === 'function' ? verificationDefinition(calls.verification, input) : verificationDefinition;
+      await input.onReceipt({ model: config.model, finishReason: 'stop', usage, content: JSON.stringify(proposal) });
+      return { proposal, model: config.model, usage, policyHash: verificationModelPolicy.hash, coverage: 'structural_only' };
     } },
   });
   const contractRevision = 'c'.repeat(64);
@@ -225,4 +226,57 @@ test('automatic delivery exhausts a bounded set of incomplete verification propo
   const { body: { proposals } } = await f.request(`${delivery.route}/verification-plans`);
   assert.equal(proposals.length, 3);
   assert.ok(proposals.every(item => item.status === 'draft' && !item.approved));
+});
+
+test('owner-confirmed verification rework retains the same plan and starts development only with a complete joint definition', async t => {
+  const navigationOnly = { ...definition, browser: { ...definition.browser, steps: [definition.browser.steps[0]] } };
+  const f = await fixture(t, { verificationDefinition: (attempt, input) => {
+    if (attempt < 4) return navigationOnly;
+    assert.ok(input.retryFeedback, 'the new proposal receives the prior validation problem');
+    return definition;
+  } });
+  const delivery = await f.start();
+  const failed = await waitFor(delivery.status, state => state.status === 'failed' && state.retryVerification, '缺少浏览器断言');
+  assert.equal(failed.retryVerification.maxAttempts, 3);
+  const { body: { run: old } } = await f.request(delivery.route);
+  const route = `${delivery.route}/automatic-delivery/retry-verification`;
+  const payload = { modelUsageConfirmed: true, planRevision: old.planRevision, updatedAt: failed.updatedAt };
+  assert.equal((await f.request(route, { ...payload, modelUsageConfirmed: false })).status, 400);
+  assert.equal((await f.request(route, { ...payload, planRevision: '0'.repeat(64) })).status, 409);
+  assert.deepEqual(f.calls, { spec: 1, engineering: 1, verification: 3, start: 0 });
+  const retried = await f.request(route, payload);
+  assert.equal(retried.status, 202, JSON.stringify(retried.body));
+  assert.equal((await f.request(route, payload)).status, 409);
+  await waitFor(delivery.status, state => state.executionId, '返工后自动编码');
+  const { body: { run: next } } = await f.request(delivery.route);
+  assert.deepEqual(next.approvals, old.approvals);
+  assert.equal(next.id, old.id);
+  const { body: { proposals } } = await f.request(`${delivery.route}/verification-plans`);
+  assert.equal(proposals.length, 4);
+  assert.ok(proposals.slice(0, 3).every(item => !item.approved));
+  assert.equal(proposals.at(-1).approved, true);
+  assert.deepEqual(f.calls, { spec: 1, engineering: 1, verification: 4, start: 1 });
+});
+
+test('a saved joint definition can continue after both batches without a seventh test model call', async t => {
+  const { browser, ...httpOnly } = definition;
+  const f = await fixture(t, { verificationDefinition: httpOnly });
+  const delivery = await f.start();
+  const first = await waitFor(delivery.status, state => state.status === 'failed' && state.retryVerification, '第一轮清单失败');
+  const { body: { run } } = await f.request(delivery.route);
+  const action = `${delivery.route}/automatic-delivery/retry-verification`;
+  const resume = updatedAt => f.request(action, { planRevision: run.planRevision, updatedAt, modelUsageConfirmed: true });
+  assert.equal((await resume(first.updatedAt)).status, 202);
+  const exhausted = await waitFor(delivery.status, state => state.status === 'failed' && !state.retryVerification, '清单返工预算耗尽');
+  assert.equal((await resume(exhausted.updatedAt)).status, 409);
+  const definitions = `${delivery.route}/verification-plans`;
+  const { body: { capabilities } } = await f.request(definitions);
+  const saved = await f.request(`${definitions}/import`, { contractRevision: capabilities.contractRevision,
+    proposal: definition, feedback: '已补上同一页面的实际结果断言。' });
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  assert.equal((await delivery.status()).retryVerification.maxAttempts, 0);
+  assert.equal((await resume(exhausted.updatedAt)).status, 202);
+  const coding = await waitFor(delivery.status, state => state.executionId, '使用保存的清单编码');
+  assert.equal(coding.proposalId, saved.body.proposal.id);
+  assert.deepEqual(f.calls, { spec: 1, engineering: 1, verification: 6, start: 1 });
 });

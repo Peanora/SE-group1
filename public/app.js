@@ -19,6 +19,7 @@ let sourceReadyProject = '';
 let deliveryMarkup = '';
 let executionMarkup = '';
 let expandedAutomaticRun = '';
+let automaticRetryConsent = null;
 const notices = createWorkspaceNotices({ errorBanner: $('#error-banner'), errorText: $('#error-text'), dismissButton: $('#dismiss-error'), toast: $('#toast'),
   getContext: () => ({ projectId: state.project?.id || '', runId: state.run?.id || '' }), locate: locateWorkspaceProblem });
 const workspaceLayout = createWorkspaceLayout({ getContext: () => ({ projectId: state.selectionPending ? '' : state.project?.id || '', runId: state.run?.id || '', busy: state.busy, runStatus: state.run?.status, historical: historicalRun() }),
@@ -53,6 +54,13 @@ function automaticOwnsRun() {
   return ['queued', 'running', 'needs_clarification'].includes(automaticStatus()?.status);
 }
 function automaticClarifying() { return automaticStatus()?.status === 'needs_clarification'; }
+function verificationRetryContext() {
+  const run = state.run, status = automaticStatus(), maxAttempts = status?.retryVerification?.maxAttempts;
+  if (status?.status !== 'failed' || !run.planRevision || typeof status.updatedAt !== 'string' || !status.updatedAt
+    || !Number.isSafeInteger(maxAttempts) || maxAttempts < 0 || maxAttempts > 3
+    || state.health?.teamAccess?.enabled && state.actorRole !== 'owner') return null;
+  return { projectId: state.project.id, runId: run.id, planRevision: run.planRevision, updatedAt: status.updatedAt, maxAttempts };
+}
 function executionContext() {
   if (state.selectionPending) return { projectId: '', runId: '', specRevision: '', planRevision: '', planningStatus: 'unconfirmed' };
   const run = state.run;
@@ -389,7 +397,7 @@ function renderWorkspaceContext(steps = workflowSteps()) {
   if (automatic) {
     const current = steps.find(step => step.id === automatic.stage) || steps[0];
     const presentation = {
-      queued: ['自动交付已启动', '自动交付', 'running', '查看执行进度'],
+      queued: [state.automatic?.runId === run.id ? '自动交付已启动' : '正在核对自动交付进度', '自动交付', 'running', '查看执行进度'],
       running: [current.text, '自动推进中', 'running', '查看执行进度'],
       needs_clarification: ['等待补充需求', '需要回答', 'awaiting_spec', '查看问题'],
       failed: ['自动交付未通过', '未通过', 'failed', '查看失败阶段'],
@@ -401,6 +409,8 @@ function renderWorkspaceContext(steps = workflowSteps()) {
       title = caption; action = nextAction; visualStatus = status;
       note = automatic.status === 'completed' && !downloadReady ? '源码暂不可下载。打开交付核对当前版本和预览状态。' : automatic.message || current.detail || current.text;
       kind = automatic.status === 'needs_clarification' ? 'clarify' : `delivery:${current.id}`;
+      const retry = verificationRetryContext();
+      if (retry) { action = retry.maxAttempts ? '重试验收清单' : '使用已保存清单继续'; kind = 'retry-verification'; }
       $('#run-status').textContent = label;
       $('#run-status').className = `status-tag status-${status}`;
       $('#run-progress').textContent = `${steps.filter(step => step.state === 'done').length} / ${steps.length} 个步骤已完成`;
@@ -440,7 +450,13 @@ function openDeliveryStage(stage) {
   workspaceLayout.show('execution');
   const verification = $('#verification-plans-section');
   verification.open = stage === 'verification' && !verification.hidden;
-  if (stage === 'verification') focusWorkspaceTarget(!verification.hidden ? $('summary', verification) : $('#verification-plans-unavailable'));
+  if (stage === 'verification') {
+    const automatic = automaticStatus();
+    if (automatic?.status === 'failed' && automatic.stage === 'verification' && automatic.proposalId) {
+      void verificationPlans?.selectProposal(automatic.proposalId);
+    }
+    focusWorkspaceTarget(!verification.hidden ? $('summary', verification) : $('#verification-plans-unavailable'));
+  }
   else focusWorkspaceTarget(plannedPanel?.focusStage(stage) || $('#execution-tools > summary'));
 }
 function locateWorkspaceProblem({ source = 'planning', stageId, target } = {}) {
@@ -465,6 +481,11 @@ function locateWorkspaceProblem({ source = 'planning', stageId, target } = {}) {
 }
 function handleWorkspaceNext() {
   const kind = $('[data-workspace-next]').dataset.nextKind;
+  if (kind === 'retry-verification') {
+    const retry = verificationRetryContext();
+    if (retry) showAutomaticConsent(retry);
+    return;
+  }
   if (kind === 'clarify') {
     locateWorkspaceProblem({ source: 'planning', stageId: state.run?.planningIssue?.stageId ?? 'spec',
       target: $('#spec-repair-host').hidden ? '#review-heading' : '#spec-repair-host' });
@@ -807,7 +828,10 @@ function schedulePoll() {
   clearTimeout(state.pollTimer);
   if (state.run && (automaticOwnsRun() || state.run.status === 'running' || state.run.stages?.some((stage) => stage.status === 'running'))) {
     state.pollTimer = setTimeout(pollRun, automaticClarifying() ? 1600 : 650);
-  } else if (automaticStatus()?.status === 'completed') state.pollTimer = setTimeout(pollRun, 3000);
+  } else {
+    const automatic = automaticStatus();
+    if (automatic?.status === 'completed' || automatic?.status === 'failed' && automatic.stage === 'verification') state.pollTimer = setTimeout(pollRun, 3000);
+  }
 }
 async function pollRun() {
   const epoch = state.epoch; const id = state.run?.id;
@@ -882,6 +906,23 @@ async function startRun(expectedSource, { automatic = false } = {}) {
     updateRun(run); renderHeader(); schedulePoll(); toast(automatic ? '已启动自动交付，正在处理需求。' : '编排已启动，可以点击节点查看过程');
   } catch (error) { if (epoch === state.epoch) showError(error); }
   finally { if (epoch === state.epoch) { state.selectionPending = false; syncExecutionPanel(); schedulePoll(); } setBusy(false); }
+}
+async function retryAutomaticVerification({ planRevision, updatedAt }) {
+  if (state.busy || state.selectionPending) return;
+  setBusy(true); clearError(); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
+  try {
+    await api(`${basePath()}/automatic-delivery/retry-verification`, { method: 'POST', body: JSON.stringify({ modelUsageConfirmed: true, planRevision, updatedAt }) });
+    if (epoch === state.epoch) toast('已请求在当前计划上继续验收准备。');
+  } catch (error) {
+    if (epoch === state.epoch) showError(error, 'verification');
+  } finally {
+    if (epoch === state.epoch) state.automatic = null;
+    setBusy(false);
+    if (epoch === state.epoch) {
+      renderRun();
+      void pollRun();
+    }
+  }
 }
 async function runAction(action, stageId) {
   if (!state.run || historicalRun() || state.busy || state.selectionPending || automaticOwnsRun()) return;
@@ -962,24 +1003,45 @@ $('#project-form').addEventListener('submit', createProject);
 $('#file-input').addEventListener('change', (event) => importFile(event.target.files[0]));
 $('#clear-file').addEventListener('click', resetFile);
 $('#start-run').addEventListener('click', () => { void startRun(); });
-$('#start-automatic').addEventListener('click', () => {
+function showAutomaticConsent(retry = null) {
   const { specificationMaxCalls, engineeringMaxCalls, verificationMaxAttempts, developmentTimeoutMs } = state.health.automaticDelivery;
   const budget = $('#automatic-budget');
-  budget.textContent = `规格最多 ${specificationMaxCalls} 次，工程设计最多 ${engineeringMaxCalls} 次，验收清单最多 ${verificationMaxAttempts} 次。整体验收的编码及审查合计最多 6 次，按任务开发时合计最多 48 次。`;
+  automaticRetryConsent = retry;
+  $('#automatic-delivery-title').textContent = retry ? '从验收清单继续' : '启动自动交付';
+  $('#automatic-delivery-form .dialog-body > p').textContent = retry
+    ? '沿用本次已确认的规格和开发计划，保留原提案和用量记录。清单校验通过后，系统自动启动一次开发。'
+    : '系统会整理需求、拟订计划与验收清单，再自动编码、测试、审查和返工。遇到必须补充的业务信息时，会在工作台显示具体问题。完成后可下载当前通过验收的源码。';
+  budget.textContent = retry
+    ? retry.maxAttempts ? `本轮最多新增 ${retry.maxAttempts} 次验收清单模型调用。` : '将使用已保存的合格清单继续，本轮只产生开发和审查的模型用量。'
+    : `规格最多 ${specificationMaxCalls} 次，工程设计最多 ${engineeringMaxCalls} 次，验收清单最多 ${verificationMaxAttempts} 次。`;
+  budget.textContent += '整体验收的编码及审查合计最多 6 次，按任务开发时合计最多 48 次。';
   if (Number.isSafeInteger(developmentTimeoutMs) && developmentTimeoutMs > 0) {
     const duration = developmentTimeoutMs % 60000 === 0 ? `${developmentTimeoutMs / 60000} 分钟` : `${developmentTimeoutMs / 1000} 秒`;
     budget.textContent += `开发阶段最多 ${duration}，包含测试、审查和返工。`;
   }
   $('#automatic-consent').checked = false;
+  $('#confirm-automatic').textContent = retry ? retry.maxAttempts ? '重试验收清单' : '使用已保存清单继续' : '启动自动交付';
   $('#confirm-automatic').disabled = true;
   $('#automatic-delivery-dialog').showModal();
   $('#automatic-consent').focus();
-});
+}
+$('#start-automatic').addEventListener('click', () => showAutomaticConsent());
 $('#automatic-consent').addEventListener('change', event => { $('#confirm-automatic').disabled = !event.target.checked; });
 $('#automatic-delivery-form').addEventListener('submit', event => {
   event.preventDefault();
-  if (!$('#automatic-consent').checked || $('#start-automatic').disabled) return;
+  if (!$('#automatic-consent').checked) return;
+  const retry = automaticRetryConsent;
+  if (!retry && $('#start-automatic').disabled) return;
   $('#automatic-delivery-dialog').close();
+  if (retry) {
+    const current = verificationRetryContext();
+    if (!current || Object.entries(retry).some(([key, value]) => current[key] !== value)) {
+      showError(new Error('验收轮次或计划版本已变化，请重新核对后再继续。'), 'verification');
+      return;
+    }
+    void retryAutomaticVerification(retry);
+    return;
+  }
   void startRun(undefined, { automatic: true });
 });
 $('[data-workspace-next]').addEventListener('click', handleWorkspaceNext);

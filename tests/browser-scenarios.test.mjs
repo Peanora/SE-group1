@@ -22,22 +22,26 @@ const definition = () => ({ version: 1, sessions: ['reader', 'writer'], steps: [
 const digest = value => createHash('sha256').update(value).digest('hex');
 
 if (!process.env.TASKFLOW_BROWSER_MOCK_CHILD) {
-  async function nativeReadiness(mode) {
+  async function nativeBrowserScenario(mode, files, browser) {
     const { createVerificationControl, compileManifest } = await import('../lib/verification-contract.mjs');
     const { runBrowserScenarios } = await import('../lib/browser-scenarios.mjs');
+    const base = { projectId: 'readiness', runId: 'fixed', specRevision: 'a'.repeat(64), planRevision: 'b'.repeat(64) };
+    const proposal = { version: 1, id: 'readiness', name: 'Browser fixture', sessions: [], steps: [{ id: 'http', type: 'request', dependsOn: [], requirementIds: ['R1'], request: { id: 'ready', method: 'GET', path: '/api/ready', assertions: [{ id: 'ok', op: 'status', value: 200 }] } }], browser }, control = createVerificationControl(), args = { proposal, requirements: ['R1'], binding: base }, approval = control.approve(args), manifest = compileManifest({ ...args, approval }); control.beginCoding(approval);
+    const output = path.resolve('output/browser-action-readiness-tests'); await mkdir(output, { recursive: true }); const rootDir = await mkdtemp(path.join(output, mode + '-'));
+    const report = await runBrowserScenarios({ rootDir, files, manifest, executable: process.env.EXECUTION_SANDBOX_EXE, binding: { ...base, taskId: 'fixture', attemptId: mode, candidateCommit: 'c'.repeat(40), sourceHash: digest(JSON.stringify(files)), manifestHash: manifest.manifestHash, browserPolicyHash: browserScenarioPolicyHash, reviewPolicyHash: 'd'.repeat(64) } });
+    await writeFile(path.join(rootDir, 'report.json'), JSON.stringify(report, null, 2)); return report;
+  }
+  async function nativeReadiness(mode) {
     const { validateProjectFiles } = await import('../lib/project-files.mjs');
     const app = `import{readFile}from'node:fs/promises';export async function createApp(){return{async handle(req){if(req.path==='/favicon.ico')return{status:204,headers:{},body:''};if(req.path==='/api/ready'||req.path==='/api/button-ready'){await new Promise(resolve=>setTimeout(resolve,150));return{status:200,headers:{'content-type':'application/json'},body:'{}'}}const file={'/':['index.html','text/html'],'/app.js':['app.js','text/javascript']}[req.path];return file?{status:200,headers:{'content-type':file[1]},body:await readFile(new URL('../public/'+file[0],import.meta.url),'utf8')}:{status:404,headers:{},body:''}},close(){}}}`;
     const files = validateProjectFiles([{ path: 'src/app.mjs', content: app }, { path: 'public/index.html', content: '<!doctype html><meta name="viewport" content="width=device-width"><section hidden><label>Name<input data-testid="name"></label>' + (mode === 'duplicate' ? '<input data-testid="name">' : '') + '</section><button hidden data-testid="submit">Submit</button><p data-testid="message"></p><script src="/app.js"></script>' },
       { path: 'public/app.js', content: `const panel=document.querySelector('section'),button=document.querySelector('button'),input=document.querySelector('input');fetch('/api/ready').then(()=>{${mode === 'never' ? '' : 'panel.hidden=false;'}});input.addEventListener('input',()=>{fetch('/api/button-ready').then(()=>{button.hidden=false})});button.addEventListener('click',()=>{document.querySelector('p').textContent=input.value})` }]);
     // Exercise normal native startup and navigation with the browser defaults.
     // The controlled mocks below verify small deadlines independently.
-    const base = { projectId: 'readiness', runId: 'fixed', specRevision: 'a'.repeat(64), planRevision: 'b'.repeat(64) }, browser = { version: 1, sessions: ['reader'], steps: [
+    const browser = { version: 1, sessions: ['reader'], steps: [
       { id: 'home', session: 'reader', requirementIds: ['R1'], op: 'goto', path: '/' }, { id: 'name', session: 'reader', requirementIds: ['R1'], op: 'fill', testId: 'name', value: 'ready' },
       { id: 'submit', session: 'reader', requirementIds: ['R1'], op: 'click', testId: 'submit' }, { id: 'result', session: 'reader', requirementIds: ['R1'], op: 'text', testId: 'message', value: 'ready' }] };
-    const proposal = { version: 1, id: 'readiness', name: 'Delayed readiness fixture', sessions: [], steps: [{ id: 'http', type: 'request', dependsOn: [], requirementIds: ['R1'], request: { id: 'ready', method: 'GET', path: '/api/ready', assertions: [{ id: 'ok', op: 'status', value: 200 }] } }], browser }, control = createVerificationControl(), args = { proposal, requirements: ['R1'], binding: base }, approval = control.approve(args), manifest = compileManifest({ ...args, approval }); control.beginCoding(approval);
-    const output = path.resolve('output/browser-action-readiness-tests'); await mkdir(output, { recursive: true }); const rootDir = await mkdtemp(path.join(output, mode + '-'));
-    const report = await runBrowserScenarios({ rootDir, files, manifest, executable: process.env.EXECUTION_SANDBOX_EXE, binding: { ...base, taskId: 'fixture', attemptId: mode, candidateCommit: 'c'.repeat(40), sourceHash: digest(JSON.stringify(files)), manifestHash: manifest.manifestHash, browserPolicyHash: browserScenarioPolicyHash, reviewPolicyHash: 'd'.repeat(64) } });
-    await writeFile(path.join(rootDir, 'report.json'), JSON.stringify(report, null, 2)); return report;
+    return nativeBrowserScenario(mode, files, browser);
   }
   const nativeReadinessOptions = { skip: process.env.TASKFLOW_TEST_REAL_SANDBOX !== '1' || !process.env.EXECUTION_SANDBOX_EXE, timeout: 75000 };
   test('native readiness waits for delayed hidden fill and then delayed hidden click in real Edge', nativeReadinessOptions, async () => {
@@ -58,6 +62,28 @@ if (!process.env.TASKFLOW_BROWSER_MOCK_CHILD) {
       if (mode === 'never') assert.equal(observed.visible, false);
       assert.equal(check('submit').passed, false);
       assert.equal(check('submit').actual, '未执行，未获得通过结论');
+    }
+  });
+  test('native Edge follows a declared same-origin HTTP redirect and asserts the destination in each viewport', nativeReadinessOptions, async () => {
+    const { validateProjectFiles } = await import('../lib/project-files.mjs');
+    const app = `export async function createApp() {
+      return { handle(request) {
+        if (request.path === '/tickets') return { status: 302, headers: { location: '/login' }, body: '' };
+        if (request.path === '/login') return { status: 200, headers: { 'content-type': 'text/html' },
+          body: '<!doctype html><meta name="viewport" content="width=device-width"><h1 data-testid="login">Sign in</h1>' };
+        return { status: 204, headers: {}, body: '' };
+      } };
+    }`;
+    const browser = { version: 1, sessions: ['guest'], steps: [
+      { id: 'tickets', session: 'guest', requirementIds: ['R1'], op: 'goto', path: '/tickets', expectedPath: '/login' },
+      { id: 'login', session: 'guest', requirementIds: ['R1'], op: 'text', testId: 'login', value: 'Sign in' },
+    ] };
+    const report = await nativeBrowserScenario('declared-redirect', validateProjectFiles([{ path: 'src/app.mjs', content: app }]), browser);
+    assert.equal(report.status, 'passed', JSON.stringify(report));
+    assert.equal(report.terminationConfirmed, true);
+    for (const view of ['DESKTOP', 'MOBILE']) {
+      assert.equal(report.checks.find(item => item.id === `BROWSER-${view}-tickets`).actual, '/login');
+      assert.equal(report.checks.find(item => item.id === `BROWSER-${view}-login`).actual, 'Sign in');
     }
   });
   test('browser definition is normalized, detached, deeply frozen and creates a complete unique check list', () => {
@@ -89,6 +115,15 @@ if (!process.env.TASKFLOW_BROWSER_MOCK_CHILD) {
   });
   for (const badPath of ['https://external.invalid/', '//external.invalid/', '/a/../b', '/%2e%2e/b', '/a%252fb', '/a\\b', '/a#b', '/ a', '/a\0', '/a:b', '/a/./b']) test(`browser goto rejects unsafe path ${JSON.stringify(badPath)}`, () => {
     const raw = definition(); raw.steps[0].path = badPath; assert.throws(() => normalizeBrowserScenario(raw, ['R1']));
+    raw.steps[0].path = '/'; raw.steps[0].expectedPath = badPath; assert.throws(() => normalizeBrowserScenario(raw, ['R1']));
+  });
+  test('expectedPath is frozen, appears as the expected browser destination and applies only to goto', () => {
+    const raw = definition(); raw.steps[0].path = '/tickets'; raw.steps[0].expectedPath = '/login';
+    const normalized = normalizeBrowserScenario(raw, ['R1']); raw.steps[0].expectedPath = '/changed';
+    assert.equal(normalized.steps[0].expectedPath, '/login');
+    assert.equal(browserScenarioChecks(normalized).find(check => check.id === 'BROWSER-DESKTOP-home').expected, '/login');
+    raw.steps[2].expectedPath = '/login';
+    assert.throws(() => normalizeBrowserScenario(raw, ['R1']));
   });
   test('browser input rejects unsupported operations, JavaScript, arbitrary selectors and malformed references', () => {
     for (const mutate of [raw => { raw.steps[0].op = 'evaluate'; }, raw => { raw.steps[2].selector = 'input'; }, raw => { raw.steps[2].testId = 'input[name=x]'; }, raw => { raw.steps[0].session = 'unknown'; }, raw => { raw.steps[0].requirementIds = ['UNKNOWN']; }, raw => { raw.steps[0].id = 'GUARD'; }, raw => { raw.steps[1].id = raw.steps[0].id; }, raw => { raw.sessions = []; }, raw => { raw.steps = raw.steps.slice(0, 1); }, raw => { raw.steps[6].value = ''; }, raw => { raw.steps[7].value = 1; }, raw => { raw.steps[8].value = 1001; }, raw => { raw.steps[3].value = {}; }, raw => { raw.limits = { timeoutMs: null }; }, raw => { raw.limits = { timeoutMs: 120001 }; }, raw => { raw.limits = { actionTimeoutMs: 10001 }; }]) {
@@ -128,7 +163,7 @@ if (!process.env.TASKFLOW_BROWSER_MOCK_CHILD) {
     const rootDir = await mkdtemp(path.join(os.tmpdir(), 'browser-scenario-test-'));
     t.after(async () => { assert.equal(path.dirname(rootDir), path.resolve(os.tmpdir())); assert.ok(path.basename(rootDir).startsWith('browser-scenario-test-')); await rm(rootDir, { recursive: true, force: true }); });
     const base = { projectId: 'project', runId: 'run', specRevision: 'a'.repeat(64), planRevision: 'b'.repeat(64) };
-    const scenario = definition(); scenario.limits = { timeoutMs: 5000, actionTimeoutMs: behavior.actionTimeoutMs ?? 100 };
+    const scenario = definition(); scenario.limits = { timeoutMs: 5000, actionTimeoutMs: behavior.actionTimeoutMs ?? 100 }; behavior.modifyScenario?.(scenario);
     const manifest = { binding: base, browser: normalizeBrowserScenario(scenario, ['R1']), requirements: ['R1'], manifestHash: 'c'.repeat(64) }; brands.add(manifest);
     const binding = { ...base, taskId: 'task', attemptId: 'attempt', candidateCommit: 'd'.repeat(40), sourceHash: digest(JSON.stringify(files)), manifestHash: manifest.manifestHash, browserPolicyHash: browserScenarioPolicyHash, reviewPolicyHash: 'e'.repeat(64) };
     const seen = { runtimes: [], stops: 0, launched: 0, closed: 0, contexts: [], worlds: 0, actions: [], inspections: [] }; let connected = true;
@@ -142,7 +177,7 @@ if (!process.env.TASKFLOW_BROWSER_MOCK_CHILD) {
           newPage: async () => {
             const page = { current: 'about:blank', on: (name, handler) => pageHandlers.set(name, handler), url: () => page.current, close: async () => {},
               goto: async target => { page.current = target; await context.routeHandler({ request: () => ({ url: () => target }), continue: async () => {}, abort: async () => {} });
-                await behavior.onGoto?.({ context, page, pageHandlers, manifest }); return { status: () => 200 }; },
+                return await behavior.onGoto?.({ context, page, pageHandlers, manifest, target }) ?? { status: () => 200 }; },
               getByTestId: testId => ({ fill: async (value, options) => { seen.actions.push({ op: 'fill', testId, timeout: options.timeout }); context.value = value; await behavior.onFill?.({ context, manifest, timeout: options.timeout }); }, click: async options => { seen.actions.push({ op: 'click', testId, timeout: options.timeout }); assert.equal(testId, 'submit'); await behavior.onClick?.({ context, manifest, timeout: options.timeout }); if (behavior.delayedSubmit) setTimeout(() => { context.message = 'submitted'; }, 35); else context.message = 'submitted'; } }),
             }; context.page = page; handlers.get('page')?.(page); return page;
           },
@@ -173,6 +208,28 @@ if (!process.env.TASKFLOW_BROWSER_MOCK_CHILD) {
     assert.deepEqual(report.checks.map(item => item.id), browserScenarioChecks(f.manifest.browser).map(item => item.id)); assert.ok(report.checks.every(item => item.passed)); assert.equal(report.coverage, 'structural_only');
     assert.equal(f.seen.runtimes.length, 2); assert.notEqual(f.seen.runtimes[0].workspace, f.seen.runtimes[1].workspace); assert.equal(f.seen.contexts.length, 4); assert.ok(f.seen.worlds > 0);
     assert.equal(report.terminationConfirmed, true); assert.equal(report.browser.closed, true); assert.equal(f.seen.closed, 1); assert.equal(f.seen.stops, 2);
+  });
+  for (const mode of ['declared', 'legacy', 'wrong-destination', 'client-navigation', 'non-redirect-status', 'external-intermediate']) test(`trusted mock checks the exact approved server redirect (${mode})`, async t => {
+    const f = await fixture(t, { modifyScenario: scenario => {
+      scenario.steps[0].path = '/tickets';
+      if (mode !== 'legacy') scenario.steps[0].expectedPath = '/login';
+    }, onGoto: ({ page, target }) => {
+      if (!target.endsWith('/tickets')) return;
+      const responseOf = (url, status, from = null) => {
+        const request = { url: () => url, redirectedFrom: () => from?.request() ?? null, response: async () => response };
+        const response = { url: () => url, status: () => status, request: () => request };
+        return response;
+      };
+      const initial = responseOf(target, mode === 'non-redirect-status' ? 200 : 302);
+      const prior = mode === 'client-navigation' ? null : mode === 'external-intermediate' ? responseOf('http://blocked.invalid/private', 307, initial) : initial;
+      page.current = new URL(mode === 'wrong-destination' ? '/other' : '/login', target).href;
+      return responseOf(page.current, 200, prior);
+    } });
+    const report = await run(f);
+    assert.equal(report.status, mode === 'declared' ? 'passed' : 'failed', JSON.stringify(report));
+    assert.equal(report.terminationConfirmed, true);
+    for (const view of ['DESKTOP', 'MOBILE']) assert.equal(report.checks.find(check => check.id === `BROWSER-${view}-home`).passed, mode === 'declared');
+    assert.doesNotMatch(JSON.stringify(report), /blocked\.invalid|\/private/u);
   });
   for (const behavior of [{ wrongText: true }, { duplicate: true }, { overflow: true }, { runtimeExit: 1 }, { noAck: true }, { browserExit: 1 }, { changeSource: true }]) test(`trusted mock rejects failing actions or shutdown ${JSON.stringify(behavior)}`, async t => {
     const f = await fixture(t, behavior), report = await run(f); assert.equal(report.status, 'failed'); assert.ok(report.checks.some(item => !item.passed)); assert.equal(report.terminationConfirmed, true);

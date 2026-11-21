@@ -373,6 +373,12 @@ export async function createApp(options = {}) {
           requireLocalExecutionRequest(request, server);
           return respond(response, 200, await automaticDelivery.status(project, run));
         }
+        if (segments.length === 7 && segments[5] === 'automatic-delivery' && segments[6] === 'retry-verification' && method === 'POST') {
+          requireLocalExecutionRequest(request, server);
+          const input = dataFields(await readJson(request), ['modelUsageConfirmed', 'planRevision', 'updatedAt']);
+          const subject = teamAccess ? teamAccess.executionSubject(request.headers.cookie) : createLocalExecutionSubject();
+          return respond(response, 202, await automaticDelivery.retryVerification(projectId, runId, input, subject));
+        }
         if (segments[5] === 'simulations') {
           requireLocalExecutionRequest(request, server);
           if (segments.length === 6 && method === 'GET') {

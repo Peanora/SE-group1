@@ -134,6 +134,20 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     const id = hasRecovery(row) ? repairKey(row) : JSON.stringify([row.id, row.revision]);
     if (saved.drafts[id]) { saved.loadedKey = id; draft = saved.drafts[id]; fill(); } else loadRow(row);
   }
+  function chooseSelection(id) {
+    if (action || !rows().some(row => row.id === id)) return false;
+    if (saved.selectedId !== id) {
+      saved.selectedId = id; saved.loadedKey = ''; draft = null;
+      chooseRow(); persist(); render();
+    }
+    return true;
+  }
+  async function selectProposal(id) {
+    if (!mounted || destroyed) return false;
+    const expectedKey = contextKey(contextValue(getContext()));
+    if (syncContext() || !fresh) await refresh();
+    return key === expectedKey && key === contextKey(contextValue(getContext())) && fresh && rows().some(row => row.id === id && scope(row)) && chooseSelection(id);
+  }
   const staleDraft = row => !draft || draft.revision !== row?.revision;
   const dirtyDefinition = row => !!draft && draft.json !== pretty(row?.proposal);
   function finishAutomaticRepair() {
@@ -202,7 +216,7 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     importJSON.maxLength = 262144; importJSON.spellcheck = false; importFeedback.maxLength = 5000;
     importDetails.append(node('summary', '导入已有测试定义（不调用模型）'), node('p', '将已有定义保存为人工草稿，保留原模型尝试与费用。导入后仍须单独审阅和认可，尚未运行测试。'), field('待导入测试定义 JSON', importJSON), field('导入依据（必填，最多5000字）', importFeedback), importButton); body.append(importDetails);
     for (const [name, control] of [['importJSON', importJSON], ['importFeedback', importFeedback]]) control.addEventListener('input', () => { if (syncContext()) { render(); void refresh(); return; } saved[name] = control.value; persist(); render(); });
-    const select = node('select'); select.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } if (action) return; saved.selectedId = select.value; saved.loadedKey = ''; draft = null; chooseRow(); persist(); render(); });
+    const select = node('select'); select.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } chooseSelection(select.value); });
     body.append(field('测试提案记录', select));
     const detail = node('div'), identity = node('p'), status = node('p', '', 'vp-note'), facts = node('p'), failure = node('div', '', 'vp-note vp-error'), failureText = node('p'), missing = node('ul'), capacity = node('p'), openDraft = button('载入失败草案并修改', () => { void openRecovery(); }, true), binding = node('details'), bindingText = node('pre'), coverage = node('p'), goToCode = button('去开始开发', onApproved, true);
     const quickHint = node('p'), quickRepair = button('修复并保存待审阅清单', () => { void perform('quickRepair'); }, true);
@@ -349,6 +363,6 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
       else notice = '操作结果未确认，编辑内容已保留。请刷新核对后再决定下一步；不会自动重发。'; } }
     finally { if (isCurrent(token) && action === token) { action = null; persist(); render(); finishAutomaticRepair(); onUpdate(); schedule(); } else if (!destroyed && syncContext()) { render(); void refresh(); } }
   }
-  return { async mount(element) { if (destroyed) return false; if (!element?.append) throw new TypeError('测试提案面板需要挂载元素。'); if (!mounted) { mounted = true; build(element); } return refresh(); }, refresh, workflowProgress,
+  return { async mount(element) { if (destroyed) return false; if (!element?.append) throw new TypeError('测试提案面板需要挂载元素。'); if (!mounted) { mounted = true; build(element); } return refresh(); }, refresh, workflowProgress, selectProposal,
     destroy() { if (destroyed) return; persist(); destroyed = true; epoch++; readId++; clearTimeout(timer); action = null; pending = null; root?.remove(); } };
 }

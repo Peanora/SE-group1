@@ -679,15 +679,82 @@ test('manual source cannot wash rejected manifests and normal revision approval 
   assert.equal((await f.service.list(ids)).capabilities.budget.remainingAttempts, 3); assert.deepEqual(await readdir(path.join(f.rootDir, 'receipts')), []);
 });
 
-test('implementation policy changes cannot clear real persisted rejection across manual, model and edit flows', async t => {
-  const f = await fixture(t); await f.service.shutdown();
+async function openPredecessor(f) {
   // Load a real service with a different implementation fingerprint. Only its
   // module location/import URLs and a comment differ; business planning and DSL
   // stay identical. This portable regression does not depend on local output/i8.
   const currentURL = new URL('../lib/verification-planning-service.mjs', import.meta.url);
-  const oldCode = (await readFile(currentURL, 'utf8')).replace(/(['"])(\.\/[^'"]+)\1/gu, (all, quote, relative) => quote + new URL(relative, currentURL).href + quote) + '\n// Predecessor service implementation fingerprint.\n';
+  const oldCode = (await readFile(currentURL, 'utf8')).replace(/(['"])(\.\.?\/[^'"]+)\1/gu, (_all, quote, relative) => quote + new URL(relative, currentURL).href + quote) + '\n// Predecessor service implementation fingerprint.\n';
   const oldFile = path.join(f.rootDir, 'predecessor-service.mjs'); await writeFile(oldFile, oldCode);
   const predecessor = await import(pathToFileURL(oldFile).href), previous = await predecessor.createVerificationPlanningService(f.base); f.services.push(previous);
+  return previous;
+}
+
+test('trusted retries derive exact private diagnostics across service versions and do not change the default budget', async t => {
+  const valid = proposal();
+  valid.browser = { version: 1, sessions: ['visitor'], steps: [
+    { id: 'home', session: 'visitor', requirementIds: ['R1'], op: 'goto', path: '/' },
+    { id: 'list', session: 'visitor', requirementIds: ['R1'], op: 'visible', testId: 'resources', value: true },
+  ] };
+  const invalid = structuredClone(valid);
+  invalid.browser.steps.pop();
+  invalid.name = 'private unreplayed model text';
+  invalid.steps[0].requirementIds = ['UNKNOWN'];
+  invalid.steps[0].dependsOn = [{ step: 'future' }, 'missing'];
+  const responses = [JSON.stringify(invalid), '{"version": 1,', JSON.stringify(valid)];
+  const inputs = [];
+  const f = await fixture(t, { maxAttempts: 1, dependencies: { createModel: options => createVerificationModel({ ...options, fetchImpl: async (_url, request) => {
+    const { messages } = JSON.parse(request.body);
+    inputs.push(JSON.parse(messages[1].content));
+    assert.ok(inputs.length <= responses.length);
+    return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: responses[inputs.length - 1] } }] }));
+  } }) } });
+  await f.service.shutdown();
+  const predecessor = await openPredecessor(f);
+  const previous = await wait(predecessor, (await propose(predecessor)).id, 'failed');
+  assert.equal(previous.receiptState, 'saved');
+  assert.equal(Object.hasOwn(inputs[0], 'retryFeedback'), false);
+  await predecessor.shutdown();
+
+  const current = await f.open(), extended = { additionalAttempts: 2 };
+  const standard = (await current.list(ids)).capabilities;
+  const rework = (await current.list(ids, extended)).capabilities;
+  assert.equal(standard.canPropose, false);
+  assert.equal(standard.budget.maxAttempts, 1);
+  assert.equal(rework.budget.maxAttempts, 3);
+  assert.notEqual(rework.contractRevision, standard.contractRevision);
+  const reworkInput = { ...ids, contractRevision: rework.contractRevision };
+  const retry = previousProposalId => current.propose(reworkInput, { ...extended, previousProposalId });
+  await assert.rejects(current.propose({ ...reworkInput, additionalAttempts: 2 }), code('invalid_input'));
+  await assert.rejects(current.propose(reworkInput, extended), code('retry_source_required'));
+  await assert.rejects(current.propose({ ...reworkInput, contractRevision: standard.contractRevision }, { ...extended, previousProposalId: previous.id }), code('contract_changed'));
+
+  const filename = path.join(f.rootDir, 'receipts', `${previous.id}.json`), original = await readFile(filename);
+  await writeFile(filename, Buffer.concat([original, Buffer.from('tampered')]));
+  await assert.rejects(retry(previous.id), code('invalid_retry_receipt'));
+  await writeFile(filename, original);
+  assert.equal(inputs.length, 1);
+
+  const next = await wait(current, (await retry(previous.id)).proposal.id, 'failed');
+  assert.notEqual(next.binding.policyHash, previous.binding.policyHash);
+  assert.match(inputs[1].retryFeedback, /HTTP 步骤缺少需求编号 R1/u);
+  assert.match(inputs[1].retryFeedback, /read 的 dependsOn 必须是前序步骤编号的字符串数组/u);
+  assert.match(inputs[1].retryFeedback, /read 引用了不存在的依赖 missing/u);
+  assert.match(inputs[1].retryFeedback, /浏览器业务断言缺少页面相关需求编号 R1/u);
+  assert.doesNotMatch(JSON.stringify(inputs[1]), /private unreplayed model text/u);
+  assert.doesNotMatch(JSON.stringify(next), /retryFeedback|private unreplayed model text/u);
+  await assert.rejects(retry(previous.id), code('stale_retry_source'));
+
+  const final = await wait(current, (await retry(next.id)).proposal.id, 'draft');
+  assert.match(inputs[2].retryFeedback, /无法解析为有效的清单 JSON/u);
+  assert.equal((await current.approve(edit(final))).proposal.approved, true);
+  assert.equal((await current.list(ids, extended)).capabilities.budget.remainingAttempts, 0);
+  assert.equal(inputs.length, 3);
+});
+
+test('implementation policy changes cannot clear real persisted rejection across manual, model and edit flows', async t => {
+  const f = await fixture(t); await f.service.shutdown();
+  const previous = await openPredecessor(f);
   const first = await wait(previous, (await propose(previous)).id, 'draft'), rejected = (await previous.reject(edit(first))).proposal;
   assert.equal(rejected.status, 'rejected'); await previous.shutdown();
   const database = new DatabaseSync(path.join(f.rootDir, 'verification.sqlite'), { readOnly: true }); let originalRejections;
