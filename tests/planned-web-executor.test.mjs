@@ -56,13 +56,22 @@ if (!process.env.TASKFLOW_PLANNED_CORE_CHILD) {
     if (active.mode === 'format-plus-http-failure' && active.http === 2 || active.mode.startsWith('startup-') && active.code === 1 || active.mode === 'repeated-self-check-failure') {
       report.status = 'failed'; report.checks[0].passed = false; report.checks[0].actual = 'controlled startup failure';
       if (active.mode.startsWith('startup-')) report.startupDiagnostic = { phase: 'startup', code: active.mode === 'startup-invalid-code' ? 'untrusted-private-text' : 'sqlite_transaction_unsupported', sourceLocation: { name: active.mode === 'startup-invalid-path' ? '../private.mjs' : 'src/app.mjs', line: 1 } };
+      if (active.mode === 'startup-valid') {
+        const startup = report.checks.find(check => check.id === 'SYS_START');
+        Object.assign(startup, { passed: false, executed: true, actual: 'SQLite 初始化不兼容' });
+        Object.assign(report.processes[0], { status: 'failed', exitCode: 1, stopAcknowledged: false });
+        report.status = 'error';
+      }
     }
     return report;
   } } });
   mock.module(new URL('../lib/browser-scenarios.mjs', import.meta.url).href, { namedExports: { runBrowserScenarios: async input => {
     active.browser++; const report = { status: 'passed', binding: structuredClone(input.binding), sourceHash: sourceHash(input.files), manifestHash: input.manifest.manifestHash, browserPolicyHash: browserScenarioPolicyHash,
       terminationConfirmed: true, browser: { closed: true, version: 'trusted-test-only-mock' }, coverage: 'structural_only', processes: [{ ...stopped, kind: 'runtime', pid: 201 }, { ...stopped, kind: 'runtime', pid: 202 }, { ...stopped, kind: 'browser', pid: 203 }], checks: browserScenarioChecks(input.manifest.browser).map(rule => ({ ...rule, actual: rule.expected, passed: true })) };
-    if (active.mode === 'foreign-browser-commit') report.binding.candidateCommit = 'f'.repeat(40);
+    if (active.mode === 'foreign-browser-commit') {
+      report.binding.candidateCommit = 'f'.repeat(40);
+      report.status = 'failed'; report.checks[0].passed = false; report.checks[0].actual = '不同提交的失败结果';
+    }
     if (active.mode === 'duplicate-browser-check') report.checks[1] = { ...report.checks[0] };
     const loginIssue = active.mode.startsWith('missing-browser-login');
     if (loginIssue && active.browser === 1 || ['repeated-browser-failure', 'changed-browser-failure'].includes(active.mode) && active.browser <= 2) {
@@ -238,7 +247,10 @@ if (!process.env.TASKFLOW_PLANNED_CORE_CHILD) {
     if (mode === 'unknown-finish-current-code') { assert.equal(f.record.candidateCommit, null); assert.equal(f.seen.review, 0); }
   });
   for (const mode of ['outside-write-path', 'no-code-receipt', 'mismatched-code-receipt', 'no-review-receipt', 'missing-http-checks', 'unknown-http', 'foreign-browser-commit', 'duplicate-browser-check']) test(`planned core refuses incomplete or mismatched evidence: ${mode}`, async t => {
-    const f = await execute(t, mode); assert.notEqual(f.record.status, 'accepted'); assert.equal(isPlannedWebTaskAccepted(f.record, f.compiled), false);
+    const maxCalls = mode === 'outside-write-path' ? 1 : 3;
+    const f = await execute(t, mode, { maxCalls }); assert.notEqual(f.record.status, 'accepted'); assert.equal(isPlannedWebTaskAccepted(f.record, f.compiled), false);
+    assert.equal(f.seen.code, 1, 'incomplete or foreign evidence cannot spend another coding call');
+    assert.ok(!f.record.events.some(event => event.type === 'automatic_rework'));
     if (['no-code-receipt', 'no-review-receipt', 'unknown-http'].includes(mode)) assert.equal(f.record.terminationConfirmed, false);
     if (mode === 'outside-write-path') { assert.equal(f.record.candidateCommit, null); assert.equal(f.seen.review, 0); }
   });
@@ -331,7 +343,10 @@ if (!process.env.TASKFLOW_PLANNED_CORE_CHILD) {
     assert.equal(calls[1].candidateCommit, calls[0].candidateCommit); assert.ok(calls[1].responseFeedback);
     assert.equal(f.record.versions[0].acceptance.review, null);
     assert.deepEqual(f.record.events.filter(event => event.type === 'automatic_rework').map(event => event.cause), ['testing']);
-    assert.equal(f.record.versions[0].acceptance.test.status, 'failed'); assert.ok(JSON.parse(f.seen.feedbacks[1]).test.some(c => c.passed === false));
+    const first = f.record.versions[0], feedback = JSON.parse(f.seen.feedbacks[1]);
+    assert.equal(first.acceptance.test.status, 'failed'); assert.ok(feedback.test.some(c => c.passed === false));
+    assert.deepEqual(feedback.failedCandidate, first.acceptance.binding);
+    assert.equal(f.record.modelCalls.find(call => call.role === 'coding' && call.attempt === 2).inputSourceHash, first.sourceHash);
     await inspectPlannedSource({ rootDir: f.outputDir, reportPath: f.record.reportPath, binding, writablePaths: ['src/app.mjs'], expectedRecord: f.record });
   });
   for (const action of ['cancel', 'change-source']) test(`fixed candidate ${action} during testing prevents Review dispatch`, async t => {
