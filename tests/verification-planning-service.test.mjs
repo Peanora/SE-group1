@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { createVerificationPlanningService, verificationPlanningPolicy } from '../lib/verification-planning-service.mjs';
 import { createVerificationModel, verificationModelPolicy } from '../lib/verification-model.mjs';
-import { compileManifest } from '../lib/verification-contract.mjs';
+import { compileManifest, verificationPolicyHash } from '../lib/verification-contract.mjs';
 import { contentRevision, planningRevision } from '../lib/planning-review.mjs';
 import { validateEngineeringPlan } from '../lib/engineering-plan.mjs';
 import { engineeringTasks } from '../lib/engineering-planner.mjs';
@@ -19,16 +19,18 @@ const ids = { projectId: 'project', runId: 'run' };
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function deferred() { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
-function planning(projectId = ids.projectId, runId = ids.runId) {
+function planning(projectId = ids.projectId, runId = ids.runId, requirementCount = 1) {
   const source = { filename: 'requirements.md', content: '读取资源' };
   const spec = { title: '资源服务', summary: '确认资源接口', goals: ['读取资源'], roles: [], constraints: ['只使用已确认API'], acceptanceScenarios: ['正常读取返回200'], assumptions: [], questions: [],
     stack: { frontend: '原生 HTML/CSS/JavaScript', backend: 'Node.js', storage: 'SQLite' },
     requirements: [{ id: 'R1', title: '读取', description: '读取资源', acceptance: ['返回资源集合'], sourceQuote: '读取资源' }] };
+  for (let i = 2; i <= requirementCount; i++) spec.requirements.push({ ...spec.requirements[0], id: `R${i}`, title: `读取 ${i}` });
+  const requirementIds = spec.requirements.map(item => item.id);
   const specRevision = contentRevision(spec);
   const engineeringPlan = validateEngineeringPlan({ spec, binding: { projectId, runId, specRevision }, proposal: { version: 1, title: '资源工程', summary: '已确认接口与任务', entities: [],
-    routes: [{ id: 'READ', method: 'GET', path: '/resources', roles: [], request: '无请求正文', response: '200资源集合', errors: [], requirementIds: ['R1'] }],
-    views: [{ id: 'HOME', path: '/', title: '资源', requirementIds: ['R1'], selectors: [{ testId: 'resources', role: 'list' }] }],
-    tasks: [{ id: 'DEV', title: '读取资源接口', description: '实现已确认资源API', requirementIds: ['R1'], dependsOn: [], writePaths: ['src/app.mjs'], inputs: ['规格与工程接口'], outputs: ['接口与页面'], acceptance: ['正确返回集合'] }] } });
+    routes: [{ id: 'READ', method: 'GET', path: '/resources', roles: [], request: '无请求正文', response: '200资源集合', errors: [], requirementIds }],
+    views: [{ id: 'HOME', path: '/', title: '资源', requirementIds, selectors: [{ testId: 'resources', role: 'list' }] }],
+    tasks: [{ id: 'DEV', title: '读取资源接口', description: '实现已确认资源API', requirementIds, dependsOn: [], writePaths: ['src/app.mjs'], inputs: ['规格与工程接口'], outputs: ['接口与页面'], acceptance: ['正确返回集合'] }] } });
   const run = { id: runId, projectId, workflowVersion: 2, sourceSnapshot: source, sourceRevision: contentRevision(source), sourceGeneration: 0, sourceSuperseded: false,
     spec, specRevision, specQuestions: [], engineeringPlan, tasks: engineeringTasks(engineeringPlan), artifacts: [{ name: 'architecture.md', content: '已确认资源架构' }],
     review: { passed: true, issues: [] }, stages: [], status: 'succeeded', approvals: { spec: { revision: specRevision } } };
@@ -778,4 +780,107 @@ test('implementation policy changes cannot clear real persisted rejection across
   assert.notEqual(newSource.manifestHash, rejected.manifestHash); assert.equal((await current.approve(edit(newSource))).proposal.approved, true);
   const after = new DatabaseSync(path.join(f.rootDir, 'verification.sqlite'), { readOnly: true });
   try { assert.deepEqual(after.prepare('SELECT * FROM rejections').all(), originalRejections); } finally { after.close(); }
+});
+test('large planning admission freezes its longer model deadline and reports exact over-budget diagnostics', async t => {
+  const large = planning(ids.projectId, ids.runId, 16), inputs = [], createTimeouts = [];
+  const raw = proposal(), requirementIds = large.run.spec.requirements.map(item => item.id);
+  raw.steps[0].requirementIds = requirementIds;
+  const browser = { version: 1, sessions: ['visitor'], steps: [
+    { id: 'home', session: 'visitor', requirementIds, op: 'goto', path: '/' },
+    { id: 'list', session: 'visitor', requirementIds, op: 'visible', testId: 'resources', value: true },
+  ] };
+  const overflow = structuredClone(raw);
+  overflow.steps = Array.from({ length: 51 }, (_, index) => ({
+    ...overflow.steps[0], id: 'step-' + index, request: { ...overflow.steps[0].request, id: 'request-' + index,
+      assertions: [{ id: 'status-' + index, op: 'status', value: 200 }] },
+  }));
+  const f = await fixture(t, { getPlanning: () => large, getPlanningSync: () => large, timeoutMs: undefined,
+    dependencies: { createModel: options => {
+      createTimeouts.push(options.config.timeoutMs);
+      return createVerificationModel({ ...options, fetchImpl: async (_url, request) => {
+        inputs.push(JSON.parse(JSON.parse(request.body).messages[1].content));
+        return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify([overflow, raw, browser][inputs.length - 1]) } }] }));
+      } });
+    } } });
+  const { capabilities } = await f.service.list(ids);
+  assert.equal(capabilities.budget.timeoutMs, 120000);
+  const first = await wait(f.service, (await propose(f.service)).id, 'failed');
+  assert.equal(first.receiptState, 'saved');
+  const second = await f.service.propose({ ...ids, contractRevision: capabilities.contractRevision }, { previousProposalId: first.id });
+  const acceptedDraft = await wait(f.service, second.proposal.id, 'draft');
+  assert.equal(acceptedDraft.proposal.steps.length, 1);
+  assert.equal(createTimeouts.length, 2);
+  assert.ok(createTimeouts.every(ms => ms > 60000 && ms <= 120000));
+  assert.match(inputs[1].retryFeedback, /51 个 HTTP 步骤，硬上限为 40/u);
+  assert.equal(acceptedDraft.generationStage, 'http');
+  assert.equal(acceptedDraft.actions.canApprove, false);
+  await assert.rejects(f.service.approve(edit(acceptedDraft)), code('definition_incomplete'));
+  assert.equal(Object.hasOwn(inputs[1], 'browserObligations'), false);
+
+  // A later receipt must be composed with the precise HTTP artifact.
+  const db = new DatabaseSync(path.join(f.rootDir, 'verification.sqlite'));
+  try {
+    const broken = structuredClone(acceptedDraft.proposal); broken.name = 'Unverified change';
+    db.prepare('UPDATE proposals SET proposal=? WHERE id=?').run(JSON.stringify(broken), acceptedDraft.id);
+    await assert.rejects(f.service.propose({ ...ids, contractRevision: capabilities.contractRevision }), code('stale_verification_stage'));
+    assert.equal(inputs.length, 2);
+    db.prepare('UPDATE proposals SET proposal=? WHERE id=?').run(JSON.stringify(acceptedDraft.proposal), acceptedDraft.id);
+  } finally { db.close(); }
+
+  const third = await propose(f.service);
+  const joint = await wait(f.service, third.id, 'draft');
+  assert.equal(joint.generationStage, 'browser');
+  assert.deepEqual(joint.proposal.steps, acceptedDraft.proposal.steps);
+  assert.deepEqual(joint.proposal.browser.steps, browser.steps);
+  assert.equal(joint.actions.canApprove, true);
+  assert.deepEqual(inputs[2].browserObligations, requirementIds);
+  assert.equal(Object.hasOwn(inputs[2], 'retryFeedback'), false);
+  assert.equal((await f.service.approve(edit(joint))).proposal.approved, true);
+  assert.equal((await f.service.list(ids)).capabilities.budget.remainingAttempts, 0);
+});
+
+test('predecessor approval keeps its exact revision, manifest and execution freeze after a generator upgrade', async t => {
+  const priorHash = {
+    '1a2f269ca3d663fc90a10273b3cb3c8eeed366f11d0c32d98152d74e560b714c': 'cc771ddf230f6ddccb1d5cc413ea5cd47e5d5e6cec0570064bf6269bd1c2f9a4',
+    'c3d90eb76c23183e8d9b47057119e0ea449887db1cab43c04882bf341736a8b7': '30178f9cdbad793616ad18c44602ae76c687983b8bb40d8275a70f09ebb4d53a',
+  }[verificationPolicyHash];
+  assert.ok(priorHash, 'fixture uses a known frozen DSL byte layout');
+  const planningRecord = planning(), body = proposal();
+  body.browser = { version: 1, sessions: ['visitor'], steps: [
+    { id: 'home', session: 'visitor', requirementIds: ['R1'], op: 'goto', path: '/' },
+    { id: 'list', session: 'visitor', requirementIds: ['R1'], op: 'visible', testId: 'resources', value: true },
+  ] };
+  const f = await fixture(t, { getPlanning: () => planningRecord, getPlanningSync: () => planningRecord });
+  const imported = await importManual(f.service, body), approved = (await f.service.approve(edit(imported))).proposal;
+  await f.service.shutdown();
+  const database = new DatabaseSync(path.join(f.rootDir, 'verification.sqlite'));
+  let revision;
+  try {
+    const row = database.prepare('SELECT snapshot,approval,proposal FROM proposals WHERE id=?').get(approved.id);
+    const snapshot = JSON.parse(row.snapshot), approval = JSON.parse(row.approval);
+    snapshot.binding.policyHash = priorHash;
+    snapshot.key = contentRevision(snapshot.binding);
+    revision = contentRevision({ proposal: JSON.parse(row.proposal), binding: snapshot.binding, policyHash: priorHash });
+    approval.revision = revision;
+    database.prepare('UPDATE proposals SET context_key=?,snapshot=?,revision=?,approval=? WHERE id=?')
+      .run(snapshot.key, JSON.stringify(snapshot), revision, JSON.stringify(approval), approved.id);
+  } finally { database.close(); }
+  const restored = await f.open(), viewed = (await restored.list(ids)).proposals[0];
+  assert.equal(viewed.current, true);
+  assert.equal(viewed.approved, true);
+  assert.equal(viewed.revision, revision);
+  assert.equal(viewed.policyHash, priorHash);
+  assert.equal(viewed.manifestHash, approved.manifestHash);
+  const input = { ...ids, proposalId: approved.id, revision };
+  assert.equal(restored.assertApprovedDefinition(input).policyHash, priorHash);
+  await restored.withApprovedExecution(input, grant => {
+    assert.equal(grant.binding.policyHash, priorHash);
+    assert.equal(grant.manifest.manifestHash, approved.manifestHash);
+    assert.equal(grant.assertCurrent(), true);
+    return { status: 'failed', terminationConfirmed: true };
+  });
+  assert.equal(restored.assertFrozenExecution(input).policyHash, priorHash);
+  planningRecord.run.sourceGeneration = 1;
+  planningRecord.project.sourceGeneration = 1;
+  assert.throws(() => restored.assertFrozenExecution(input), code('stale_revision'));
 });

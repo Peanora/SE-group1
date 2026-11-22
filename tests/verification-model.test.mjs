@@ -56,6 +56,7 @@ test('pure inspection exports ordinary definitions without granting approval or 
 });
 test('large confirmed plans have a bounded response allowance without dropping requirement coverage', async () => {
   const original = input();
+  original.engineeringContract.views = [{ requirementIds: ['REQ2', 'UNKNOWN'] }, { requirementIds: ['REQ2', 'REQ6'] }];
   original.requirements = Array.from({ length: 16 }, (_, index) => ({ id: `REQ${index + 1}`, text: `Explicit contract requirement ${index + 1}` }));
   const raw = proposal();
   raw.steps[0].requirementIds = original.requirements.slice(0, 8).map(requirement => requirement.id);
@@ -66,6 +67,9 @@ test('large confirmed plans have a bounded response allowance without dropping r
     const body = JSON.parse(options.body);
     assert.equal(body.max_tokens, 16384);
     assert.deepEqual(JSON.parse(body.messages[1].content).requirements, original.requirements);
+    assert.deepEqual(JSON.parse(body.messages[1].content).browserObligations, ['REQ2', 'REQ6']);
+    assert.match(body.messages[0].content, /HTTP 目标 30 至 37 步/u);
+    assert.match(body.messages[0].content, /重启后重新读取/u);
     return reply(raw);
   } });
   const result = await model(original);
