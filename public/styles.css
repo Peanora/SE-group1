@@ -67,6 +67,7 @@ dialog{padding:0;border:1px solid #dce4f0;border-radius:13px;box-shadow:0 28px 9
 .delivery-step .delivery-state{font-size:12px;line-height:1.4;color:#536782;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .delivery-step small{font-size:11px;color:#687d99;line-height:1.45;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
 .delivery-step small:empty{display:none}
+.delivery-step[data-has-usage] small{display:block;overflow-wrap:anywhere}
 .delivery-step:not(:disabled):hover strong,.delivery-step:focus-visible strong{text-decoration:underline;text-underline-offset:4px}
 .delivery-step:disabled{opacity:1;cursor:default}
 .delivery-step:focus-visible{outline:2px solid #496ee3;outline-offset:4px}

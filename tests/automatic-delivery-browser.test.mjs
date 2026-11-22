@@ -156,9 +156,10 @@ test('automatic delivery in Edge pauses only for the missing business answer and
   });
 
   app = await createApp({ dataDir: directory, agentEnvironment: {}, stepDelayMs: 0, teamEnabled: false });
+  const pricing = { currency: 'CNY', inputPerMillion: 2, outputPerMillion: 3 };
   await app.agentSettings.save({ revision: 0, roles: Object.fromEntries(roles.map(role => [role, role])),
     providers: roles.map(role => ({ id: role, name: role, baseUrl: `${endpoint(model)}/${role}`, model: `automatic-${role}`,
-      apiKey: `synthetic-automatic-${role}-secret` })) });
+      apiKey: `synthetic-automatic-${role}-secret`, pricing })) });
   await listen(app.server);
   browser = await chromium.launch({ channel: 'msedge', headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
@@ -207,6 +208,7 @@ test('automatic delivery in Edge pauses only for the missing business answer and
     return state.status === 'running' && state.executionId && calls.includes('coding') && state;
   }, '回答后未自动通过规格、计划和清单并进入编码');
   const executionUrl = `${runUrl}/development-executions`;
+  assert.equal(inFlight.usageByStage.development.totalModelCalls, null);
   assert.equal((await responseJson('/api/health')).automaticDelivery.developmentTimeoutMs, 3_600_000);
   const { capabilities, executions: [running] } = await responseJson(executionUrl);
   assert.equal(capabilities.budget.timeoutMs, 3_600_000);
@@ -244,9 +246,20 @@ test('automatic delivery in Edge pauses only for the missing business answer and
   assert.equal(valid.candidateCommit, execution.candidateCommit);
   assert.equal(new Set(execution.reviewHistory.map(item => item.candidateCommit)).size, 3);
   assert.deepEqual(calls, ['spec', 'spec', 'engineering', 'verification', 'verification', 'coding', 'coding', 'review', 'coding', 'review']);
+  for (const [stage, callCount] of [['specification', 2], ['engineering', 1], ['verification', 2], ['development', 5]]) {
+    const actual = completed.usageByStage[stage];
+    assert.equal(actual.totalModelCalls, callCount);
+    assert.deepEqual(actual.usage, { inputTokens: callCount * 3, outputTokens: callCount * 2 });
+    assert.deepEqual(actual.costEstimate, { known: true, amount: callCount * 0.000012, currency: 'CNY', amounts: [{ amount: callCount * 0.000012, currency: 'CNY' }] });
+  }
+  assert.doesNotMatch(JSON.stringify(completed), /synthetic-automatic|receiptHash|inputPerMillion|settingsFingerprint/u);
+  const settings = app.agentSettings.view();
+  await app.agentSettings.save({ revision: settings.revision, roles: settings.roles, providers: settings.providers.map(provider => ({ ...provider, pricing: { ...pricing, inputPerMillion: 9 } })) });
+  assert.deepEqual((await responseJson(deliveryUrl)).usageByStage, completed.usageByStage);
 
   await page.reload();
   await page.locator('#delivery-done-count').getByText(/9\s*\/\s*9/u).waitFor();
+  await page.locator('[data-delivery-step="coding"] small').getByText(/调用 5 次.*费用估算 0.00006 CNY/u).waitFor();
   const downloadEvent = page.waitForEvent('download');
   await page.locator('#automatic-download').click();
   const download = await downloadEvent;

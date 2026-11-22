@@ -306,7 +306,7 @@ function renderDeliveryProgress() {
   $('#delivery-current-state').dataset.state = current.state;
   $('#delivery-done-count').textContent = `${steps.filter(step => step.state === 'done').length} / ${steps.length} 完成`;
   if (automatic && expandedAutomaticRun !== state.run.id) { expandedAutomaticRun = state.run.id; $('#delivery-workflow').open = true; }
-  const markup = steps.map(({ id, title, state: status, text, detail }, index) => `<li><button type="button" class="delivery-step" data-delivery-step="${id}" data-focus-key="delivery-${id}" data-state="${status}" ${upcoming?.id === id ? 'aria-current="step"' : ''} ${state.selectionPending || !state.project && id !== 'source' ? 'disabled' : ''}><span aria-hidden="true">${index + 1}</span><strong>${title}</strong><span class="delivery-state">${escape(text)}</span><small>${escape(detail)}</small></button></li>`).join('');
+  const markup = steps.map(({ id, title, state: status, text, detail, hasUsage }, index) => `<li><button type="button" class="delivery-step" data-delivery-step="${id}" data-focus-key="delivery-${id}" data-state="${status}" ${hasUsage ? 'data-has-usage' : ''} ${upcoming?.id === id ? 'aria-current="step"' : ''} ${state.selectionPending || !state.project && id !== 'source' ? 'disabled' : ''}><span aria-hidden="true">${index + 1}</span><strong>${title}</strong><span class="delivery-state">${escape(text)}</span><small>${escape(detail)}</small></button></li>`).join('');
   if (deliveryMarkup !== markup) {
     deliveryMarkup = markup;
     replacePreservingFocus($('#delivery-steps'), markup);

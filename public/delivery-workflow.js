@@ -12,6 +12,20 @@ function checkSummary(checks) {
     .map(([name, rows]) => `${name} ${rows.filter(row => row.passed === true).length}/${rows.length}`).join('，');
 }
 
+const STAGE_USAGE = { spec: 'specification', plan: 'engineering', verification: 'verification', coding: 'development' };
+
+function usageDetail(stage) {
+  if (!stage) return '';
+  if (stage.totalModelCalls === 0) return '调用 0 次 · 输入 0 / 输出 0 token';
+  const tokenText = key => stage.usage?.[key] ?? (stage.observedUsage?.[key] === null || stage.observedUsage?.[key] === undefined
+    ? '未知' : `已知 ${stage.observedUsage[key]}，总计未知`);
+  const estimate = stage.costEstimate;
+  const amounts = estimate?.amounts?.map(({ currency, amount }) => `${amount} ${currency}`).join('、');
+  const cost = estimate?.known ? `费用估算 ${amounts}` : amounts ? `已计价 ${amounts}，总额未知` : '费用估算未知';
+  const calls = stage.totalModelCalls ?? `已确认 ${stage.confirmedCalls}，总计未知`;
+  return `调用 ${calls} 次 · 输入 ${tokenText('inputTokens')} / 输出 ${tokenText('outputTokens')} token · ${cost}`;
+}
+
 export function deliverySteps({ project, run, historical, verification, development, automatic }) {
   const step = (id, title, state, text, detail = '') => ({ id, title, state, text, detail });
   const waiting = (id, title, text = '尚未开始') => step(id, title, 'idle', text);
@@ -100,5 +114,8 @@ export function deliverySteps({ project, run, historical, verification, developm
     if (item.id === 'delivery' && item.state === 'done') return waiting(item.id, item.title, '等待核对交付');
     if (running && position > index && index >= 0 && item.state !== 'idle') return waiting(item.id, item.title);
     return item;
+  }).map(item => {
+    const usage = usageDetail(automatic.usageByStage?.[STAGE_USAGE[item.id]]);
+    return usage ? { ...item, hasUsage: true, detail: [item.detail, usage].filter(Boolean).join(' · ') } : item;
   });
 }
