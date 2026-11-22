@@ -910,12 +910,17 @@ test('an unfinished HTTP stage reopens and adds only missing checks before brows
   assert.equal(first.generationStage, 'http');
   assert.equal(first.nextGenerationStage, 'http-supplement');
   assert.deepEqual(first.missingHttpRequirementIds, ['R16']);
+  assert.deepEqual(sent[0].requirements.map(item => item.id), requirements.slice(0, 10));
+  assert.equal(sent[0].httpTargetSteps, 22);
+  assert.deepEqual(sent[0].engineeringContract.routes[0].requirementIds, requirements);
   await f.service.shutdown();
   const reopened = await f.open(), second = await wait(reopened, (await propose(reopened)).id, 'draft');
   assert.equal(second.generationStage, 'http-supplement');
   assert.equal(second.nextGenerationStage, 'browser');
   assert.deepEqual(second.missingHttpRequirementIds, []);
   assert.deepEqual(sent[1].httpMissing, ['R16']);
+  assert.deepEqual(sent[1].requirements.map(item => item.id), ['R16']);
+  assert.equal(sent[1].httpTargetSteps, 4);
   assert.equal(sent[1].remainingHttpSteps, 39);
   assert.deepEqual(sent[1].previousHttp, first.proposal);
   assert.deepEqual(second.proposal.steps[0], first.proposal.steps[0]);
@@ -931,6 +936,8 @@ test('an unfinished HTTP stage reopens and adds only missing checks before brows
   assert.equal(Object.hasOwn(final, 'nextGenerationStage'), false);
   assert.deepEqual(final.proposal.steps, second.proposal.steps);
   assert.equal(Object.hasOwn(sent[2], 'previousHttp'), false);
+  assert.deepEqual(sent[2].requirements.map(item => item.id), requirements);
+  assert.equal(Object.hasOwn(sent[2], 'httpTargetSteps'), false);
   assert.equal((await reopened.approve(edit(final))).proposal.approved, true);
   assert.deepEqual((await reopened.list(ids)).proposals.map(row => row.receiptState), ['saved', 'saved', 'saved']);
 });
