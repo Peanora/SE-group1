@@ -74,10 +74,12 @@ test('web response filtering pins policy and rejects redirects, cookies and head
 });
 
 test('web protocol decoder handles split UTF-8 frames and rejects malformed or oversized output', () => {
-  const messages = []; const decoder = new WebLineDecoder(message => messages.push(message));
+  const messages = [], byteCounts = [];
+  const decoder = new WebLineDecoder((message, bytes) => { messages.push(message); byteCounts.push(bytes); });
   const buffer = Buffer.from('{"type":"例子"}\n{"type":"ready"}\n');
   for (const byte of buffer) decoder.push(Buffer.from([byte]));
   decoder.end(); assert.deepEqual(messages, [{ type: '例子' }, { type: 'ready' }]);
+  assert.deepEqual(byteCounts, ['{"type":"例子"}\n', '{"type":"ready"}\n'].map(line => Buffer.byteLength(line)));
   for (const bytes of [Buffer.from('not JSON\n'), Buffer.from('null\n'), Buffer.from('\n'), Buffer.from([0xff, 10])]) {
     assert.throws(() => new WebLineDecoder(() => {}).push(bytes), { code: 'protocol_error' });
   }
@@ -237,6 +239,24 @@ test('real web runtime rejects unknown and duplicate response identities and bou
     const result = await runtime.done; assert.equal(result.errorCode, code); assert.equal(result.status, 'failed'); assert.equal(result.terminationConfirmed, true);
     assert.ok(Buffer.byteLength(result.stderr) <= 4096);
   }
+});
+
+test('real web runtime separates validated response traffic from logs and bounds the total response stream', real, async t => {
+  const { workspace } = await fixture(t, `export async function createApp(){return {handle(){return {status:200,body:'x'.repeat(${MAX_WEB_BODY})}}}}`);
+  const runtime = await startWebRuntime({ ...options(workspace), maxOutputBytes: 4096 });
+  t.after(() => runtime.stop());
+  for (let attempt = 0; attempt < 11; attempt++) {
+    const response = await runtime.request({ method: 'GET', path: '/' });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.length, MAX_WEB_BODY);
+  }
+  await assert.rejects(runtime.request({ method: 'GET', path: '/' }), { code: 'output_limit' });
+  const result = await runtime.done;
+  assert.match(result.error, /响应协议总量/u);
+  assert.equal(result.terminationConfirmed, true);
+  assert.equal(result.sourceUnchanged, true);
+  assert.ok(result.responseProtocolBytes > 4 * 1024 * 1024);
+  assert.ok(result.controlProtocolBytes > 0 && result.controlProtocolBytes + result.stderrBytes <= 4096);
 });
 
 test('real web runtime stop also ends a detached descendant heartbeat', real, async t => {
