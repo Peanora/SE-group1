@@ -884,3 +884,50 @@ test('predecessor approval keeps its exact revision, manifest and execution free
   planningRecord.project.sourceGeneration = 1;
   assert.throws(() => restored.assertFrozenExecution(input), code('stale_revision'));
 });
+
+test('an unfinished HTTP stage reopens and adds only missing checks before browser generation', async t => {
+  const large = planning(ids.projectId, ids.runId, 16);
+  const requirements = large.run.spec.requirements.map(value => value.id);
+  const partial = proposal(); partial.steps[0].requirementIds = requirements.slice(0, -1);
+  const supplement = { sessions: [], steps: [{
+    ...structuredClone(partial.steps[0]), id: 'extra', dependsOn: ['read'], requirementIds: ['R16'],
+    request: { ...structuredClone(partial.steps[0].request), id: 'get-extra' },
+  }] };
+  const browser = { version: 1, sessions: ['visitor'], steps: [
+    { id: 'home', session: 'visitor', requirementIds: requirements, op: 'goto', path: '/' },
+    { id: 'list', session: 'visitor', requirementIds: requirements, op: 'visible', testId: 'resources', value: true },
+  ] };
+  const sent = [];
+  const f = await fixture(t, { getPlanning: () => large, getPlanningSync: () => large, dependencies: {
+    createModel: options => createVerificationModel({ ...options, fetchImpl: async (_url, request) => {
+      sent.push(JSON.parse(JSON.parse(request.body).messages[1].content));
+      const raw = [partial, supplement, browser][sent.length - 1];
+      return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(raw) } }] }));
+    } }),
+  } });
+  const first = await wait(f.service, (await propose(f.service)).id, 'draft');
+  assert.equal(first.generationStage, 'http');
+  assert.equal(first.nextGenerationStage, 'http-supplement');
+  assert.deepEqual(first.missingHttpRequirementIds, ['R16']);
+  await f.service.shutdown();
+  const reopened = await f.open(), second = await wait(reopened, (await propose(reopened)).id, 'draft');
+  assert.equal(second.generationStage, 'http-supplement');
+  assert.equal(second.nextGenerationStage, 'browser');
+  assert.deepEqual(second.missingHttpRequirementIds, []);
+  assert.deepEqual(sent[1].httpMissing, ['R16']);
+  assert.equal(sent[1].remainingHttpSteps, 39);
+  assert.deepEqual(sent[1].previousHttp, first.proposal);
+  assert.deepEqual(second.proposal.steps[0], first.proposal.steps[0]);
+  assert.notEqual(second.proposal.steps[1].request.assertions[0].id, first.proposal.steps[0].request.assertions[0].id);
+  assert.equal(second.proposal.steps[1].request.assertions[0].value, supplement.steps[0].request.assertions[0].value);
+  assert.equal(second.actions.canApprove, false);
+  const saved = JSON.parse(await readFile(path.join(f.rootDir, 'receipts', second.id + '.json'), 'utf8'));
+  assert.deepEqual(JSON.parse(saved.content), supplement, 'the original provider response retains its colliding check ID');
+  const final = await wait(reopened, (await propose(reopened)).id, 'draft');
+  assert.equal(final.generationStage, 'browser');
+  assert.equal(Object.hasOwn(final, 'nextGenerationStage'), false);
+  assert.deepEqual(final.proposal.steps, second.proposal.steps);
+  assert.equal(Object.hasOwn(sent[2], 'previousHttp'), false);
+  assert.equal((await reopened.approve(edit(final))).proposal.approved, true);
+  assert.deepEqual((await reopened.list(ids)).proposals.map(row => row.receiptState), ['saved', 'saved', 'saved']);
+});
