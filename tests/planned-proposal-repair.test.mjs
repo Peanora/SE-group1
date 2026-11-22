@@ -46,7 +46,8 @@ if (!process.env.TASKFLOW_PROPOSAL_REPAIR_CHILD) {
         if (mode === 'unknown' && coding) { res.destroy(); return; }
         const bad = coding && (['invalid-first', 'unknown-usage', 'tamper-receipt', 'cancel', 'stale', 'tamper-source', 'spoof-native-error'].includes(mode) && number === 1 || mode === 'all-invalid' || mode === 'blocking-format' && number === 2);
         const files = [{ path: mode === 'outside-first' && number === 1 ? 'docs/future.md' : 'src/app.mjs', content: `export async function createApp(){return {handle:async()=>({status:200,body:"resource",headers:{}})}}\n// actual candidate ${number}\n` }];
-        const useLiteralFiles = coding && mode === 'invalid-first' && number === 2;
+        if (coding && mode === 'duplicate-first' && number === 1) files.push({ path: 'src/app.mjs', content: '// ambiguous duplicate must not be written' });
+        const useLiteralFiles = coding && ['invalid-first', 'duplicate-first'].includes(mode) && number === 2;
         if (useLiteralFiles) { assert.equal('response_format' in request, false); assert.match(request.messages[0].content, /TASKFLOW-FILES\/1/u); }
         const content = coding ? mode === 'credential' ? JSON.stringify({ files: [{ path: 'src/app.mjs', content: fakeKey }] }) : bad ? badJSON : useLiteralFiles
           ? `TASKFLOW-FILES/1\nFILE ${files[0].path}\n${files[0].content}END-TASKFLOW-FILE\nEND-TASKFLOW-FILES` : JSON.stringify({ files }) : JSON.stringify({ summary: 'Native local Review fixture',
@@ -91,6 +92,24 @@ if (!process.env.TASKFLOW_PROPOSAL_REPAIR_CHILD) {
       assert.ok(literalReceipt.content.includes('body:"resource"'));
     }
     const source = assertPlannedSource(await inspect(f), binding, ['src/app.mjs']); assert.equal(source.provenance.sourceModelReceiptHashes.length, 3); assert.equal(source.provenance.sourceModelCalls, 3); assert.equal(isPlannedWebTaskAccepted(record, f.manifest), true);
+  });
+  test('duplicate output paths are rejected before Git write and consume one call of the same repair budget', async t => {
+    const f = await execute(t, 'duplicate-first'), { record } = f;
+    assert.equal(record.status, 'accepted', record.error);
+    assert.equal(f.coding, 2);
+    assert.equal(f.review, 1);
+    assert.deepEqual(record.versions.map(version => version.attempt), [2]);
+    const [rejected, replacement] = record.modelCalls;
+    const recorded = JSON.parse(await readFile(rejected.receiptPath, 'utf8'));
+    assert.deepEqual(JSON.parse(recorded.content).files.map(file => file.path), ['src/app.mjs', 'src/app.mjs']);
+    assert.equal(rejected.proposalRejection.reason, 'proposal_invalid');
+    assert.equal(rejected.proposalRejection.applied, false);
+    assert.equal(rejected.inputSourceHash, replacement.inputSourceHash);
+    assert.equal(replacement.codeWireVersion, 2);
+    assert.deepEqual(record.usage, { inputTokens: 7, outputTokens: 10 });
+    assert.equal(record.totalModelCalls, 3);
+    assert.equal(isPlannedWebTaskAccepted(record, f.manifest), true);
+    assert.equal(assertPlannedSource(await inspect(f), binding, ['src/app.mjs']).provenance.sourceModelReceiptHashes.length, 3);
   });
   test('bounded repeated malformed proposals exhaust original calls without versions, source edits or Review', async t => {
     const f = await execute(t, 'all-invalid', 3); assert.equal(f.record.status, 'failed'); assert.equal(f.record.errorCode, 'retry_exhausted'); assert.equal(f.coding, 3); assert.equal(f.review, 0); assert.equal(f.record.totalModelCalls, 3); assert.equal(f.record.versions.length, 0); assert.equal(f.record.modelCalls.filter(c => c.proposalRejection).length, 3); assert.deepEqual(await readProjectFiles(f.record.workspace), []);
