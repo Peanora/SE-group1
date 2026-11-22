@@ -46,14 +46,14 @@ async function waitFor(read, matches, label) {
   assert.fail(`等待${label}超时：${JSON.stringify(result)}`);
 }
 
-async function fixture(t, { clarify = false, verificationDefinition = definition, allowDevelopment = true, teamEnabled = false, slowPlanningIntent } = {}) {
+async function fixture(t, { clarify = false, verificationDefinition = definition, allowDevelopment = true, teamEnabled = false, slowPlanningIntent, specFixture = spec, engineeringFixture = engineeringDraft, firstVerificationAllowance } = {}) {
   const temporaryRoot = await realpath(os.tmpdir());
   const directory = await mkdtemp(path.join(temporaryRoot, 'automatic-delivery-http-'));
   let store;
   const calls = { spec: 0, engineering: 0, verification: 0, start: 0 };
   const executions = new Map();
   const checkpoints = new Map();
-  let app, verification;
+  let app, verification, verificationAllowance = firstVerificationAllowance;
   t.after(async () => {
     try { if (app) await app.close(); else await verification?.shutdown(); }
     finally {
@@ -65,7 +65,7 @@ async function fixture(t, { clarify = false, verificationDefinition = definition
   });
   const getPlanning = (...args) => store.getPersistedRun(...args);
   function openVerification() { return createVerificationPlanningService({ rootDir: path.join(directory, 'verification-planning'),
-    getPlanning, getPlanningSync: getPlanning, config,
+    getPlanning, getPlanningSync: getPlanning, config, ...(verificationAllowance ? { maxAttempts: verificationAllowance } : {}),
     dependencies: { createModel: () => async input => {
       calls.verification++;
       assert.equal(input.binding.specRevision.length, 64);
@@ -115,6 +115,10 @@ async function fixture(t, { clarify = false, verificationDefinition = definition
         run?.stages.find(item => item.id === 'spec')?.status === 'running' ? `spec-${run.specificationHistory?.at(-1)?.requestState ?? 'starting'}` : null]) {
         if (key && !checkpoints.has(key)) checkpoints.set(key, structuredClone(project));
       }
+      if (firstVerificationAllowance && state?.status === 'running' && state.stage === 'verification' && state.proposalId
+        && !state.pendingDispatch && !checkpoints.has('first-verification-stage')) {
+        checkpoints.set('first-verification-stage', structuredClone(project));
+      }
       if (slowPlanningIntent && !delayedIntent && run?.[`${slowPlanningIntent}History`]?.at(-1)?.requestState === 'dispatch_intent') {
         delayedIntent = true;
         return delay(200).then(() => save(project));
@@ -129,13 +133,13 @@ async function fixture(t, { clarify = false, verificationDefinition = definition
     }, planner: { ...planner, getModelConfig: () => ({ configured: true, model: config.model }),
       analyzeWithModel: (text, name, options) => {
         calls.spec++;
-        const draft = clarify && calls.spec === 1 ? { ...spec, requirements: [], questions: [question], clarificationRequired: true } : spec;
+        const draft = clarify && calls.spec === 1 ? { ...spec, requirements: [], questions: [question], clarificationRequired: true } : specFixture;
         if (clarify && calls.spec === 2) assert.ok(text.includes(answer));
         return planner.analyzeWithModel(text, name, { ...options, config, fetchImpl: async () => modelResponse(draft) });
       },
       createEngineeringModel: () => createEngineeringModel({ config, fetchImpl: async () => {
         calls.engineering++;
-        return modelResponse(engineeringDraft);
+        return modelResponse(engineeringFixture);
       } }),
     },
     });
@@ -170,6 +174,7 @@ async function fixture(t, { clarify = false, verificationDefinition = definition
       await writeFile(path.join(directory, `${snapshot.id}.json`), JSON.stringify(snapshot), 'utf8');
     }
     if (afterClose) await afterClose(directory);
+    verificationAllowance = undefined;
     await open(environment);
     allowDevelopment = true;
   }, async start(input = consent) {
@@ -465,4 +470,48 @@ test('a saved joint definition can continue after both batches without a seventh
   const coding = await waitFor(delivery.status, state => state.executionId, '使用保存的清单编码');
   assert.equal(coding.proposalId, saved.body.proposal.id);
   assert.deepEqual(f.calls, { spec: 1, engineering: 1, verification: 6, start: 1 });
+});
+
+test('automatic delivery resumes a settled partial HTTP draft and completes all stages without importing or editing it', async t => {
+  const requirementIds = Array.from({ length: 16 }, (_, index) => 'R-' + String(index + 1).padStart(3, '0'));
+  const largeSpec = { ...structuredClone(spec), requirements: requirementIds.map((id, index) => ({
+    ...spec.requirements[0], id, title: '资源规则 ' + (index + 1),
+  })) };
+  const largeEngineering = structuredClone(engineeringDraft);
+  for (const group of ['routes', 'views', 'tasks']) largeEngineering[group][0].requirementIds = requirementIds;
+  const httpStage = { ...structuredClone(definition), steps: [{ ...structuredClone(definition.steps[0]),
+    requirementIds: requirementIds.slice(0, -1) }] };
+  delete httpStage.browser;
+  const additions = { sessions: [], steps: [{
+    ...structuredClone(definition.steps[0]), id: 'later-read', dependsOn: ['read'],
+    requirementIds: [requirementIds.at(-1)], request: { ...definition.steps[0].request, id: 'later-request' },
+  }] };
+  const browser = { ...definition.browser, steps: definition.browser.steps.map(step => ({ ...step, requirementIds })) };
+  const f = await fixture(t, { specFixture: largeSpec, engineeringFixture: largeEngineering, firstVerificationAllowance: 1,
+    verificationDefinition: (call, input) => {
+      assert.equal(input.generationStage, ['http', 'http-supplement', 'browser'][call - 1]);
+      if (call === 2) assert.deepEqual(input.previousHttp.steps, httpStage.steps);
+      return [httpStage, additions, browser][call - 1];
+    },
+  });
+  const started = await f.start();
+  await waitFor(started.status, state => state.status === 'failed', '夹具提交第一阶段');
+  const settled = (await f.request(started.route + '/verification-plans')).body.proposals;
+  assert.equal(settled.length, 1);
+  assert.equal(settled[0].generationStage, 'http');
+  assert.equal(settled[0].nextGenerationStage, 'http-supplement');
+  assert.deepEqual(settled[0].missingHttpRequirementIds, [requirementIds.at(-1)]);
+  assert.equal(settled[0].receiptState, 'saved');
+  assert.equal(settled[0].actions.canApprove, false);
+  assert.equal(f.calls.start, 0);
+  await f.restart({ checkpoint: 'first-verification-stage' });
+  await waitFor(started.status, state => !!state.executionId, '恢复并完成同运行三阶段');
+  const rows = (await f.request(started.route + '/verification-plans')).body.proposals;
+  assert.equal(rows[0].id, settled[0].id);
+  assert.equal(rows[0].revision, settled[0].revision);
+  assert.deepEqual(rows.map(row => [row.generationStage, row.origin, row.receiptState, row.status]),
+    [['http', 'model', 'saved', 'draft'], ['http-supplement', 'model', 'saved', 'draft'], ['browser', 'model', 'saved', 'approved']]);
+  assert.deepEqual(rows[2].proposal.steps, rows[1].proposal.steps);
+  assert.equal(rows[2].history.some(entry => ['imported', 'revised'].includes(entry.status)), false);
+  assert.deepEqual(f.calls, { spec: 1, engineering: 1, verification: 3, start: 1 });
 });
