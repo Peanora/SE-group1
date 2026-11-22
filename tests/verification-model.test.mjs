@@ -54,6 +54,24 @@ test('pure inspection exports ordinary definitions without granting approval or 
   const manifest = compileManifest({ ...args, proposal: proposal(), approval });
   assert.throws(() => assertCompiledManifest(manifest, binding), /编码阶段/u); control.beginCoding(approval); assert.equal(assertCompiledManifest(manifest, binding), manifest);
 });
+test('large confirmed plans have a bounded response allowance without dropping requirement coverage', async () => {
+  const original = input();
+  original.requirements = Array.from({ length: 16 }, (_, index) => ({ id: `REQ${index + 1}`, text: `Explicit contract requirement ${index + 1}` }));
+  const raw = proposal();
+  raw.steps[0].requirementIds = original.requirements.slice(0, 8).map(requirement => requirement.id);
+  raw.steps[1].requirementIds = original.requirements.slice(8).map(requirement => requirement.id);
+  let calls = 0;
+  const model = createVerificationModel({ config, fetchImpl: async (_url, options) => {
+    calls++;
+    const body = JSON.parse(options.body);
+    assert.equal(body.max_tokens, 16384);
+    assert.deepEqual(JSON.parse(body.messages[1].content).requirements, original.requirements);
+    return reply(raw);
+  } });
+  const result = await model(original);
+  assert.equal(calls, 1);
+  assert.deepEqual(result.proposal.steps.flatMap(step => step.requirementIds), original.requirements.map(requirement => requirement.id));
+});
 test('native proposal adapter can return a frozen-before-coding delayed-load regression as data, never an execution verdict', async () => {
   const raw = proposal(); raw.browser = { version: 1, sessions: ['race'], steps: [{ id: 'retained-create', session: 'race', requirementIds: ['REQ1', 'REQ2'], op: 'createWithDelayedLoad', path: '/objects.html', loadPath: '/objects', inputTestId: 'object-name', submitTestId: 'object-create', listTestId: 'object-list', countTestId: 'object-count', value: 'Created object', expectedCount: 1 }] };
   let calls = 0; const result = await createVerificationModel({ config, fetchImpl: async (_url, options) => { calls++; const prompt = JSON.parse(options.body).messages[0].content;
