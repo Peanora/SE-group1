@@ -51,7 +51,7 @@ test('project Review binds evidence to actual lines and explicitly resolves ever
 
 test('planned Review preserves every historical ID above the original batch size', async () => {
   const files = [{ path: 'src/app.mjs', content: 'export const app = 1;' }];
-  const previousIssues = Array.from({ length: 21 }, (_, index) => ({
+  const previousIssues = Array.from({ length: 40 }, (_, index) => ({
     id: `old-${index}`, file: files[0].path, line: 1, severity: 'blocking', message: `Old issue ${index}`, evidence: files[0].content,
   }));
   const resolutions = previousIssues.map(({ id }) => ({ id, status: 'resolved', reason: 'Rechecked on this candidate.' }));
@@ -64,8 +64,9 @@ test('planned Review preserves every historical ID above the original batch size
   } });
   assert.deepEqual((await model({ task: 'Recheck the fixed candidate.', ...context })).resolutions, resolutions);
   assert.throws(() => decodeProjectReviewResponseV2(JSON.stringify({ ...clear, resolutions: resolutions.slice(0, -1) }), context));
-  assert.throws(() => decodeProjectReviewResponseV2(JSON.stringify({ ...clear, resolutions: resolutions.map((entry, index) => index === 20 ? resolutions[0] : entry) }), context),
-    error => normalizeProjectReviewResponseFeedback(getProjectReviewResponseFeedback(error))?.field === 'resolutions[20].id');
+  assert.throws(() => decodeProjectReviewResponseV2(JSON.stringify({ ...clear, resolutions: resolutions.map((entry, index) => index === 39 ? resolutions[0] : entry) }), context),
+    error => normalizeProjectReviewResponseFeedback(getProjectReviewResponseFeedback(error))?.field === 'resolutions[39].id');
+  assert.throws(() => normalizeProjectReviewResponseFeedback({ version: 1, reason: 'invalid_resolutions', field: `resolutions[${PROJECT_REVIEW_HISTORY_LIMIT}].id` }));
   const overflow = Array.from({ length: PROJECT_REVIEW_HISTORY_LIMIT + 1 }, (_, index) => ({ id: `over-${index}` }));
   await assert.rejects(model({ task: 'Recheck the fixed candidate.', files, previousIssues: overflow }), /输入资料格式无效/u);
 });
