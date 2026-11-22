@@ -46,7 +46,7 @@ async function waitFor(read, matches, label) {
   assert.fail(`等待${label}超时：${JSON.stringify(result)}`);
 }
 
-async function fixture(t, { clarify = false, verificationDefinition = definition, allowDevelopment = true, teamEnabled = false } = {}) {
+async function fixture(t, { clarify = false, verificationDefinition = definition, allowDevelopment = true, teamEnabled = false, slowPlanningIntent } = {}) {
   const temporaryRoot = await realpath(os.tmpdir());
   const directory = await mkdtemp(path.join(temporaryRoot, 'automatic-delivery-http-'));
   let store;
@@ -108,16 +108,22 @@ async function fixture(t, { clarify = false, verificationDefinition = definition
   async function open(environment = {}) {
     store = await new ProjectStore(directory).init();
     const save = store.save.bind(store);
+    let delayedIntent = false;
     store.save = project => {
       const run = project.runs.at(-1), state = run?.automaticDelivery;
       for (const key of [state?.pendingDispatch?.kind, state?.status === 'needs_clarification' ? 'clarification' : null,
         run?.stages.find(item => item.id === 'spec')?.status === 'running' ? `spec-${run.specificationHistory?.at(-1)?.requestState ?? 'starting'}` : null]) {
         if (key && !checkpoints.has(key)) checkpoints.set(key, structuredClone(project));
       }
+      if (slowPlanningIntent && !delayedIntent && run?.[`${slowPlanningIntent}History`]?.at(-1)?.requestState === 'dispatch_intent') {
+        delayedIntent = true;
+        return delay(200).then(() => save(project));
+      }
       return save(project);
     };
     verification = await openVerification();
     app = await createApp({ store, executionService: null, sourceChangeService: null, verificationPlanningService: verification, teamEnabled,
+    ...(slowPlanningIntent ? { [`${slowPlanningIntent}TimeoutMs`]: 40 } : {}),
     plannedExecutionService, stepDelayMs: 0, agentEnvironment: {
       LLM_BASE_URL: config.baseUrl, LLM_MODEL: config.model, LLM_API_KEY: config.apiKey, ...environment,
     }, planner: { ...planner, getModelConfig: () => ({ configured: true, model: config.model }),
@@ -176,6 +182,20 @@ async function fixture(t, { clarify = false, verificationDefinition = definition
       return response.body;
     } };
   } };
+}
+
+for (const stage of ['specification', 'engineering']) {
+  test(`${stage} timeout while dispatch intent is saving remains a known unsent request`, async t => {
+    const f = await fixture(t, { slowPlanningIntent: stage });
+    const delivery = await f.start();
+    await waitFor(delivery.status, state => state.status === 'failed', '派发前时限耗尽');
+    const { body: { run } } = await f.request(delivery.route);
+    const attempt = run[`${stage}History`].at(-1);
+    assert.equal(attempt.code, 'model_timeout');
+    assert.equal(attempt.requestState, 'not_started');
+    assert.deepEqual(attempt.transport, { version: 1, dispatched: false, responseComplete: false });
+    assert.deepEqual(f.calls, { spec: stage === 'specification' ? 0 : 1, engineering: 0, verification: 0, start: 0 });
+  });
 }
 
 test('reopening the workbench keeps clarification on the original run and original authorization', async t => {
