@@ -2,7 +2,7 @@ import http from 'node:http';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import path from 'node:path';
 import { openPlannedWorkerStore } from '../lib/planned-worker-store.mjs';
-import { workerCopy, workerExact, workerHash, workerNeed, workerPolicyHash, WORKER_ID, normalizeWorkerModelConfig, workerModelConfigRevision } from '../lib/planned-worker-contract.mjs';
+import { inspectWorkerRepair, workerCopy, workerExact, workerHash, workerNeed, workerPolicyHash, workerRepairEvidenceHash, WORKER_ID, normalizeWorkerModelConfig, workerModelConfigRevision } from '../lib/planned-worker-contract.mjs';
 import { verifyWorkerAuthorization, createWorkerResultSigner, signCompletedWorkerResult, signStoppedWorkerResult, signPausedWorkerCheckpoint, signRetiredWorkerCheckpoint, verifyWorkerPausedTaskResume } from '../lib/planned-worker-seals.mjs';
 import { createVerificationControl, compileManifest, compileTaskManifest } from '../lib/verification-contract.mjs';
 import { startPlannedWebExecution } from '../lib/planned-web-executor.mjs';
@@ -12,6 +12,7 @@ import { createProjectReviewModel } from '../lib/project-review-model.mjs';
 import { validateProjectFiles } from '../lib/project-files.mjs';
 import { getModelRequestEvidence, runModelRequestWithEvidence } from '../lib/model-request-evidence.mjs';
 import { assertExecutionSubjectCurrent } from '../lib/team-access.mjs';
+import { inspectPlannedSource, assertPlannedSource } from '../lib/planned-source.mjs';
 
 async function main() {
   workerNeed(process.argv.length === 4 && process.argv[2] === '--job' && WORKER_ID.test(process.argv[3])); const jobId = process.argv[3];
@@ -35,7 +36,7 @@ async function main() {
   const definition = grant.definition, proposal = Object.fromEntries(['version', 'id', 'name', 'sessions', 'steps', 'limits', 'browser', ...(definition.taskScopes ? ['taskScopes'] : [])].filter(key => definition[key] !== undefined).map(key => [key, definition[key]]));
   const control = createVerificationControl(), input = { proposal, requirements: definition.requirements, binding: definition.binding, ...(definition.taskScopes ? { tasks: grant.task.tasks } : {}) }, approval = control.approve(input), manifest = compileManifest({ ...input, approval }); control.beginCoding(approval);
   workerNeed(manifest.manifestHash === definition.manifestHash && (manifest.taskSetHash ?? null) === (definition.taskSetHash ?? null));
-  const sessions = new Map(); let handle, finished = false, timer, handoffWork, startupCancelled = false;
+  const sessions = new Map(), preparation = new AbortController(); let handle, finished = false, timer, handoffWork, startupCancelled = false;
   function pruneSessions() {
     const now = Date.now();
     for (const [id, session] of sessions) if (session.expiresAt <= now) sessions.delete(id);
@@ -50,7 +51,11 @@ async function main() {
     try {
       if (command.op === 'pause') { current(); workerNeed(typeof handle?.pause === 'function', 'worker_pause_unsupported'); handle.pause(); store.setStatus(lease, 'pause_requested'); }
       else if (command.op === 'resume') { current(); workerNeed(typeof handle?.resume === 'function', 'worker_resume_unsupported'); handle.resume(); store.setStatus(lease, 'running'); }
-      else if (command.op === 'cancel') { workerNeed(!finished); if (handle) handle.cancel(); else startupCancelled = true; store.setStatus(lease, 'cancel_requested'); }
+      else if (command.op === 'cancel') {
+        workerNeed(!finished);
+        if (handle) handle.cancel(); else { startupCancelled = true; preparation.abort(); }
+        store.setStatus(lease, 'cancel_requested');
+      }
       else if (command.op === 'recover') {
         current(); workerNeed(grant.mode === 'graph' && handle?.snapshot().status === 'paused' && !handoffWork, 'worker_checkpoint_unavailable');
         handoffWork = (async () => {
@@ -128,19 +133,51 @@ async function main() {
   };
   const fetchCurrent = (...args) => { current(); return fetch(...args); };
   const provider = wrap('coding', createProjectCodeModel({ config, fetchImpl: fetchCurrent })), reviewer = wrap('review', createProjectReviewModel({ config: reviewConfig, fetchImpl: fetchCurrent }));
-  const options = { outputDir, binding: grant.binding, task: grant.task, manifest, provider, reviewer, executable: bootstrap.executable, maxCalls: grant.budget.maxCalls,
-    maxReviewCalls: grant.budget.maxReviewCalls, maxConcurrency: grant.budget.maxConcurrency, timeoutMs: Math.max(1, grant.deadlineAt - Date.now()), deadlineAt: grant.deadlineAt, ...(resumePermit ? { resumePermit } : {}), assertCurrent: current,
-    onEvent: event => { try { store.event(lease, event); } catch {} } };
-  handle = grant.mode === 'graph' ? startPlannedTaskExecution(options) : startPlannedWebExecution({ ...options, binding: { ...grant.binding, taskId: 'whole' } });
-  timer = setTimeout(() => handle.cancel(), Math.max(1, grant.deadlineAt - Date.now()));
   try {
+    let initialSource, repairNote;
+    if (grant.repair !== undefined) {
+      const repair = inspectWorkerRepair(grant.repair), rootDir = path.dirname(store.rootDir);
+      const reportPath = path.join(rootDir, ...repair.sourceReportPath.split('/'));
+      const writablePaths = [...new Set(grant.task.tasks.flatMap(task => task.writePaths ?? task.suggestedFiles))];
+      workerNeed(grant.mode === 'whole' && generation === 1 && repair.sourceServiceExecutionId !== grant.executionId);
+      current();
+      initialSource = await inspectPlannedSource({ rootDir, reportPath, binding: grant.binding, writablePaths, signal: preparation.signal,
+        timeoutMs: Math.max(1, Math.min(60000, grant.deadlineAt - Date.now())) });
+      current();
+      const source = assertPlannedSource(initialSource, grant.binding, writablePaths), { provenance } = source;
+      workerNeed(!provenance.evolution && provenance.sourceRunId === grant.binding.runId && provenance.sourceExecutionId === repair.sourceExecutionId
+        && provenance.sourceReportHash === repair.sourceReportHash && provenance.sourceCommit === repair.sourceCommit
+        && provenance.sourceHash === repair.sourceHash && workerRepairEvidenceHash(source) === repair.sourceEvidenceHash, 'worker_repair_source_changed');
+      repairNote = repair.repairNote ?? undefined;
+      store.event(lease, { type: 'repair_source_verified', sourceCommit: repair.sourceCommit, sourceHash: repair.sourceHash });
+    }
+    const options = { outputDir, binding: grant.binding, task: grant.task, manifest, provider, reviewer, executable: bootstrap.executable, maxCalls: grant.budget.maxCalls,
+      maxReviewCalls: grant.budget.maxReviewCalls, maxConcurrency: grant.budget.maxConcurrency, timeoutMs: Math.max(1, grant.deadlineAt - Date.now()), deadlineAt: grant.deadlineAt, ...(resumePermit ? { resumePermit } : {}), assertCurrent: current,
+      onEvent: event => { try { store.event(lease, event); } catch {} } };
+    handle = grant.mode === 'graph' ? startPlannedTaskExecution(options) : startPlannedWebExecution({ ...options, binding: { ...grant.binding, taskId: 'whole' }, initialSource, repairNote });
+    timer = setTimeout(() => handle.cancel(), Math.max(1, grant.deadlineAt - Date.now()));
     const actual = await handle.done; finished = true; clearTimeout(timer); const graph = grant.mode === 'graph' ? actual : undefined, record = graph?.status === 'accepted' ? plannedTaskIntegration(graph, manifest) : actual;
     if (actual.status === 'retired_for_recovery') { workerNeed(handoffWork); await handoffWork; return; }
     let envelope = null, outcome = null;
     if (actual.status === 'accepted') envelope = signCompletedWorkerResult({ signer, store, lease, manifest, record, graph });
     else if (actual.terminationConfirmed === true) outcome = signStoppedWorkerResult({ signer, store, lease, manifest, record, graph });
     store.finish(lease, { record, ...(graph ? { graph } : {}), envelope, outcome }, { actualCalls: actual.totalModelCalls, usage: actual.usage, terminationConfirmed: actual.terminationConfirmed === true });
-  } catch { finished = true; clearTimeout(timer); try { store.markUnknown(jobId); } catch {} }
+  } catch (error) {
+    finished = true; clearTimeout(timer);
+    try {
+      if (!handle && grant.repair && error?.reconciliationRequired !== true && error?.result?.terminationConfirmed !== false) {
+        const usage = { inputTokens: 0, outputTokens: 0 };
+        const record = { ...grant.binding, id: randomUUID(), kind: 'controller_admission',
+          status: startupCancelled ? 'stopped' : Date.now() >= grant.deadlineAt ? 'timed_out' : 'failed', finishedAt: new Date().toISOString(),
+          error: '保留源码的原候选未完成复核。本次未派发模型请求。', terminationConfirmed: true, totalModelCalls: 0, modelCalls: [], usage };
+        const outcome = signStoppedWorkerResult({ signer, store, lease, manifest, record });
+        store.finish(lease, { record, envelope: null, outcome }, { actualCalls: 0, usage, terminationConfirmed: true });
+      } else {
+        if (error?.result) store.event(lease, { type: 'worker_execution_unconfirmed', process: error.result });
+        store.markUnknown(jobId);
+      }
+    } catch { try { store.markUnknown(jobId); } catch {} }
+  }
   finally { try { config.apiKey = ''; reviewConfig.apiKey = ''; } finally { setTimeout(closeResources, 1000); } }
 }
 main().catch(() => { process.exitCode = 1; });
