@@ -503,7 +503,7 @@ export async function createApp(options = {}) {
           }
           if (segments.length === 8 && segments[7] === 'repair' && method === 'POST') {
             const input = await readJson(request);
-            const body = exactFields(input, Object.hasOwn(input, 'repairNote') ? ['contractRevision', 'repairNote'] : ['contractRevision']);
+            const body = exactFields(input, ['contractRevision', ...['repairNote', 'renewedDefinition'].filter(key => Object.hasOwn(input, key))]);
             return respond(response, 202, await plannedExecutionService.repair({ ...identity, executionId: segments[6], ...body }, { subject: teamAccess ? teamAccess.executionSubject(request.headers.cookie) : createLocalExecutionSubject() }));
           }
           if (segments.length === 8 && segments[7] === 'download' && method === 'GET') {
@@ -576,6 +576,22 @@ export async function createApp(options = {}) {
               return verificationPlanningService.importDefinition({ ...identity, ...body });
             });
             return respond(response, 201, imported);
+          }
+          if (segments.length === 8 && segments[7] === 'renew-policy' && method === 'POST') {
+            const body = dataFields(await readJson(request), ['revision', 'contractRevision', 'executionId', 'feedback']);
+            if (typeof verificationPlanningService.renewPolicy !== 'function' || typeof plannedExecutionService?.policyRenewalSource !== 'function'
+              || typeof executionService?.withProjectCheckpoint !== 'function' || typeof plannedExecutionService.withProjectCheckpoint !== 'function') {
+              throw new HttpError(409, '当前服务没有可核对的验收规则续认入口。');
+            }
+            const { executionId, ...renewal } = body, proposalId = segments[6];
+            const result = await orchestrator.withProjectCheckpoint(projectId, () => executionService.withProjectCheckpoint(projectId,
+              () => plannedExecutionService.withProjectCheckpoint(projectId, () => {
+                requestChecks.get(request)?.();
+                const source = plannedExecutionService.policyRenewalSource({ ...identity, executionId, proposalId, revision: renewal.revision });
+                return verificationPlanningService.renewPolicy({ ...identity, proposalId, ...renewal, ...source });
+              })));
+            requestChecks.get(request)?.();
+            return respond(response, result.created ? 201 : 200, { proposal: result.proposal });
           }
           if (segments.length === 8 && segments[7] === 'repair-draft') {
             const source = { ...identity, proposalId: segments[6] }, checkAccess = () => requestChecks.get(request)?.();
