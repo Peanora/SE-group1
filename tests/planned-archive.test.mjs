@@ -15,6 +15,7 @@ import { compileManifest, createVerificationControl, assertCompiledManifest } fr
 import { browserScenarioPolicyHash } from '../lib/browser-scenario-contract.mjs';
 import { projectReviewPolicy } from '../lib/project-review-model.mjs';
 import { plannedExecutionPolicyHash } from '../lib/planned-web-executor.mjs';
+import { migrationContractPolicy, normalizeMigrationPlan } from '../lib/planned-migration-contract.mjs';
 import { plannedNotes } from '../examples/planned-notes.mjs';
 
 const hash = value => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex');
@@ -39,6 +40,96 @@ async function fixture() {
   return { files, shell, payload, manifest, base, compiled, index, pack };
 }
 async function temporary() { await mkdir(evidenceRoot, { recursive: true }); return mkdtemp(path.join(evidenceRoot, 'case-')); }
+
+async function evolutionFixture() {
+  const input = await fixture(), manifest = structuredClone(input.manifest);
+  manifest.binding.executorPolicyHash = 'a'.repeat(64);
+  const originBinding = { ...input.base, runId: 'archive-previous-run', executionId: 'archive-previous-execution', candidateCommit: 'b'.repeat(40),
+    sourceHash: '1'.repeat(64), sourceRevision: '2'.repeat(64), sourceGeneration: 0 };
+  const worker = await readFile(new URL('../lib/planned-migration-worker.cjs', import.meta.url));
+  const snapshot = { version: 1, datasetId: 'dataset', snapshotId: 'snapshot', dataGeneration: 2,
+    originCommit: originBinding.candidateCommit, databaseHash: '3'.repeat(64), schemaHash: '4'.repeat(64), rowsHash: '5'.repeat(64), bytes: 4096,
+    policyHash: hash({ version: 1, workerHash: hash(worker), contract: migrationContractPolicy }) };
+  snapshot.snapshotHash = hash(snapshot);
+  const { projectId, runId, specRevision, planRevision } = input.base;
+  const targetBinding = { projectId, runId, sourceRevision: '6'.repeat(64), sourceGeneration: 1, specRevision, planRevision,
+    inputSnapshotHash: snapshot.snapshotHash, inputSchemaHash: snapshot.schemaHash };
+  const recipe = normalizeMigrationPlan({ version: 1, kind: 'bounded_operations', operations: [{ op: 'addColumn', table: 'notes', column: 'rank', type: 'INTEGER', nullable: false, default: 0 }] });
+  const sidecar = { version: 1, historicalRecordOnly: true, reusedAcceptance: false, originBinding, targetBinding, seedHash: '7'.repeat(64),
+    inputSnapshot: snapshot, inputSchema: [{ name: 'notes', columns: [{ name: 'id', type: 'INTEGER', primary: 1 }] }],
+    migration: { revision: hash({ plan: recipe, binding: targetBinding, policy: migrationContractPolicy }), operationsHash: hash(recipe), policy: migrationContractPolicy }, recipe,
+    platformPreMigration: true, historyHash: '8'.repeat(64), validationHistory: { purpose: 'taskflow/evolution-validation-history/v1', datasetReceiptsHash: '9'.repeat(64) },
+    historicalCosts: { totalModelCalls: 2, usage: { inputTokens: null, outputTokens: 5 }, receiptHashes: ['e'.repeat(64)] }, databaseIncluded: false,
+    notice: '源码包不含业务数据库、备份或私有路径。已有数据迁移和干净空库启动须分别验证；此摘要不是新的执行许可或数据恢复操作。' };
+  const redacted = [{ id: 'history', name: '报表', passed: true, detail: '已有数据的断言值仅保留本机私有验证记录。' }];
+  const report = { version: 1, profileId: 'planned-web-v1', status: 'accepted', binding: manifest.binding, sourceHash: manifest.sourceHash,
+    self: redacted, http: redacted, browser: redacted, taskAccepted: true };
+  const payload = input.payload.filter(entry => entry.path !== 'delivery/verification.json');
+  payload.push({ path: 'delivery/verification.json', content: JSON.stringify(report) });
+  const pack = (extras = [{ path: 'delivery/evolution.json', content: JSON.stringify(sidecar) }], base = payload) =>
+    input.pack([...base, ...extras], { ...manifest, files: input.index([...base, ...extras]) });
+  return { sidecar, pack, payload, report };
+}
+
+test('evolution ZIP verifies source and metadata without accepting old policy, database access or historical checks', async () => {
+  const input = await evolutionFixture(), archive = await inspectPlannedArchive(input.pack());
+  assert.equal(archive.integrityVerified, true);
+  assert.equal(archive.executorPolicyCurrent, false);
+  assert.equal(archive.taskAccepted, false);
+  assert.equal(archive.historicalAcceptanceVerified, false);
+  assert.deepEqual(archive.evolution, { version: 1, historicalRecordOnly: true, databaseIncluded: false, existingDataVerified: false,
+    migrationKind: 'bounded_operations', originGeneration: 0, targetGeneration: 1 });
+  assert.equal(archive.files.some(entry => entry.path.startsWith('delivery/')), false);
+  const root = await temporary(), archiveFile = path.join(root, 'evolution.zip');
+  await writeFile(archiveFile, input.pack());
+  const result = await revalidatePlannedArchive({ archiveFile, outputDir: path.join(root, 'no-runtime') });
+  assert.equal(result.status, 'evolution_dataset_required');
+  assert.deepEqual([result.taskAccepted, result.totalModelCalls, result.terminationConfirmed, result.test, result.browser, result.reportPath], [false, 0, null, null, null, null]);
+  assert.deepEqual(await readdir(root), ['evolution.zip']);
+  const cli = new URL('../scripts/verify-planned-delivery.mjs', import.meta.url);
+  const run = (...args) => spawnSync(process.execPath, [fileURLToPath(cli), '--archive', archiveFile, ...args], { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10000 });
+  const dry = run('--inspect'), normal = run();
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.equal(normal.status, 1, normal.stderr);
+  assert.deepEqual([JSON.parse(dry.stdout).status, JSON.parse(normal.stdout).status], ['integrity_verified', 'evolution_dataset_required']);
+  for (const stdout of [dry.stdout, normal.stdout]) {
+    const output = JSON.parse(stdout);
+    assert.deepEqual([output.taskAccepted, output.historicalAcceptanceVerified, output.evolution.existingDataVerified, output.totalModelCalls], [false, false, false, 0]);
+  }
+});
+
+test('evolution ZIP rejects foreign, stripped, malformed or private history even with rebuilt file hashes', async () => {
+  const input = await evolutionFixture();
+  const entry = (content, name = 'delivery/evolution.json') => ({ path: name, content });
+  for (const change of [
+    value => { value.targetBinding.runId = 'another-run'; value.migration.revision = hash({ plan: value.recipe, binding: value.targetBinding, policy: migrationContractPolicy }); },
+    value => { value.originBinding.runId = value.targetBinding.runId; },
+    value => { value.originBinding.sourceGeneration = value.targetBinding.sourceGeneration; },
+    value => { value.inputSnapshot.rowsHash = 'f'.repeat(64); },
+    value => { value.inputSnapshot.filename = 'C:/private/business.sqlite'; },
+    value => { value.inputSchema[0].rows = ['private row']; },
+    value => { value.migration.operationsHash = 'f'.repeat(64); },
+    value => { value.migration.policy.implementationHash = 'f'.repeat(64); },
+    value => { value.recipe.operations[0].sql = 'SELECT private'; },
+    value => { value.validationHistory.accepted = true; },
+    value => { value.historicalCosts.receiptHashes.push('C:/private/receipt.json'); },
+    value => { value.databaseIncluded = true; },
+    value => { value.reusedAcceptance = true; },
+  ]) {
+    const sidecar = structuredClone(input.sidecar); change(sidecar);
+    await assert.rejects(inspectPlannedArchive(input.pack([entry(JSON.stringify(sidecar))])));
+  }
+  for (const extras of [[], [entry('{')], [entry(JSON.stringify(input.sidecar), 'delivery/Evolution.json')],
+    [entry(JSON.stringify(input.sidecar)), entry('{}', 'delivery/task-execution.json')],
+    [entry(JSON.stringify(input.sidecar)), entry('snapshot', 'delivery/input.sqlite')]]) {
+    await assert.rejects(inspectPlannedArchive(input.pack(extras)));
+  }
+  for (const change of [value => { value.binding.runId = 'foreign'; }, value => { value.http = [{ ...value.http[0], detail: 'private data' }]; }]) {
+    const report = structuredClone(input.report); change(report);
+    const payload = input.payload.map(item => item.path === 'delivery/verification.json' ? { ...item, content: JSON.stringify(report) } : item);
+    await assert.rejects(inspectPlannedArchive(input.pack(undefined, payload)));
+  }
+});
 
 test('planned ZIP verifies exact source/shell/current definitions while forged acceptance remains non-authoritative', async () => {
   const input = await fixture(), bytes = input.pack(), result = await inspectPlannedArchive(bytes);
