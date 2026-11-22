@@ -55,7 +55,9 @@ async function fixture(t, options = {}) {
           verifyReservation(); coreCalls++;
           const callEntries = [{ role: 'coding', kind: 'model', dispatched: true }, { role: 'review', kind: 'model', dispatched: true,
             candidateCommit: options.versions?.at(0)?.commit, reviewRejection: options.reviewRejection }];
-          const owned = { id: randomUUID(), ...input.binding, status: mode === 'fake-accepted' ? 'accepted' : 'failed', terminationConfirmed: true, totalModelCalls: 2, modelCalls: callEntries.map(item => ({ ...item, receiptPath: path.join(directory, 'private-receipt.json') })), versions: structuredClone(options.versions ?? []), usage: { inputTokens: null, outputTokens: null }, workspace: path.join(directory, 'private-workspace'), reportPath: path.join(directory, 'private-report.json'), error: 'synthetic inert failure' };
+          const owned = { id: randomUUID(), ...input.binding, status: mode === 'fake-accepted' ? 'accepted' : 'failed', terminationConfirmed: true, totalModelCalls: 2,
+            modelCalls: callEntries.map((item, index) => ({ ...item, ...options.receipts?.[index], receiptPath: path.join(directory, 'private-receipt.json') })),
+            versions: structuredClone(options.versions ?? []), usage: options.usage ?? { inputTokens: null, outputTokens: null }, workspace: path.join(directory, 'private-workspace'), reportPath: path.join(directory, 'private-report.json'), error: 'synthetic inert failure' };
           const gate = deferred(); releases.push(() => gate.resolve({ ...owned, status: modeCancelled ? 'stopped' : owned.status }));
           const result = mode === 'foreign' ? { ...owned, id: 'foreign-core', terminationConfirmed: false }
             : mode === 'malformed' ? null
@@ -125,6 +127,36 @@ test('before any native core admission the run budget and six-call reservation a
   assert.equal(state.executions[0].status, 'failed'); assert.equal(state.capabilities.budget.remainingModelCalls, null);
   const [budget] = f.query('SELECT * FROM budgets'); assert.equal(budget.used_calls, 2); assert.equal(budget.reserved_calls, 0);
   const json = JSON.stringify(state); for (const privateValue of [f.directory, config.apiKey, 'receiptPath', 'private-workspace', 'private-receipt']) assert.equal(json.includes(privateValue), false);
+});
+
+test('单价变更使旧确认失效，已执行报价及历史未知金额在重开后保持', async t => {
+  const usage = { inputTokens: 1_000_000, outputTokens: 100_000 };
+  const f = await fixture(t, { usage: { inputTokens: 2_000_000, outputTokens: 200_000 }, receipts: [
+    { model: config.model, usage, receiptConfirmed: true }, { model: 'review-price-fixture', usage, receiptConfirmed: true },
+  ] });
+  await f.service.start(await f.input());
+  const first = (await f.finished()).executions[0];
+  assert.equal(first.costEstimate.known, false);
+  let codingRate = 2;
+  const getConfig = () => ({ ...config, pricing: { currency: 'USD', inputPerMillion: codingRate, outputPerMillion: 3 } });
+  const getReviewConfig = () => ({ ...config, model: 'review-price-fixture', pricing: { currency: 'USD', inputPerMillion: 4, outputPerMillion: 7 } });
+  await f.reopen({ getConfig, getReviewConfig });
+  const oldInput = await f.input();
+  codingRate = 5;
+  await assert.rejects(f.service.start(oldInput), error => error.code === 'contract_changed');
+  const { execution: second } = await f.service.start(await f.input());
+  assert.equal(second.modelPrices.coding.inputPerMillion, 5);
+  codingRate = 8;
+  await until(async () => (await f.service.list(ids)).executions.every(row => !row.active));
+  await f.reopen({ getConfig, getReviewConfig });
+  const state = await f.service.list(ids), priced = state.executions.find(row => row.id === second.id);
+  assert.equal(state.capabilities.modelPrices.coding.inputPerMillion, 8);
+  assert.deepEqual(state.executions.find(row => row.id === first.id).costEstimate, first.costEstimate);
+  assert.equal(priced.costEstimate.known, true);
+  assert.equal(priced.costEstimate.amount, 10);
+  assert.equal(priced.totalModelCalls, 2);
+  assert.deepEqual(priced.usage, { inputTokens: 2_000_000, outputTokens: 200_000 });
+  assert.equal(Object.hasOwn(f.providerSettings.at(-1), 'pricing'), false);
 });
 
 test('a new attempt on an existing approved plan gets one hour without changing previous deadlines or usage', async t => {

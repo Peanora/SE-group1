@@ -58,6 +58,28 @@ test('整体版本 CAS 拒绝过期和并发覆盖，失败不改变已保存配
   assert.equal((await createAgentSettings({ directory, environment: {} })).view().revision, 2);
 });
 
+test('模型单价跟随服务模型持久化，旧配置可往返，同一模型改名保留单价', async t => {
+  const { settings, directory } = await fixture(t);
+  const pricing = { currency: 'USD', inputPerMillion: 0, outputPerMillion: 2.5 }, row = provider({ pricing });
+  let view = await settings.save({ revision: 0, providers: [row], roles: allRoles(row.id) });
+  const pinned = settings.resolve('coding');
+  assert.deepEqual(pinned.pricing, pricing);
+  assert.ok(Object.isFrozen(pinned.pricing));
+  const restarted = await createAgentSettings({ directory, environment: {} });
+  assert.deepEqual(restarted.resolve('review').pricing, pricing);
+  const { pricing: savedPricing, ...legacy } = view.providers[0];
+  assert.deepEqual(savedPricing, pricing);
+  view = await restarted.save({ revision: view.revision, providers: [{ ...legacy, name: '更新服务显示名称' }], roles: view.roles });
+  assert.deepEqual(view.providers[0].pricing, pricing);
+  await assert.rejects(restarted.save({ revision: view.revision, providers: [{ ...legacy, pricing: { ...pricing, inputPerMillion: -1 } }], roles: view.roles }), status(400));
+  view = await restarted.save({ revision: view.revision, providers: [{ ...legacy, model: 'new-model' }], roles: view.roles });
+  assert.equal(view.providers[0].pricing, undefined);
+  view = await restarted.save({ revision: view.revision, providers: [{ ...view.providers[0], pricing }], roles: view.roles });
+  view = await restarted.save({ revision: view.revision, providers: [{ ...view.providers[0], pricing: null }], roles: view.roles });
+  assert.equal(view.providers[0].pricing, undefined);
+  assert.deepEqual(pinned.pricing, pricing);
+});
+
 test('编辑保留密钥与原运行快照，清空远程密钥和删除仍绑定 API 被拒绝', async t => {
   const { settings } = await fixture(t);
   const row = provider(); let view = await settings.save({ revision: 0, providers: [row], roles: allRoles(row.id) });

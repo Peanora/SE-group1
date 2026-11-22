@@ -119,7 +119,13 @@ for (const width of [1440, 390]) test(`planned panel ${width}px: cost consent, e
   const post = await page.evaluate(() => window.requests.find(r => r.method === 'POST')); assert.equal(post.url, '/api/projects/project-a/runs/run-a/development-executions/start'); assert.deepEqual(post.body, { proposalId: 'proposal-1', revision: A, contractRevision: D });
   assert.equal(await consent(page).isChecked(), false); assert.match(await page.locator('.planned-execution').innerText(), /输入未知/u); assert.equal(await download(page).count(), 0);
   assert.equal(await page.locator('img').count(), 0); assert.equal(await page.evaluate(() => window.injected), undefined);
-  await page.evaluate(value => { window.states.a.dev.executions = [value]; }, acceptedRow); await refresh(page);
+  const quote = { coding: { currency: 'CNY', inputPerMillion: 3, outputPerMillion: 4.5 } };
+  const priced = { ...acceptedRow, totalModelCalls: 2, usage: { inputTokens: 37, outputTokens: 8 }, modelPrices: quote,
+    costEstimate: { known: true, amount: 0.000147, currency: 'CNY', reason: null } };
+  await page.evaluate(({ priced, quote }) => { window.states.a.dev.executions = [priced]; window.states.a.dev.capabilities.modelPrices = quote; }, { priced, quote });
+  await refresh(page);
+  assert.equal(await page.getByText(/每百万 token 单价：编码 CNY 3 输入 \/ 4.5 输出/u).isVisible(), true);
+  assert.equal(await page.getByText(/模型调用 2 次，输入37、输出8 token。费用估算 0.000147 CNY/u).isVisible(), true);
   assert.equal(await download(page).isVisible(), true); assert.equal(await download(page).getAttribute('href'), '/api/projects/project-a/runs/run-a/development-executions/execution-1/download'); assert.equal(await page.locator('.pe-result').getAttribute('data-accepted'), 'true');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
   const shots = path.resolve('output/planned-panel-author'); await mkdir(shots, { recursive: true }); await page.screenshot({ path: path.join(shots, `panel-${width}.png`), fullPage: true });

@@ -2,7 +2,7 @@ const $ = selector => document.querySelector(selector);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const pageKind = document.body.dataset.settingsPage;
 const state = { snapshot: null, roles: {}, editing: null, loading: false, saving: false, rolesDirty: false, editorDirty: false, navigationApproved: false };
-const providerFields = provider => Object.fromEntries(['id', 'name', 'baseUrl', 'model', 'jsonMode', 'thinking'].map(key => [key, provider[key]]));
+const providerFields = provider => Object.fromEntries(['id', 'name', 'baseUrl', 'model', 'jsonMode', 'thinking', 'pricing'].map(key => [key, provider[key]]));
 
 function message(selector, text = '') {
   const element = $(selector); if (!element) return;
@@ -99,7 +99,7 @@ function openProvider(id, returnTarget) {
   const provider = id ? state.snapshot.providers.find(item => item.id === id) : null;
   if (id && !provider) return;
   if (!provider && state.snapshot.providers.length >= 30) { message('#agent-settings-error', '最多添加 30 个 API 服务。'); return; }
-  state.editing = { id: provider?.id || crypto.randomUUID(), existing: !!provider, returnTarget };
+  state.editing = { id: provider?.id || crypto.randomUUID(), existing: !!provider, returnTarget, pricingEdited: false };
   state.editorDirty = false;
   $('#provider-dialog-heading').textContent = provider ? '编辑 API 服务' : '添加 API 服务';
   $('#provider-name').value = provider?.name || '';
@@ -113,6 +113,10 @@ function openProvider(id, returnTarget) {
   $('#provider-json').value = String(provider?.jsonMode !== false);
   $('#provider-thinking').value = provider?.thinking || '';
   $('.settings-advanced').open = false;
+  $('#provider-pricing').open = !!provider?.pricing;
+  $('#provider-currency').value = provider?.pricing?.currency ?? '';
+  $('#provider-input-price').value = provider?.pricing?.inputPerMillion ?? '';
+  $('#provider-output-price').value = provider?.pricing?.outputPerMillion ?? '';
   message('#provider-error'); message('#agent-settings-error'); message('#agent-settings-notice');
   $('#provider-dialog').showModal(); $('#provider-name').focus();
 }
@@ -136,6 +140,15 @@ $('#provider-form')?.addEventListener('submit', async event => {
   const provider = { id: state.editing.id, name: values.get('name'), baseUrl: values.get('baseUrl'), model: values.get('model'),
     jsonMode: values.get('jsonMode') === 'true', thinking: values.get('thinking'),
     ...(values.get('apiKey') ? { apiKey: values.get('apiKey') } : {}), ...(values.get('clearKey') ? { clearKey: true } : {}) };
+  const currency = values.get('currency').trim().toUpperCase(), inputPrice = values.get('inputPerMillion'), outputPrice = values.get('outputPerMillion');
+  if (state.editing.pricingEdited) {
+    if (!currency && inputPrice === '' && outputPrice === '') provider.pricing = null;
+    else if (!currency || inputPrice === '' || outputPrice === '') {
+      message('#provider-error', '请同时填写货币及两项单价，或全部清空。');
+      $('#provider-error').scrollIntoView({ block: 'nearest' });
+      return;
+    } else provider.pricing = { currency, inputPerMillion: Number(inputPrice), outputPerMillion: Number(outputPrice) };
+  }
   const providers = state.snapshot.providers.map(item => item.id === provider.id ? provider : providerFields(item));
   if (!state.editing.existing) providers.push(provider);
   // API maintenance never changes role assignments, including unconfigured roles.
@@ -148,6 +161,7 @@ $('#provider-form')?.addEventListener('submit', async event => {
   finally { state.saving = false; setBusy(); }
 });
 $('#provider-form')?.addEventListener('input', () => { state.editorDirty = true; });
+$('#provider-pricing')?.addEventListener('input', () => { if (state.editing) state.editing.pricingEdited = true; });
 async function deleteProvider(id) {
   if (state.loading || state.saving) return;
   const localError = document.querySelector(`[data-provider-id="${CSS.escape(id)}"] [data-provider-error]`);

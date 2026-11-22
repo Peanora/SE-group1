@@ -54,14 +54,17 @@ if (!process.env.TASKFLOW_TASK_SERVICE_CHILD) {
   const { readProjectFiles } = await import('../lib/project-files.mjs');
   const { inspectPlannedArchive } = await import('../lib/planned-archive.mjs');
   const { readWebArchiveEntries } = await import('../lib/web-archive.mjs');
-  async function fixture(t, pause = false, unsupported = false) {
+  async function fixture(t, pause = false, unsupported = false, priced = false) {
     const root = await mkdtemp(path.join(os.tmpdir(), 'planned-task-service-')), data = planning(unsupported), services = [], gate = deferred(), barrier = deferred(); let verification, service, approved;
     const f = active = { calls: [], models: 0, simultaneous: 0, gate, root, data };
     const query = sql => { const db = new DatabaseSync(path.join(root, 'planned', 'planned.sqlite'), { readOnly: true }); try { return db.prepare(sql).all(); } finally { db.close(); } };
     const open = async () => {
+      const codingInputRate = services.length === 0 ? 2 : 12;
       verification = await createVerificationPlanningService({ rootDir: path.join(root, 'verification'), getPlanning: () => data, getPlanningSync: () => data, config,
         dependencies: { createModel: () => async input => { const proposal = definition(input.task.tasks), usage = { inputTokens: 0, outputTokens: 0 }; await input.onReceipt({ model: config.model, finishReason: 'stop', usage, content: JSON.stringify(proposal) }); return { proposal, model: config.model, usage, policyHash: verificationModelPolicy.hash, coverage: 'structural_only' }; } } }); services.push(verification);
       service = await createPlannedExecutionService({ rootDir: path.join(root, 'planned'), verificationService: verification, getPlanningSync: () => data, withCheckpoint: (_id, work) => work(), config, executable: process.execPath,
+        ...(priced ? { getConfig: () => ({ ...config, model: 'synthetic-code', pricing: { currency: 'CNY', inputPerMillion: codingInputRate, outputPerMillion: 5 } }),
+          getReviewConfig: () => ({ ...config, model: 'synthetic-review', pricing: { currency: 'CNY', inputPerMillion: 3, outputPerMillion: 7 } }) } : {}),
         dependencies: { startExecution: input => { f.manifest = input.manifest; f.task = input.task; const handle = startPlannedTaskExecution({ ...input, maxCalls: 1, maxReviewCalls: 1 });
           return { ...handle, done: handle.done.then(record => { f.originalGraph = record; return record; }) }; }, createProvider: () => async input => {
           const context = JSON.parse(input.task), item = context.activeTask; f.calls.push(item.id); f.models++;
@@ -82,9 +85,10 @@ if (!process.env.TASKFLOW_TASK_SERVICE_CHILD) {
       async row(id) { return (await service.list(ids)).executions.find(item => item.id === id); }, async done(id) { return until(async () => { const row = await this.row(id); return row && !row.active ? row : null; }); } };
   }
   test('four tasks are reserved once, actual two-way coding/merge completes, full-run cost/history survives two close/reopen downloads', async t => {
-    const f = await fixture(t), started = await f.start(), row = await f.done(started.id);
+    const f = await fixture(t, false, false, true), started = await f.start(), row = await f.done(started.id);
     assert.equal(row.accepted, true, row.error || row.checkpoint.message); assert.equal(row.executionMode, 'task_dag'); assert.equal(row.maxConcurrentTasks, 2); assert.equal(row.tasks.length, 4); assert.ok(row.tasks.every(item => item.status === 'completed'));
     assert.equal(row.totalModelCalls, 8); assert.deepEqual(row.usage, { inputTokens: 20, outputTokens: 28 }); assert.equal(f.f.models, 8);
+    assert.equal(row.costEstimate.known, true); assert.equal(row.costEstimate.amount, 0.000224);
     assert.equal(row.reviewHistory.length, 4);
     assert.deepEqual(row.reviewHistory.map(item => item.taskId), row.tasks.map(item => item.id));
     for (const review of row.reviewHistory) {
@@ -103,13 +107,18 @@ if (!process.env.TASKFLOW_TASK_SERVICE_CHILD) {
       const zip = await createPlannedDelivery({ ...delivery, executionRecord: parsed });
       assert.equal(JSON.parse(readWebArchiveEntries(zip).entries.get('delivery/verification.json').content).modelCalls.length, 8);
     } finally { checkpointControl.close(); }
-    let archiveHash; const before = JSON.stringify(ledger);
+    let archiveHash, fullZipHash; const before = JSON.stringify(ledger);
     for (let generation = 0; generation < 3; generation++) {
       if (generation) await f.reopen(); const restored = await f.row(started.id); assert.equal(restored.accepted, true, restored.checkpoint.message); assert.equal(restored.checkpoint.restored, generation > 0);
+      if (generation) assert.equal((await f.service.list(ids)).capabilities.modelPrices.coding.inputPerMillion, 12);
       assert.deepEqual(restored.reviewHistory, row.reviewHistory);
       const zip = (await f.service.download({ ...ids, executionId: started.id })).buffer, entries = readWebArchiveEntries(zip).entries;
       const history = JSON.parse(entries.get('delivery/task-execution.json').content), summary = JSON.parse(entries.get('delivery/verification.json').content);
       assert.equal(history.tasks.length, 4); assert.equal(history.totalModelCalls, 8); assert.equal(summary.modelCalls.length, 8); assert.deepEqual(summary.usage, { inputTokens: 20, outputTokens: 28 });
+      assert.deepEqual(restored.costEstimate, row.costEstimate);
+      assert.deepEqual(summary.costEstimate, row.costEstimate);
+      assert.deepEqual(summary.modelPrices, row.modelPrices);
+      const fullHash = createHash('sha256').update(zip).digest('hex'); if (fullZipHash) assert.equal(fullHash, fullZipHash); fullZipHash = fullHash;
       assert.equal(history.maxConcurrentTasks, 2); assert.equal((await inspectPlannedArchive(zip)).taskAccepted, false); assert.equal(f.f.models, 8); assert.equal(JSON.stringify(f.query('SELECT * FROM budgets')[0]), before);
       const codeOnly = hash([...entries].filter(([name]) => !name.startsWith('delivery/')).map(([name, file]) => [name, file.sha256])); if (archiveHash) assert.equal(codeOnly, archiveHash); archiveHash = codeOnly;
     }

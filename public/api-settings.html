@@ -47,6 +47,12 @@
           <label for="provider-key">API 密钥</label><input id="provider-key" name="apiKey" type="password" maxlength="4096" autocomplete="new-password" spellcheck="false" aria-describedby="provider-key-note"><small id="provider-key-note">密钥仅保存在本机服务端，页面不会回填。</small>
           <label id="provider-clear-label" class="settings-checkbox" for="provider-clear" hidden><input id="provider-clear" name="clearKey" type="checkbox">清除已有密钥</label>
           <details class="settings-advanced"><summary>接口参数</summary><div class="settings-advanced-fields"><label for="provider-json">JSON 输出</label><select id="provider-json" name="jsonMode"><option value="true">发送 JSON 模式参数</option><option value="false">不发送 JSON 模式参数</option></select><label for="provider-thinking">思考参数</label><select id="provider-thinking" name="thinking"><option value="">不发送</option><option value="disabled">disabled</option><option value="enabled">enabled</option></select></div></details>
+          <details id="provider-pricing" class="settings-advanced"><summary>模型单价</summary><div class="settings-advanced-fields">
+            <p id="provider-pricing-note">按当前模型填写。更换模型或地址后请重新填写。留空表示未知，实际账单由服务方结算。</p>
+            <label for="provider-currency">货币代码</label><input id="provider-currency" name="currency" maxlength="3" autocomplete="off" placeholder="CNY" aria-describedby="provider-pricing-note">
+            <label for="provider-input-price">每百万输入 token 单价</label><input id="provider-input-price" name="inputPerMillion" type="number" min="0" max="1000000" step="any">
+            <label for="provider-output-price">每百万输出 token 单价</label><input id="provider-output-price" name="outputPerMillion" type="number" min="0" max="1000000" step="any">
+          </div></details>
         </fieldset>
       </div>
       <footer class="settings-drawer-footer"><button type="button" class="button button-outline" data-close-provider>取消</button><button id="save-provider" class="button button-primary" type="submit">保存并应用</button></footer>

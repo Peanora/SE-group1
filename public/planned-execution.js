@@ -37,6 +37,20 @@ const STYLE = `
 const contextOf = raw => Object.fromEntries(['projectId', 'runId', 'specRevision', 'planRevision', 'planningStatus'].map(key => [key, typeof raw?.[key] === 'string' ? raw[key] : '']));
 const keyOf = value => JSON.stringify(value);
 const count = value => Number.isSafeInteger(value) && value >= 0 ? String(value) : '未知';
+const money = ({ amount, currency }) => `${amount} ${currency}`;
+
+function priceLabel(prices) {
+  if (!prices) return '模型单价未配置，费用估算未知。';
+  const rate = price => price ? `${price.currency} ${price.inputPerMillion} 输入 / ${price.outputPerMillion} 输出` : '未知';
+  return `每百万 token 单价：编码 ${rate(prices.coding)}，审查 ${rate(prices.review)}。执行开始时固定单价，完成后按实际 token 估算。`;
+}
+
+function estimateLabel(estimate) {
+  if (estimate?.known === true) return `费用估算 ${money(estimate)}。`;
+  const amounts = estimate?.amounts ?? [];
+  const partial = amounts.length ? `已计价金额 ${amounts.map(money).join('、')}。` : '';
+  return `总费用估算未知。${estimate?.reason ?? ''}${partial}`;
+}
 const printable = value => { if (value == null) return '尚无记录'; if (typeof value === 'string') return value; try { return JSON.stringify(value, null, 2); } catch { return '记录格式待核对'; } };
 function previewURL(value) {
   if (typeof value !== 'string' || !/^http:\/\/(?:localhost|127\.0\.0\.1):[0-9]{1,5}\/?$/iu.test(value)) return null;
@@ -610,7 +624,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     const attemptLimit = budget?.unlimited === true ? '整份计划可以不限次执行。' : `剩余开发尝试${count(budget?.remainingAttempts)}/${count(budget?.maxAttempts)}，剩余模型调用${count(budget?.remainingModelCalls)}，共享调用总额度${count(budget?.totalModelCalls)}。`;
     setText(refs.cost, `编码模型：${cap?.model?.name || '尚未确认'}；审查模型：${cap?.model?.reviewName || cap?.model?.name || '尚未确认'}。${budget?.taskLimit ? `最多${count(budget.taskLimit)}项真实任务，每项` : '每次'}编码最多${count(budget?.maxCalls)}次、独立Review最多${count(budget?.maxReviewCalls)}次；${budget?.taskLimit ? `本次最多${count(budget.attemptModelCalls)}次模型调用，并发最多${count(budget.maxConcurrency)}项；` : ''}总时限${Number.isSafeInteger(budget?.timeoutMs) ? `${budget.timeoutMs / 1000}秒` : '未知'}。${attemptLimit}`);
     refs.definitionSelect.disabled = !!action || !fresh || !candidates.length; refs.consent.disabled = !!action || !!pending || !fresh || !confirmed() || !validBudget() || !selectedDefinition() || checklistBlocked; refs.start.disabled = !mayStart(); refs.refreshButton.disabled = !!action;
-    setText(refs.monetary, cap?.costEstimate?.known === false ? `费用估算：未知。${cap.costEstimate.reason || '实际调用和token用量单独记录。'}` : '费用估算：尚未确认。实际调用和token用量单独记录。');
+    setText(refs.monetary, priceLabel(cap?.modelPrices));
     setText(refs.scope, { specRevision: context.specRevision, planRevision: context.planRevision, definition: selectedDefinition() ? { id: proposalId, revision: selectedDefinition().revision, binding: selectedDefinition().binding } : null, budget });
     const item = row();
     const noteTarget = keyOf([key, item?.id, item?.candidateCommit, item?.revision, item?.binding?.sourceRevision, item?.binding?.sourceGeneration, proposalId, cap?.contractRevision]);
@@ -631,7 +645,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
       setText(refs.failureTitle, help.title); setText(refs.failureDetail, help.detail); setText(refs.failureNext, help.nextStep);
       refs.prepareRevision.hidden = !mayReviseChecklist(item);
     }
-    setText(refs.facts, `最近固定的提交 ${item.candidateCommit || '暂无'}。模型调用 ${count(item.totalModelCalls)} 次，输入${count(item.usage?.inputTokens)}、输出${count(item.usage?.outputTokens)} token。`);
+    setText(refs.facts, `最近固定的提交 ${item.candidateCommit || '暂无'}。模型调用 ${count(item.totalModelCalls)} 次，输入${count(item.usage?.inputTokens)}、输出${count(item.usage?.outputTokens)} token。${estimateLabel(item.costEstimate)}`);
     refs.repair.disabled = !mayRepair(item); refs.cancel.disabled = !mayCancel(item); refs.download.hidden = !mayDownload(item); if (!refs.download.hidden) refs.download.href = `${base()}/${encodeURIComponent(item.id)}/download`; else refs.download.removeAttribute('href');
     if (openVerification) { refs.repair.hidden = refs.repairNoteField.hidden; refs.cancel.hidden = !item.active; refs.previewBox.hidden = !passed && !item.preview; }
     const preview = previewOf(item), link = previewLink(item), previewKnown = preview && Object.hasOwn(PREVIEW_STATES, preview.state);
@@ -656,7 +670,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     }
     for (const [id, view] of taskNodes) if (!currentTasks.has(id)) { view.card.remove(); taskNodes.delete(id); }
     renderProcess(item); renderCommands(item);
-    setText(refs.binding, { binding: item.binding, budget: item.budget, baseCommit: item.baseCommit, candidateCommit: item.candidateCommit, proposalId: item.proposalId, revision: item.revision }); setText(refs.diff, item.diff || '尚无代码差异。');
+    setText(refs.binding, { binding: item.binding, budget: item.budget, modelPrices: item.modelPrices, baseCommit: item.baseCommit, candidateCommit: item.candidateCommit, proposalId: item.proposalId, revision: item.revision }); setText(refs.diff, item.diff || '尚无代码差异。');
     const evidenceVersion = roleProgress ? evidenceCandidate(roleProgress) : { candidateCommit: item.candidateCommit };
     setText(refs.checks, { ...evidenceVersion,
       self: item.checks?.self ?? null, http: item.checks?.http ?? null, browser: item.checks?.browser ?? null, errors: roleProgress?.testingErrors ?? [] });
