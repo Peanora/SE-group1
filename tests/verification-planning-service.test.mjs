@@ -892,7 +892,7 @@ test('an unfinished HTTP stage reopens and adds only missing checks before brows
   partial.steps[0].request.captures = [{ name: 'resourceId', path: '$.id' }];
   const supplement = { sessions: [], steps: [{
     ...structuredClone(partial.steps[0]), id: 'extra', dependsOn: [], requirementIds: ['R16'],
-    request: { id: 'get-extra', method: 'GET', path: '/resources/${resourceId}', assertions: partial.steps[0].request.assertions },
+    request: { id: 'get-extra', method: 'GET', path: '/resources?id=${resourceId}', assertions: partial.steps[0].request.assertions },
   }] };
   const browser = { version: 1, sessions: ['visitor'], steps: [
     { id: 'home', session: 'visitor', requirementIds: requirements, op: 'goto', path: '/' },

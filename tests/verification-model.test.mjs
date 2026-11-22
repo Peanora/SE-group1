@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createVerificationModel, verificationModelPolicy, verificationRequestEvidence } from '../lib/verification-model.mjs';
+import { inspectStagedHttp } from '../lib/staged-http-verification.mjs';
 import { assertCompiledManifest, compileManifest, createVerificationControl, inspectVerificationProposal } from '../lib/verification-contract.mjs';
 
 const config = { baseUrl: 'https://model.invalid/v1', model: 'independent-verification', apiKey: 'private-verification-key' };
@@ -163,6 +164,27 @@ test('staged HTTP preparation completes preceding capture edges only', async () 
     mutate(unsafe);
     await assert.rejects(model(unsafe)(staged), { code: 'invalid_model_response' });
   }
+});
+test('staged coverage requires the associated method and path despite a claimed requirement tag', () => {
+  const requirements = ['REQ1', 'REQ2', 'REQ3'];
+  const engineeringContract = { routes: [
+    { method: 'GET', path: '/objects', requirementIds: ['REQ1'] },
+    { method: 'POST', path: '/objects/:parameter', requirementIds: ['REQ2'] },
+  ], views: [{ path: '/workspace', requirementIds: ['REQ3'] }] };
+  const raw = proposal();
+  raw.steps[0].requirementIds.push('REQ2', 'REQ3');
+  raw.steps.splice(1);
+  const context = { binding, requirements, engineeringContract };
+  const first = inspectStagedHttp(raw, context);
+  assert.deepEqual(first.missing, ['REQ2', 'REQ3']);
+  const supplement = { sessions: [], steps: proposal().steps.slice(1) };
+  const wrongMethod = structuredClone(supplement);
+  wrongMethod.steps[0].request.method = 'GET';
+  delete wrongMethod.steps[0].request.body;
+  assert.throws(() => inspectStagedHttp(wrongMethod, { ...context, previous: first.proposal }), /关联路由或网页/u);
+  const second = inspectStagedHttp(supplement, { ...context, previous: first.proposal });
+  assert.deepEqual(second.missing, ['REQ3']);
+  assert.deepEqual(second.proposal.steps[0], raw.steps[0]);
 });
 test('malformed, blank and nontext proposals retain four-field receipts and known usage before rejection', async () => {
   for (const content of ['{"version":', ' \n\t ', '', '```json\n{}\n```', null, undefined, '{}', '[]']) {
