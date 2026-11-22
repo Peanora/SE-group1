@@ -10,6 +10,7 @@ const [directory, fault] = process.argv.slice(2);
 const { data, record, revision, evolutionId, identity } = JSON.parse(await readFile(path.join(directory, 'input.json'), 'utf8'));
 const config = { baseUrl: 'http://127.0.0.1:1', model: 'synthetic-never-called', apiKey: 'never-sent-fixture-credential' };
 let revokeWhileReserving = false, revoked = false;
+let evolution;
 const executionInput = { ...identity, proposalId: record.input.proposalId, revision: record.input.definitionRevision };
 const verificationService = {
   list: async () => ({ proposals: [{ id: executionInput.proposalId, revision: executionInput.revision, current: true, approved: true, proposal: { browser: {} } }] }),
@@ -23,6 +24,7 @@ const execution = await createPlannedExecutionService({
   verificationService, getPlanningSync, config, executable: process.execPath,
   withCheckpoint: () => new Promise(() => {}),
   dependencies: {
+    hasExternalActivity: projectId => !!evolution?.hasActivity(projectId),
     createProvider: async () => { await writeFile(path.join(directory, 'unexpected-model-call'), 'coding'); assert.fail('unexpected coding factory'); },
     createReviewer: async () => { await writeFile(path.join(directory, 'unexpected-model-call'), 'reviewing'); assert.fail('unexpected Review factory'); },
   },
@@ -34,7 +36,7 @@ if (fault === 'rollback-association') {
   } finally { ledger.close(); }
 }
 const rootDir = path.join(directory, 'evolutions');
-const evolution = await createPlannedEvolutionService({
+evolution = await createPlannedEvolutionService({
   rootDir, sourceRootDir: directory, getPlanningSync, verificationService,
   plannedService: {
     ...execution,
@@ -63,7 +65,15 @@ const server = http.createServer(async (request, response) => {
   const assertAccess = () => request.headers.authorization === 'Bearer fixture-owner' && !revokeWhileReserving;
   let status = 200, body;
   try {
-    if (request.method === 'POST') {
+    if (request.method === 'POST' && request.url === '/planned') {
+      if (!assertAccess()) { response.writeHead(403).end(); return; }
+      body = await execution.start({ ...executionInput, contractRevision });
+      status = 202;
+    } else if (request.method === 'POST' && request.url === '/checkpoint') {
+      if (!assertAccess()) { response.writeHead(403).end(); return; }
+      await execution.withProjectCheckpoint(identity.projectId, () => undefined);
+      body = { checkpoint: true };
+    } else if (request.method === 'POST') {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
       const fields = JSON.parse(Buffer.concat(chunks).toString('utf8'));

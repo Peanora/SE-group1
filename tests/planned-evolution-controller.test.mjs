@@ -167,7 +167,7 @@ test('HTTP start crash windows preserve the exact execution and permit only an u
       applications.push({ child, exited });
       const [{ port }] = await Promise.race([once(child, 'message'), exited.then(([code]) => assert.fail('API exited before listen: ' + code))]);
       return {
-        request: (method, fields, authorized = true) => fetch('http://127.0.0.1:' + port, {
+        request: (method, fields, authorized = true, pathname = '/') => fetch('http://127.0.0.1:' + port + pathname, {
           method, signal: AbortSignal.timeout(8000),
           headers: { 'content-type': 'application/json', ...(authorized ? { authorization: 'Bearer fixture-owner' } : {}) },
           ...(fields ? { body: JSON.stringify(fields) } : {}),
@@ -211,6 +211,16 @@ test('HTTP start crash windows preserve the exact execution and permit only an u
       if (fault === 'replaced-ledger') modifyFixtureLedger("UPDATE evolution_start_authority SET nonce='different-ledger' WHERE id=1");
       resumed = await boot('no-fault');
     }
+    const verifyProjectBlocked = async () => {
+      const checkpoint = await resumed.request('POST', undefined, true, '/checkpoint');
+      assert.equal(checkpoint.status, 409);
+      assert.deepEqual(await checkpoint.json(), { code: 'project_busy' });
+      const planned = await resumed.request('POST', undefined, true, '/planned');
+      assert.equal(planned.status, 409);
+      assert.deepEqual(await planned.json(), { code: 'not_ready' });
+      assert.deepEqual(queryExecution('SELECT * FROM budgets'), []);
+    };
+    if (fault === 'replaced-ledger') await verifyProjectBlocked();
     const evolution = await readEvolution(resumed);
     let executionId;
     if (fault === 'after-reservation') {
@@ -228,11 +238,14 @@ test('HTTP start crash windows preserve the exact execution and permit only an u
         assert.equal(evolution.status, 'reconciliation_required');
         assert.equal(evolution.actions.canStart, false);
         assert.equal((await resumed.request('POST', { evolutionId })).status, 409);
-        assert.deepEqual(queryExecution('SELECT * FROM budgets'), []);
+        await verifyProjectBlocked();
         return;
       }
       assert.equal(evolution.status, 'approved');
       assert.equal(evolution.actions.canStart, true);
+      const checkpoint = await resumed.request('POST', undefined, true, '/checkpoint');
+      assert.equal(checkpoint.status, 200);
+      assert.deepEqual(await checkpoint.json(), { checkpoint: true });
       const retry = await resumed.request('POST', { evolutionId });
       assert.equal(retry.status, 202);
       executionId = (await retry.json()).execution.id;
