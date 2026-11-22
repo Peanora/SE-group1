@@ -2,6 +2,16 @@ import { repeatedCounterSteps } from './verification-draft.js';
 
 const HASH = /^[a-f0-9]{64}$/u;
 const STATUSES = { generating: '正在生成提案', cancel_requested: '已请求停止，等待确认', draft: '待审阅定义', rejected: '已驳回定义', approved: '已认可定义（尚未运行）', superseded: '历史定义已被替代', cancelled: '已确认取消', timed_out: '生成超时', stale: '规划版本已失效', failed: '提案生成失败', reconciliation_required: '停止或回执状态待核对' };
+const STAGE_LABELS = {
+  http: { call: '生成接口清单', working: '正在生成接口清单' },
+  'http-supplement': { call: '补齐接口清单', working: '正在补齐接口清单' },
+  browser: { call: '继续生成浏览器清单', working: '正在生成浏览器清单' },
+};
+const isHttpStage = row => row?.generationStage === 'http' || row?.generationStage === 'http-supplement';
+const proposalStatus = row => (row.status === 'generating' && STAGE_LABELS[row.generationStage]?.working)
+  || (row.status === 'draft' && isHttpStage(row) && '接口清单阶段已完成')
+  || STATUSES[row.status];
+
 const STYLE = `
 .verification-plans{margin-top:20px;min-width:0;padding:20px 22px;border:1px solid #e3e9f1;border-radius:12px;background:#fff;color:#344c6d;font:13px/1.8 "Microsoft YaHei",sans-serif}
 .verification-plans *{box-sizing:border-box;min-width:0}.verification-plans [hidden]{display:none!important}.verification-plans h2{margin:0;font-size:19px}.verification-plans h3{font-size:15px}
@@ -38,7 +48,7 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
   const selected = () => rows().find(row => row.id === saved.selectedId);
   const base = () => `/api/projects/${encodeURIComponent(context.projectId)}/runs/${encodeURIComponent(context.runId)}/verification-plans`;
   const repairPath = row => `${base()}/${encodeURIComponent(row.id)}/repair-draft`;
-  const hasRecovery = row => failureRecovery && row?.status === 'failed' && row.origin === 'model' && row.receiptState === 'saved'
+  const hasRecovery = row => failureRecovery && row?.status === 'failed' && row.origin === 'model' && !row.generationStage && row.receiptState === 'saved'
     && row.finishReason === 'stop' && ['invalid_proposal', 'invalid_model_response'].includes(row.errorCode);
   const counterDraft = row => failureRecovery && row?.status === 'draft' && repeatedCounterSteps(row.proposal).length > 0;
   const diagnosticIdentity = row => hasRecovery(row) ? JSON.stringify([row.id, 'receipt', row.receipt?.sha256])
@@ -68,10 +78,12 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     const joint = current.findLast(row => currentRow(row) && row.status === 'approved' && row.approved && row.proposal?.browser?.steps?.length);
     if (joint) return { state: 'done', text: '清单已确认', detail: `HTTP ${joint.proposal.steps?.length ?? 0} 步 · 浏览器 ${joint.proposal.browser.steps.length} 步` };
     const bound = boundRows(), working = bound.findLast(inProgress);
-    if (working) return { state: 'working', text: STATUSES[working.status] };
+    if (working) return { state: 'working', text: proposalStatus(working) };
     const latest = current.at(-1);
     if (jointDraft() || latest?.status === 'draft' && latest.proposal?.browser?.steps?.length) return { state: 'waiting', text: '待确认清单' };
     if (['reconciliation_required', 'failed', 'timed_out'].includes(latest?.status)) return { state: 'failed', text: '清单准备未完成', detail: STATUSES[latest.status] };
+    const next = STAGE_LABELS[latest?.nextGenerationStage];
+    if (latest?.status === 'draft' && isHttpStage(latest) && next) return { state: 'waiting', text: '接口清单阶段已完成', detail: next.call };
     if (latest?.proposal && !latest.proposal.browser) return { state: 'waiting', text: '缺少浏览器清单' };
     if (bound.length && !current.length && !data.capabilities?.canPropose && !data.capabilities?.canImportDefinition) {
       return { state: 'waiting', blocked: true, text: '正在核对当前进度' };
@@ -85,7 +97,7 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
       && typeof cap.model === 'string' && !!cap.model.trim() && cap.model.length <= 200
       && Number.isInteger(budget?.maxAttempts) && budget.maxAttempts >= 1 && budget.maxAttempts <= 3
       && Number.isInteger(budget.remainingAttempts) && budget.remainingAttempts >= 1 && budget.remainingAttempts <= budget.maxAttempts
-      && Number.isInteger(budget.timeoutMs) && budget.timeoutMs >= 1 && budget.timeoutMs <= 60000;
+      && Number.isInteger(budget.timeoutMs) && budget.timeoutMs >= 1 && budget.timeoutMs <= 120000;
   }
   const canImport = () => !automated() && canEdit() && fresh && confirmed() && data?.coverage === 'structural_only' && data.capabilities?.canImportDefinition === true && HASH.test(data.capabilities.contractRevision || '');
   function shouldRecoverLogin() {
@@ -210,7 +222,7 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     const refreshButton = button('刷新测试提案', () => { diagnosticKey = ''; void refresh(); }), state = node('p'), errorBox = node('p', '', 'vp-note vp-error'), noticeBox = node('p', '', 'vp-note');
     state.setAttribute('role', 'status'); errorBox.setAttribute('role', 'alert'); noticeBox.setAttribute('role', 'status'); root.append(refreshButton, state, errorBox, noticeBox);
     const body = node('div'), cost = node('p', '', 'vp-note'), consent = node('input'); consent.type = 'checkbox';
-    const consentLabel = node('label', null, 'vp-consent'); consentLabel.append(consent, node('span', '我已核对当前模型、HTTP结构范围及尝试预算，同意生成新测试提案产生用量。'));
+    const consentLabel = node('label', null, 'vp-consent'); consentLabel.append(consent, node('span', '我已核对当前模型和尝试预算，同意本次生成验收提案产生用量。'));
     const propose = button('生成独立测试提案', () => { void perform('propose', { automaticRepair: autoRepairOnPropose }); }, true); body.append(cost, consentLabel, propose);
     const importDetails = node('details'), importJSON = node('textarea', null, 'vp-json'), importFeedback = node('textarea'), importButton = button('保存为待审阅定义', () => { void perform('import'); });
     importJSON.maxLength = 262144; importJSON.spellcheck = false; importFeedback.maxLength = 5000;
@@ -241,16 +253,19 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     if (!refs || destroyed) return;
     refs.body.hidden = !context.projectId || !context.runId;
     refs.state.textContent = refs.body.hidden ? '请先选择项目和规划运行。' : automated() ? '自动流程负责准备和校验本次清单。' : action?.kind === 'recover-login' ? '正在补上测试账号的登录步骤…'
-      : loading && !data ? '正在读取测试提案…' : !fresh ? '尚未取得当前提案许可，请刷新核对。' : data?.capabilities?.reason || '仅审阅HTTP结构测试定义，尚未运行。';
+      : loading && !data ? '正在读取测试提案…' : !fresh ? '尚未取得当前提案许可，请刷新核对。' : data?.capabilities?.reason || '当前仅准备验收定义，测试尚未运行。';
     refs.errorBox.hidden = !error; refs.errorBox.textContent = error; refs.noticeBox.hidden = !notice; refs.noticeBox.textContent = notice;
     const cap = data?.capabilities, budget = cap?.budget;
-    const signature = JSON.stringify([key, cap?.contractRevision, cap?.budget, cap?.model]);
+    const nextStage = currentRows().at(-1)?.nextGenerationStage;
+    const signature = JSON.stringify([key, cap?.contractRevision, cap?.budget, cap?.model, nextStage]);
     if (signature !== consentKey) { consentKey = signature; refs.consent.checked = false; }
-    refs.cost.textContent = `模型：${text(cap?.model)}。每次生成最多一次新模型请求；本运行最多 ${count(budget?.maxAttempts)} 次，剩余 ${count(budget?.remainingAttempts)} 次，单次总时限 ${Number.isSafeInteger(budget?.timeoutMs) && budget.timeoutMs > 0 ? `${budget.timeoutMs / 1000} 秒` : '未知'}。仅生成HTTP结构提案，不运行测试。`;
-    refs.consent.disabled = !!action || !validCost(); refs.propose.disabled = !allowed('propose'); refs.propose.textContent = action?.kind === 'propose' ? '正在请求生成，等待后端…' : '生成独立测试提案';
+    refs.cost.textContent = `模型：${text(cap?.model)}。每次生成最多一次新模型请求；本运行最多 ${count(budget?.maxAttempts)} 次，剩余 ${count(budget?.remainingAttempts)} 次，单次总时限 ${Number.isSafeInteger(budget?.timeoutMs) && budget.timeoutMs > 0 ? `${budget.timeoutMs / 1000} 秒` : '未知'}。本次仅生成验收定义。`;
+    const next = STAGE_LABELS[nextStage];
+    refs.consent.disabled = !!action || !validCost(); refs.propose.disabled = !allowed('propose');
+    refs.propose.textContent = action?.kind === 'propose' ? '正在请求生成，等待后端…' : next?.call ?? '生成独立测试提案';
     refs.importJSON.disabled = refs.importFeedback.disabled = !!action || !canImport(); refs.importButton.disabled = !allowed('import');
     const list = rows(), listSignature = JSON.stringify(list.map(row => [row.id, row.status, row.revision]));
-    if (refs.select.dataset.signature !== listSignature) { refs.select.replaceChildren(); for (const row of list) { const option = node('option', `${STATUSES[row.status] ?? '未知状态'} · ${row.origin === 'manual' ? `人工定义记录${count(row.attempt)}` : `第${count(row.attempt)}次`} · ${row.id}`); option.value = row.id; refs.select.append(option); } refs.select.dataset.signature = listSignature; }
+    if (refs.select.dataset.signature !== listSignature) { refs.select.replaceChildren(); for (const row of list) { const option = node('option', `${proposalStatus(row) ?? '未知状态'} · ${row.origin === 'manual' ? `人工定义记录${count(row.attempt)}` : `第${count(row.attempt)}次`} · ${row.id}`); option.value = row.id; refs.select.append(option); } refs.select.dataset.signature = listSignature; }
     if (!list.some(row => row.id === saved.selectedId)) {
       saved.selectedId = (jointDraft() ?? list.at(-1))?.id ?? ''; saved.loadedKey = ''; draft = null;
     }
@@ -258,9 +273,16 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     const row = selected(); refs.detail.hidden = !row; loadDiagnostic(row); if (!row) return; chooseRow();
     refs.identity.textContent = `提案 ${row.id} · 记录序号${count(row.attempt)} · ${text(row.startedAt)}`;
     refs.coverage.hidden = !row.proposal;
-    refs.coverage.textContent = row.proposal?.browser?.steps?.length ? `清单包含 ${row.proposal.steps?.length ?? 0} 个接口步骤和 ${row.proposal.browser.steps.length} 个浏览器步骤。` : '这份清单缺少浏览器步骤。请生成或导入一份包含浏览器检查的清单后再开始开发。';
+    const missingHttp = row.missingHttpRequirementIds?.length ?? 0;
+    if (row.proposal?.browser?.steps?.length) {
+      refs.coverage.textContent = `清单包含 ${row.proposal.steps?.length ?? 0} 个接口步骤和 ${row.proposal.browser.steps.length} 个浏览器步骤。`;
+    } else if (isHttpStage(row)) {
+      refs.coverage.textContent = missingHttp ? `已保存接口检查，还需补齐 ${missingHttp} 项需求。` : '已保存接口检查。继续生成浏览器清单后，可确认联合清单。';
+    } else {
+      refs.coverage.textContent = '这份清单缺少浏览器步骤。请生成或导入一份包含浏览器检查的清单后再开始开发。';
+    }
     refs.goToCode.hidden = workflowProgress().state !== 'done';
-    refs.status.textContent = `${STATUSES[row.status] ?? '未知状态，不可操作'}。${text(row.notice)} 测试尚未运行，软件通过状态未产生。`;
+    refs.status.textContent = `${proposalStatus(row) ?? '未知状态，不可操作'}。${text(row.notice)} 测试尚未运行，软件通过状态未产生。`;
     refs.facts.textContent = row.origin === 'manual' ? '来源：人工导入。本条定义模型请求为0，原模型失败及费用仍在各自历史记录中。' : `模型：${text(row.model)}；输入 ${count(row.usage?.inputTokens)} / 输出 ${count(row.usage?.outputTokens)} token。请求发送：${row.dispatched === true ? '已发送' : row.dispatched === false ? '尚未发送' : '未知'}；回执：${text(row.receiptState)}；结束原因：${text(row.finishReason)}。`;
     refs.failure.hidden = !row.error && !row.errorCode && !(counterDraft(row) && diagnosticFor(row)?.suggestedRepair);
     refs.failureText.textContent = diagnosis?.message || (hasRecovery(row) ? '正在核对这次草案未通过的原因…' : text(row.error));
@@ -281,8 +303,8 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     refs.json.disabled = !draft; refs.feedback.disabled = !draft;
     const recovery = hasRecovery(row);
     refs.editor.hidden = recovery && !draft?.repair;
-    refs.editorHelp.textContent = draft?.repair ? '补齐上方列出的检查，保存为新的待审阅清单。原失败记录保留，保存无需调用模型。' : '编辑测试定义后先保存提案修订，再审阅和认可当前版本。';
-    refs.json.readOnly = refs.feedback.readOnly = recovery && (!canImport() || !!action);
+    refs.editorHelp.textContent = isHttpStage(row) ? '接口清单阶段供查看。生成联合清单后可以修订和确认。' : draft?.repair ? '补齐上方列出的检查，保存为新的待审阅清单。原失败记录保留，保存无需调用模型。' : '编辑测试定义后先保存提案修订，再审阅和认可当前版本。';
+    refs.json.readOnly = refs.feedback.readOnly = isHttpStage(row) || recovery && (!canImport() || !!action);
     refs.stale.hidden ||= recovery && Boolean(draft?.repair);
     refs.load.hidden = recovery;
     refs.saveRepair.hidden = !recovery || !draft?.repair; refs.saveRepair.disabled = !allowed('repair');

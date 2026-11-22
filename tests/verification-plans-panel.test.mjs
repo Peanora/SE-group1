@@ -98,9 +98,39 @@ test('model proposal requires exact current consent and budget, sends only contr
   assert.equal(await page.locator('a').count(), 0); assert.equal(await consent(page).isChecked(), false); assert.equal(await approve(page).isDisabled(), true);
 });
 
+test('staged generation shows the next request and exposes incomplete HTTP steps read-only', async t => {
+  const page = await pageFor(t, { width: 390, height: 844 });
+  await page.evaluate(() => {
+    const { capabilities, proposals } = window.states.a;
+    capabilities.budget.timeoutMs = 120000;
+    Object.assign(proposals[0], { generationStage: 'http', nextGenerationStage: 'http-supplement', missingHttpRequirementIds: ['REQ-3'] });
+    Object.assign(proposals[0].actions, { canApprove: false, canRevise: false, canReject: false });
+  });
+  await refresh(page);
+  assert.match(await page.locator('.verification-plans').innerText(), /已保存接口检查，还需补齐 1 项需求/u);
+  assert.equal(await json(page).getAttribute('readonly'), '');
+  assert.equal(await approve(page).isDisabled(), true);
+  const supplement = button(page, '补齐接口清单');
+  assert.equal(await supplement.isDisabled(), true);
+  await consent(page).check();
+  assert.equal(await supplement.isEnabled(), true);
+  await page.evaluate(() => {
+    const draft = window.states.a.proposals[0];
+    Object.assign(draft, { generationStage: 'http-supplement', nextGenerationStage: 'browser', missingHttpRequirementIds: [] });
+  });
+  await refresh(page);
+  assert.equal(await consent(page).isChecked(), false);
+  assert.match(await page.locator('.verification-plans').innerText(), /继续生成浏览器清单后，可确认联合清单/u);
+  await consent(page).check();
+  await button(page, '继续生成浏览器清单').click();
+  const request = await page.evaluate(() => window.requests.find(x => x.method === 'POST'));
+  assert.match(request.url, /\/propose$/u);
+  assert.deepEqual(request.body, { contractRevision: d });
+});
+
 test('invalid cost fields, approval status, contract/model/budget changes and backend refusal withdraw paid permission', async t => {
   const page = await pageFor(t);
-  for (const change of [cap => cap.canPropose = false, cap => cap.contractRevision = 'bad', cap => cap.model = null, cap => cap.budget.remainingAttempts = null, cap => cap.budget.timeoutMs = 60001, cap => cap.budget.maxAttempts = 0]) {
+  for (const change of [cap => cap.canPropose = false, cap => cap.contractRevision = 'bad', cap => cap.model = null, cap => cap.budget.remainingAttempts = null, cap => cap.budget.timeoutMs = 120001, cap => cap.budget.maxAttempts = 0]) {
     await page.evaluate(change => { window.states.a = structuredClone(window.initial); (0,eval)('('+change+')')(window.states.a.capabilities); }, change.toString()); await refresh(page);
     assert.equal(await consent(page).isDisabled(), true); assert.equal(await propose(page).isDisabled(), true);
   }
