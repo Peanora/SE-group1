@@ -6,13 +6,15 @@
 
 `GET /api/projects/:projectId/runs/:runId/automatic-delivery` 返回 `enabled`，启用时还返回 `status`、`stage`、`message`、`updatedAt` 和 `downloadAvailable`。阶段使用首页节点 ID，状态为 `queued`、`running`、`needs_clarification`、`failed`、`interrupted` 或 `completed`。已启动的清单和开发分别返回 `proposalId`、`executionId`。业务澄清使用原有规划动作，提交后继续当前运行。下载仍走原研发下载接口，并核对当前执行的交付授权。
 
-自动流程依次调用同版本规格、计划和验收定义的现有校验门禁，并记录自动确认依据。正在自动推进时，互斥的手工审批、发布和开发启动返回 409。工作台重启后继续核对已有开发执行，规划或清单阶段的未完成自动运行记为中断，保留历史和原请求状态。
+自动流程依次调用同版本规格、计划和验收定义的现有校验门禁，并记录自动确认依据。正在自动推进时，互斥的手工审批、发布和开发启动返回 409。新启动的运行将恢复权限和实际模型配置指纹保存在私有存储。工作台重启后重新检查权限及配置，使用持久规划回执、已保存清单或唯一且版本相同的开发记录继续。派发状态无法确定、结果不唯一或授权变化时保留原历史，显示中断或用量待核对。重启不自动重发证据不足的收费请求。
+
+自动状态还返回 `usageByStage`，依次记录 `specification`、`engineering`、`verification`、`development` 的确认调用、未知调用、总 token 和已知小计。配置报价时，可核对的回执按当次快照估算。币种分别显示，缺失回执或报价的总金额为未知。金额估算与供应商账单独立。
 
 仍在当前版本且止于验收清单的自动运行，可返回 `retryVerification:{maxAttempts:3}`。保存适用清单后返回 `retryVerification:{maxAttempts:0}`，表示直接核对该清单并继续开发。`POST /api/projects/:projectId/runs/:runId/automatic-delivery/retry-verification` 接收 `{modelUsageConfirmed:true,planRevision,updatedAt}`，绑定当前已确认计划与失败快照。每个运行最多一次清单模型追加授权，最多再生成 3 份清单，历史与累计用量继续保留。从已保存清单继续时还固定该清单的 ID 和修订。上次开发已失败、当前计划确已修订并确认后，可在新版计划和清单上继续一次，旧执行记录保留。当前计划已有尝试时拒绝从清单重复派发。
 
 浏览器 DSL 的 `goto` 可提供同源相对路径 `expectedPath`。目标与请求路径不同时，验收同时确认真实同源 HTTP 3xx 跳转链、最终响应与地址栏目标。没有声明目标时，按原规则要求最终 URL 等于请求 URL。
 
-规划预览保持最长三分钟的本机运行时限。工作台启动时会核对已记录输出超限、进程终止且源码完整的预览停止结果，恢复活动槽并保留原停止证据。停止未知的记录仍待协调。规划预览的交互输出总量由工作台配置为 4 MiB，独立验收和已验收源码的版本绑定沿用原规则。
+规划预览保持最长三分钟的本机运行时限。工作台启动时会核对已记录输出超限、进程终止且源码完整的预览停止结果，恢复活动槽并保留原停止证据。停止未知的记录仍待协调。Web 运行器将经过完整协议校验的业务响应计入独立 4 MiB 上限，单响应仍限 256 KiB；日志和控制输出沿用其各入口的预算。验收结果继续绑定实际执行策略和提交。
 
 ## 代码审查历史与诊断
 
@@ -103,7 +105,7 @@
 
 研发HTTP路径保持不变。默认正常开发使用独立Worker，DTO新增`executionEngine`和`recoverySupported`；私有持久审批、派发意图、原预算/绝对deadline、Worker身份/控制租约、签名原始证据和幂等结算联合约束。正常API关闭仅detach，重开先接回原作业；未确认派发/远端请求/Worker状态时保留活动和预留，不自动新派发。known失败或已确认取消的独立停止签名只授费用结算，不授源码交付；新用途验收封签不伪造原core/graph WeakMap身份。
 
-同版source修复和跨版seed目前明确走进程内路径，不能承诺Worker重启恢复；有效暂停任务检查点后的故障续跑尚未实现。已有源码ZIP重启恢复与在途Worker保活分别记录。作者94/94专项是候选证据，仍需非作者同固定版本检查。
+默认整项目同版源码修复也使用独立 Worker。签名作业绑定原执行、源码提交、报告摘要、全部历史回执及阻塞意见。Worker 从服务私有根重验来源，修后重新运行全部独立检查与 Review。API 重启可接回原修复 Worker。跨版演进仍使用进程内执行，重启遇到未知终止时显示待核对。普通修复入口拒绝丢弃演进旧数据的降级执行。
 
 ## 可选本地团队模式
 
@@ -165,7 +167,7 @@ Cookie为8小时HttpOnly/SameSite=Strict的随机会话，数据库仅保存令�
 
 当前返工候选增加每任务只读 `history`（旧尝试/候选、检查、调用和未知用量），源码包的任务历史同样保留旧失败，不覆盖计费。完整集成的可信原始检查发现唯一上游负责者的阻塞时，最多一次退回该任务及其依赖下游；所有 open blocking 必须属于该负责者，多个或混合负责者保留完整意见并停止，不扩大文件权限。当前图、每逻辑任务的累计编码/Review次数和绝对截止时间不重置，新的预留只允许收紧到剩余额度。该行为不新增客户端指定 owner/path/issue/passed 的接口。以本轮固定组合独立验收为准，不能用接口说明代替通过证据。
 
-`costEstimate` 用 `known:false,amount:null,currency:null` 明示没有模型单价时金额未知；实际 `totalModelCalls` 与 token 用量另行显示。未知 token 保留 null，不补零。任务 `error/errorCode` 为安全提示，网页以文本显示。
+`costEstimate` 按本次开发冻结的编码和审查角色报价估算。无报价、缺失有效回执或有多币种时，给出可核对的分币种小计，总额使用 `known:false,amount:null,currency:null`。实际 `totalModelCalls` 与 token 用量另行显示。未知 token 保留 null，不补零。任务 `error/errorCode` 为安全提示，网页以文本显示。
 
 ## 工作区展示与通知
 
@@ -493,5 +495,7 @@ repair用于当前失败候选具有有效、完整、同代码版本的阻塞Re
 `PUT /api/agent-settings` 接受整体 `{revision,providers,roles}`，成功返回新的脱敏视图。每个服务含 `id,name,baseUrl,model,jsonMode,thinking`，可另传 `apiKey` 与 `clearKey`。密钥省略或空白保留已有值；`clearKey:true` 显式清除。本机地址可无密钥，远程服务须有密钥。已绑定服务不能被删除。`revision` 过期返回 409，字段、地址、绑定或凭据无效返回 400，跨源或非本机请求拒绝。保存配置不请求外部模型。
 
 支持的协议为 Chat Completions，`baseUrl` 不含 `/chat/completions`，不得带账号、密码、查询或片段。`jsonMode` 为布尔值；`thinking` 为 `enabled`、`disabled` 或空白（不发送该扩展）。每个角色的新调用使用当前服务配置；开发执行在 admission 固定编码与 Review 两份配置，通过匿名 stdin 交接 Worker，不进入环境变量或公开 DTO。Worker 的配置版本同时绑定两角色公开设置，旧作业不能改模型后直接恢复。规格及工程请求逐次取快照，不宣称跨多次人工确认锁定整条规划的同一服务。
+
+服务可以保存 `pricing:{currency,inputPerMillion,outputPerMillion}`。币种为支持的三字母代码，两个数值为每百万 token 的非负单价。配置读取会返回已保存的单价，密钥保持私有。请求按实际使用的模型冻结报价，旧记录不追溯补价；没有供应商缓存、折扣和最终账单资料时只显示标准费率估算。
 
 私有 `DATA_DIR/agent-settings/agent-settings.json` 保存配置，密钥由同目录本机私有密钥加密；两者需一同保留以重启回读，不进入源码与规划交付包。此功能不改变软件验收结果，不提供任意新角色执行器或公网部署。
