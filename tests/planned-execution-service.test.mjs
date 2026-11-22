@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rename, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -128,6 +128,75 @@ test('before any native core admission the run budget and six-call reservation a
   const [budget] = f.query('SELECT * FROM budgets'); assert.equal(budget.used_calls, 2); assert.equal(budget.reserved_calls, 0);
   const json = JSON.stringify(state); for (const privateValue of [f.directory, config.apiKey, 'receiptPath', 'private-workspace', 'private-receipt']) assert.equal(json.includes(privateValue), false);
 });
+
+for (const fault of ['before-authorization', 'dispatch-intent', 'existing-worker-job', 'active-verification', 'missing-worker-store', 'ledger-disagrees']) {
+  test(`default Worker restart reconciles a reserved attempt without redispatch: ${fault}`, async t => {
+    const f = await fixture(t), gate = deferred();
+    t.after(() => gate.resolve());
+    await f.service.start(await f.input());
+    await f.finished();
+    const previous = f.query('SELECT id,status,record FROM executions');
+    assert.equal(f.coreCalls(), 1);
+    const holdDispatch = { dependencies: {}, withCheckpoint: async (_id, work) => { await gate.promise; return work(); } };
+    await f.reopen(holdDispatch);
+    const { execution } = await f.service.start(await f.input());
+    const { id } = execution, workerDatabase = path.join(f.directory, 'planned', 'workers', 'workers.sqlite');
+    assert.equal(execution.executionEngine, 'persistent_worker');
+    assert.equal(execution.status, 'reserved');
+    assert.deepEqual(f.query('SELECT job_id,phase,grant_hash,settled FROM worker_outbox').map(row => ({ ...row })), [{ job_id: id, phase: 'reserved', grant_hash: null, settled: 0 }]);
+    const ledger = () => f.query('SELECT attempts,used_calls,reserved_calls FROM budgets').map(row => ({ ...row }));
+    assert.deepEqual(ledger(), [{ attempts: 2, used_calls: 2, reserved_calls: 6 }]);
+    if (fault === 'active-verification') {
+      const grant = f.verification.workerExecution({ ...ids, proposalId: f.row.id, revision: f.row.revision, executionId: id, jobId: id });
+      assert.equal(grant.assertCurrent(), true);
+    }
+    await f.service.shutdown();
+    if (fault === 'missing-worker-store') await rename(workerDatabase, `${workerDatabase}.saved`);
+    if (['dispatch-intent', 'ledger-disagrees'].includes(fault)) {
+      const db = new DatabaseSync(path.join(f.directory, 'planned', 'planned.sqlite'));
+      try {
+        if (fault === 'dispatch-intent') db.prepare("UPDATE worker_outbox SET phase='dispatch_intent',grant_hash=? WHERE execution_id=?").run('a'.repeat(64), id);
+        else db.prepare('UPDATE budgets SET reserved_calls=7').run();
+      } finally { db.close(); }
+    }
+    if (fault === 'existing-worker-job') {
+      const db = new DatabaseSync(workerDatabase);
+      try {
+        db.prepare("INSERT INTO jobs(id,execution_id,project_id,grant_hash,authorization,issuer,status,active,dispatch_hash,event_hash,deadline,max_calls,created_at) VALUES(?,?,?,?,?,?,'authorized',1,?,?,?,?,?)")
+          .run(id, id, ids.projectId, 'a'.repeat(64), '{}', 'fixture', 'b'.repeat(64), '0'.repeat(64), Date.now() + 2000, 6, new Date().toISOString());
+      } finally { db.close(); }
+    }
+    await f.reopen(holdDispatch, true);
+    const expected = fault === 'before-authorization' ? 'stopped' : 'reconciliation_required';
+    const read = () => f.service.list(ids);
+    const checked = await until(async () => (await read()).executions.find(item => item.id === id && ['stopped', 'reconciliation_required'].includes(item.status)), '复开后的派发状态');
+    const settled = fault === 'before-authorization';
+    assert.equal(checked.status, expected);
+    assert.equal(checked.active, !settled);
+    assert.equal(checked.accepted, false);
+    assert.equal(checked.actions.canDownload, false);
+    assert.deepEqual(checked.usage, settled ? { inputTokens: 0, outputTokens: 0 } : { inputTokens: null, outputTokens: null });
+    assert.equal(checked.totalModelCalls, settled ? 0 : null);
+    assert.equal((await read()).capabilities.canStart, settled);
+    assert.deepEqual(f.query('SELECT id,status,record FROM executions WHERE id NOT IN (SELECT execution_id FROM worker_outbox)'), previous);
+    const budget = [{ attempts: 2, used_calls: 2, reserved_calls: settled ? 0 : fault === 'ledger-disagrees' ? 7 : 6 }];
+    assert.deepEqual(ledger(), budget);
+    const [outbox] = f.query('SELECT * FROM worker_outbox');
+    assert.equal(outbox.phase, settled ? 'stopped_before_dispatch' : fault === 'dispatch-intent' ? 'dispatch_intent' : 'reserved');
+    assert.equal(outbox.settled, settled ? 1 : 0);
+
+    await f.reopen(holdDispatch, true);
+    assert.equal((await read()).executions.length, 2);
+    assert.deepEqual(ledger(), budget);
+    if (fault === 'missing-worker-store') await assert.rejects(stat(workerDatabase), { code: 'ENOENT' });
+    else {
+      const db = new DatabaseSync(workerDatabase, { readOnly: true });
+      try { assert.equal(db.prepare('SELECT count(*) count FROM jobs').get().count, fault === 'existing-worker-job' ? 1 : 0); }
+      finally { db.close(); }
+    }
+    assert.equal(f.coreCalls(), 1);
+  });
+}
 
 test('单价变更使旧确认失效，已执行报价及历史未知金额在重开后保持', async t => {
   const usage = { inputTokens: 1_000_000, outputTokens: 100_000 };
