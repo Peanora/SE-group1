@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createProjectReviewModel, projectReviewPolicy, validateProjectReviewResponse, decodeProjectReviewResponseV2, getProjectReviewResponseFeedback, normalizeProjectReviewResponseFeedback, projectReviewEvidenceOrigin } from '../lib/project-review-model.mjs';
+import { createProjectReviewModel, projectReviewPolicy, validateProjectReviewResponse, decodeProjectReviewResponseV2, getProjectReviewResponseFeedback, normalizeProjectReviewResponseFeedback, projectReviewEvidenceOrigin, PROJECT_REVIEW_HISTORY_LIMIT } from '../lib/project-review-model.mjs';
 import { getModelRequestEvidence } from '../lib/model-request-evidence.mjs';
 
 const clear = { summary: '当前候选没有发现阻塞问题。', issues: [], resolutions: [] };
@@ -47,6 +47,27 @@ test('project Review binds evidence to actual lines and explicitly resolves ever
   assert.deepEqual(validateProjectReviewResponse(raw, { files, previousIssues }), raw);
   assert.throws(() => validateProjectReviewResponse({ ...raw, resolutions: [] }, { files, previousIssues }));
   assert.throws(() => validateProjectReviewResponse({ ...raw, issues: [{ ...issue, evidence: 'invented' }] }, { files, previousIssues }));
+});
+
+test('planned Review preserves every historical ID above the original batch size', async () => {
+  const files = [{ path: 'src/app.mjs', content: 'export const app = 1;' }];
+  const previousIssues = Array.from({ length: 21 }, (_, index) => ({
+    id: `old-${index}`, file: files[0].path, line: 1, severity: 'blocking', message: `Old issue ${index}`, evidence: files[0].content,
+  }));
+  const resolutions = previousIssues.map(({ id }) => ({ id, status: 'resolved', reason: 'Rechecked on this candidate.' }));
+  const context = { files, previousIssues };
+  const model = createProjectReviewModel({ config, fetchImpl: async (_url, options) => {
+    const body = JSON.parse(options.body);
+    assert.equal(body.max_tokens, 8192);
+    assert.deepEqual(JSON.parse(body.messages[1].content).previousIssues, previousIssues);
+    return reply({ ...clear, resolutions });
+  } });
+  assert.deepEqual((await model({ task: 'Recheck the fixed candidate.', ...context })).resolutions, resolutions);
+  assert.throws(() => decodeProjectReviewResponseV2(JSON.stringify({ ...clear, resolutions: resolutions.slice(0, -1) }), context));
+  assert.throws(() => decodeProjectReviewResponseV2(JSON.stringify({ ...clear, resolutions: resolutions.map((entry, index) => index === 20 ? resolutions[0] : entry) }), context),
+    error => normalizeProjectReviewResponseFeedback(getProjectReviewResponseFeedback(error))?.field === 'resolutions[20].id');
+  const overflow = Array.from({ length: PROJECT_REVIEW_HISTORY_LIMIT + 1 }, (_, index) => ({ id: `over-${index}` }));
+  await assert.rejects(model({ task: 'Recheck the fixed candidate.', files, previousIssues: overflow }), /输入资料格式无效/u);
 });
 
 test('duplicate findings have a bounded diagnostic and cannot give the same finding two IDs', async () => {
