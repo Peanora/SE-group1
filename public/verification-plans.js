@@ -90,12 +90,14 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     }
     return { state: 'waiting', text: '待准备清单' };
   }
+  const modelQuote = () => data?.capabilities?.continuation ?? data?.capabilities;
   function validCost() {
-    const cap = data?.capabilities, budget = cap?.budget;
+    const cap = modelQuote(), budget = cap?.budget;
+    const maxAttempts = ['http-supplement', 'browser'].includes(cap?.stage) ? 5 : 3;
     return !automated() && fresh && !shouldRecoverLogin() && action?.kind !== 'recover-login' && pending?.kind !== 'recover-login'
       && data?.coverage === 'structural_only' && confirmed() && cap?.canPropose === true && HASH.test(cap.contractRevision || '')
       && typeof cap.model === 'string' && !!cap.model.trim() && cap.model.length <= 200
-      && Number.isInteger(budget?.maxAttempts) && budget.maxAttempts >= 1 && budget.maxAttempts <= 3
+      && Number.isInteger(budget?.maxAttempts) && budget.maxAttempts >= 1 && budget.maxAttempts <= maxAttempts
       && Number.isInteger(budget.remainingAttempts) && budget.remainingAttempts >= 1 && budget.remainingAttempts <= budget.maxAttempts
       && Number.isInteger(budget.timeoutMs) && budget.timeoutMs >= 1 && budget.timeoutMs <= 120000;
   }
@@ -253,9 +255,9 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     if (!refs || destroyed) return;
     refs.body.hidden = !context.projectId || !context.runId;
     refs.state.textContent = refs.body.hidden ? '请先选择项目和规划运行。' : automated() ? '自动流程负责准备和校验本次清单。' : action?.kind === 'recover-login' ? '正在补上测试账号的登录步骤…'
-      : loading && !data ? '正在读取测试提案…' : !fresh ? '尚未取得当前提案许可，请刷新核对。' : data?.capabilities?.reason || '当前仅准备验收定义，测试尚未运行。';
+      : loading && !data ? '正在读取测试提案…' : !fresh ? '尚未取得当前提案许可，请刷新核对。' : data?.capabilities?.continuation ? '可以继续已保存的验收清单。' : data?.capabilities?.reason || '当前仅准备验收定义，测试尚未运行。';
     refs.errorBox.hidden = !error; refs.errorBox.textContent = error; refs.noticeBox.hidden = !notice; refs.noticeBox.textContent = notice;
-    const cap = data?.capabilities, budget = cap?.budget;
+    const cap = modelQuote(), budget = cap?.budget;
     const nextStage = currentRows().at(-1)?.nextGenerationStage;
     const signature = JSON.stringify([key, cap?.contractRevision, cap?.budget, cap?.model, nextStage]);
     if (signature !== consentKey) { consentKey = signature; refs.consent.checked = false; }
@@ -352,7 +354,8 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     let body;
     try {
       if (kind === 'recover-login') body = { contractRevision: data.capabilities.contractRevision, planRevision: context.planRevision };
-      else if (kind === 'propose' || kind === 'quickRepair') body = { contractRevision: data.capabilities.contractRevision };
+      else if (kind === 'propose') body = { contractRevision: modelQuote().contractRevision };
+      else if (kind === 'quickRepair') body = { contractRevision: data.capabilities.contractRevision };
       else if (kind === 'import' || kind === 'repair') {
         const json = kind === 'repair' ? draft.json : saved.importJSON;
         if (new TextEncoder().encode(json).length > 262144) throw new Error('测试定义JSON不能超过256 KiB。');

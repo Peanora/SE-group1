@@ -32,9 +32,62 @@ test('verification proposal HTTP derives identity and accepts only the precise d
   assert.equal((await request('/propose', { contractRevision: 'a'.repeat(64) })).status, 202);
   const revision = 'b'.repeat(64), proposal = { version: 1, id: 'data-only' };
   for (const [action, body] of [['revise', { revision, proposal, feedback: '增加异常场景' }], ['approve', { revision, feedback: '' }], ['reject', { revision, feedback: '需要补充' }], ['cancel', {}]]) assert.equal((await request('/proposal-one/' + action, body)).status, 200);
-  assert.deepEqual(calls, [['list', identity], ['propose', { ...identity, contractRevision: 'a'.repeat(64) }],
+  assert.deepEqual(calls, [['list', identity], ['list', identity], ['propose', { ...identity, contractRevision: 'a'.repeat(64) }],
     ['revise', { ...identity, proposalId: 'proposal-one', revision, proposal, feedback: '增加异常场景' }], ['list', identity], ['approve', { ...identity, proposalId: 'proposal-one', revision, feedback: '' }],
     ['reject', { ...identity, proposalId: 'proposal-one', revision, feedback: '需要补充' }], ['cancel', { ...identity, proposalId: 'proposal-one' }]]);
+});
+
+test('settled staged HTTP can request one missing supplement and one browser check with distinct quotes', async t => {
+  const baseRevision = 'a'.repeat(64), extraRevision = 'b'.repeat(64);
+  const partial = (id, stage, next) => ({
+    id, origin: 'model', current: true, status: 'draft', receiptState: 'saved', proposal: { steps: [id] },
+    revision: id.padStart(64, '0'), generationStage: stage, nextGenerationStage: next,
+  });
+  const proposals = [
+    { id: '1', origin: 'model', current: true, status: 'failed' },
+    { id: '2', origin: 'model', current: true, status: 'failed' },
+    partial('3', 'http', 'http-supplement'),
+  ];
+  const paid = [];
+  const service = {
+    shutdown: async () => {},
+    list: async (_identity, { additionalAttempts = 0 } = {}) => ({
+      proposals,
+      capabilities: {
+        canPropose: proposals.length < 3 + additionalAttempts,
+        contractRevision: additionalAttempts ? extraRevision : baseRevision,
+        budget: { maxAttempts: 3 + additionalAttempts, remainingAttempts: Math.max(0, 3 + additionalAttempts - proposals.length), timeoutMs: 120000 },
+      },
+    }),
+    propose: async ({ contractRevision }, options) => {
+      if (!options || options.previousProposalId !== proposals.at(-1).id || contractRevision !== extraRevision) {
+        throw Object.assign(new Error('No authorized continuation.'), { status: 409 });
+      }
+      paid.push(options);
+      const row = proposals.length === 3 ? partial('4', 'http-supplement', 'browser') : partial('5', 'browser');
+      proposals.push(row);
+      return { proposal: row };
+    },
+  };
+  const { request } = await fixture(t, service);
+  const capability = async () => (await (await request()).json()).capabilities;
+  const first = await capability();
+  assert.equal(first.contractRevision, baseRevision);
+  assert.equal(first.canPropose, false);
+  assert.equal(first.continuation.stage, 'http-supplement');
+  assert.equal(first.continuation.budget.remainingAttempts, 2);
+  assert.notEqual(first.continuation.contractRevision, extraRevision);
+  assert.equal((await request('/propose', { contractRevision: extraRevision })).status, 409);
+  assert.equal((await request('/propose', { contractRevision: first.continuation.contractRevision })).status, 202);
+  assert.equal((await request('/propose', { contractRevision: first.continuation.contractRevision })).status, 409);
+  const second = await capability();
+  assert.equal(second.continuation.stage, 'browser');
+  assert.notEqual(second.continuation.contractRevision, first.continuation.contractRevision);
+  assert.equal(second.continuation.budget.remainingAttempts, 1);
+  assert.equal((await request('/propose', { contractRevision: second.continuation.contractRevision })).status, 202);
+  assert.equal((await capability()).continuation, undefined);
+  assert.equal((await request('/propose', { contractRevision: second.continuation.contractRevision })).status, 409);
+  assert.deepEqual(paid, [{ previousProposalId: '3', additionalAttempts: 2 }, { previousProposalId: '4', additionalAttempts: 2 }]);
 });
 
 test('manual definition HTTP derives identity and accepts only definition, contract and feedback', async t => {

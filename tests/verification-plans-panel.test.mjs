@@ -115,8 +115,14 @@ test('staged generation shows the next request and exposes incomplete HTTP steps
   await consent(page).check();
   assert.equal(await supplement.isEnabled(), true);
   await page.evaluate(() => {
-    const draft = window.states.a.proposals[0];
-    Object.assign(draft, { generationStage: 'http-supplement', nextGenerationStage: 'browser', missingHttpRequirementIds: [] });
+    const { proposals, capabilities } = window.states.a;
+    Object.assign(proposals[0], { generationStage: 'http-supplement', nextGenerationStage: 'browser', missingHttpRequirementIds: [] });
+    capabilities.canPropose = false;
+    capabilities.budget.remainingAttempts = 0;
+    capabilities.continuation = {
+      stage: 'browser', canPropose: true, contractRevision: 'e'.repeat(64), model: capabilities.model,
+      budget: { maxAttempts: 5, remainingAttempts: 1, timeoutMs: 120000 },
+    };
   });
   await refresh(page);
   assert.equal(await consent(page).isChecked(), false);
@@ -125,7 +131,7 @@ test('staged generation shows the next request and exposes incomplete HTTP steps
   await button(page, '继续生成浏览器清单').click();
   const request = await page.evaluate(() => window.requests.find(x => x.method === 'POST'));
   assert.match(request.url, /\/propose$/u);
-  assert.deepEqual(request.body, { contractRevision: d });
+  assert.deepEqual(request.body, { contractRevision: 'e'.repeat(64) });
 });
 
 test('invalid cost fields, approval status, contract/model/budget changes and backend refusal withdraw paid permission', async t => {

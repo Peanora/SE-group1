@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readFile, stat } from 'node:fs/promises';
@@ -25,6 +25,31 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 const requestBodies = new WeakMap();
 const requestChecks = new WeakMap();
 const responseRedactors = new WeakMap();
+
+async function verificationContinuation(service, identity, base) {
+  const budget = base.capabilities?.budget;
+  if (budget?.remainingAttempts !== 0 || !Number.isInteger(budget.maxAttempts)) return null;
+  const models = base.proposals.filter(row => row.origin === 'model');
+  const previous = models.at(-1), stage = previous?.nextGenerationStage;
+  if (!previous?.current || previous.status !== 'draft' || previous.receiptState !== 'saved'
+    || !previous.proposal?.steps?.length || !['http', 'http-supplement'].includes(previous.generationStage)
+    || !['http-supplement', 'browser'].includes(stage)) return null;
+  const extra = models.slice(budget.maxAttempts);
+  if (extra.length && (extra.length !== 1 || extra[0].generationStage !== 'http-supplement' || stage !== 'browser')) return null;
+
+  const additionalAttempts = stage === 'http-supplement' || extra.length ? 2 : 1;
+  const continued = await service.list(identity, { additionalAttempts });
+  const latest = continued.proposals.findLast(row => row.origin === 'model');
+  const cap = continued.capabilities;
+  if (!cap?.canPropose || !latest?.current || latest.id !== previous.id || latest.revision !== previous.revision
+    || latest.nextGenerationStage !== stage) return null;
+  const contractRevision = createHash('sha256').update(JSON.stringify([identity, cap.contractRevision, previous.id, previous.revision, stage])).digest('hex');
+  return {
+    capability: { canPropose: true, stage, contractRevision, budget: cap.budget, model: cap.model },
+    serviceContractRevision: cap.contractRevision,
+    options: { additionalAttempts, previousProposalId: previous.id },
+  };
+}
 
 async function readJson(request) {
   requestChecks.get(request)?.();
@@ -492,7 +517,10 @@ export async function createApp(options = {}) {
             if (!result.capabilities) return respond(response, 200, result);
             const canRecoverLogin = Boolean(plannedExecutionService && result.capabilities.canImportDefinition && !currentDefinition(result)
               && (!teamAccess || teamAccess.identity(request.headers.cookie)?.role === 'owner') && previousLoginPlan(run));
-            return respond(response, 200, { ...result, capabilities: { ...result.capabilities, canRecoverLogin } });
+            const continuation = !run.automaticDelivery && (!teamAccess || teamAccess.identity(request.headers.cookie)?.role === 'owner')
+              ? await verificationContinuation(verificationPlanningService, identity, result) : null;
+            requestChecks.get(request)?.();
+            return respond(response, 200, { ...result, capabilities: { ...result.capabilities, canRecoverLogin, ...(continuation ? { continuation: continuation.capability } : {}) } });
           }
           if (segments.length === 7 && segments[6] === 'recover-login' && method === 'POST') {
             const { contractRevision, planRevision } = exactFields(await readJson(request), ['contractRevision', 'planRevision']);
@@ -525,6 +553,15 @@ export async function createApp(options = {}) {
           }
           if (segments.length === 7 && segments[6] === 'propose' && method === 'POST') {
             const body = exactFields(await readJson(request), ['contractRevision']);
+            if (!run.automaticDelivery) {
+              const base = await verificationPlanningService.list(identity);
+              const continuation = body.contractRevision !== base.capabilities?.contractRevision
+                ? await verificationContinuation(verificationPlanningService, identity, base) : null;
+              requestChecks.get(request)?.();
+              if (continuation?.capability.contractRevision === body.contractRevision) {
+                return respond(response, 202, await verificationPlanningService.propose({ ...identity, contractRevision: continuation.serviceContractRevision }, continuation.options));
+              }
+            }
             return respond(response, 202, await verificationPlanningService.propose({ ...identity, ...body }));
           }
           if (segments.length === 7 && segments[6] === 'import' && method === 'POST') {
