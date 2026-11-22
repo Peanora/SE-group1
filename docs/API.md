@@ -146,7 +146,7 @@ Cookie为8小时HttpOnly/SameSite=Strict的随机会话，数据库仅保存令�
 | POST `/:id/cancel` | `{}` | 请求停止；本地结束不证明远端终止。未知保持活动及预算预留。 |
 | POST `/:id/pause` | `{}` | 仅当前控制器持有的真实任务图：暂停新批次派发，返回`pause_requested`；在途结果保存后才`paused`。旧执行器/整体编码不支持则409。 |
 | POST `/:id/resume` | `{}` | 仅当前任务图`pause_requested/paused`，继续同版本就绪任务；不直接把失败检查标为通过。 |
-| POST `/:id/repair` | `{contractRevision}`，可加 `repairNote` | 仅服务自有、当前规划且正常停止候选；用私有DB定位报告，核对Git、回执和历史阻塞，在新工作区创建新执行。修复说明为1至2000字符，校验失败在预留预算前返回400。说明作为诊断资料随编码请求发送，并保存于新执行的私有记录。原代码范围、验收定义和独立Review依据由已确认版本决定。 |
+| POST `/:id/repair` | `{contractRevision}`，可加 `repairNote`，适用时可加 `renewedDefinition:{proposalId,revision}` | 服务从自有私有账本定位正常停止候选，核对 Git、回执和全部历史阻塞后创建新执行。`repairNote` 是 1 至 2000 字符的可选诊断。若验收运行规则已更新，必须提交由同源规则续认并重新批准的定义身份。原代码范围、验收步骤和独立 Review 均由已确认版本决定。 |
 | GET `/:id/download` | 无 | 当前版本全部验收、阻塞关闭且可信原始结论仍有效才返回源码ZIP；存储JSON或POST通过声明不能授权。 |
 
 `actions.canRepair/canCancel/canDownload`只表示当前后端能力。前端收费动作还需本次预算勾选；POST后通过GET核对新id及定义版本，不能先显示通过。JSON DTO不包含工作区、回执路径、配置凭据或数据库。
@@ -154,6 +154,8 @@ Cookie为8小时HttpOnly/SameSite=Strict的随机会话，数据库仅保存令�
 同版本交付恢复（当前实现仍在独立验收）：真实原始对象完整通过后，accepted行、私有HMAC封存及本次预算结算在同一SQLite事务保存。重启后的GET列表/下载可以在共同检查点惰性核对当前审批、代码/Git/原始回执/全部策略，再发行仅用于历史交付的私有许可；原任务品牌不重造、不新增模型调用或扣减预算。DTO `checkpoint:{sealed,restored,message}`区分；网页标明恢复历史资格，没有刚重跑测试。校核期间状态`restoring_delivery`持久占用项目槽，未知停止保留待协调；本会话失败不随轮询无变化重复Git。并发下载遇正在恢复可409，待列表核对后再试。
 
 普通旧JSON、无封存历史、签名/完整行归属变化、当前来源/策略或代码不一致、私有凭据不可用均不授权下载，也不事后补签旧记录。密钥在执行私有根目录、候选工作区外，不进API/模型/源码包；丢失时不自动重新生成并追认旧记录。可信主机/程序/私有数据库属于基础边界，不承诺防同账户管理员同时复制密钥与整库、整套私有备份回滚。当前只恢复已结束的同版本交付，外部Worker续跑仍待实现。
+
+规划研发的 Review 每份结果最多报告 20 项新意见，完整逐项复验至多 48 项历史阻塞。缺失、重复或额外的历史编号仍拒绝，达到上限后保留全部意见并停止。固定参考执行沿用其单独的历史上限。
 
 无逐任务分组的定义继续整体按确认计划编码。开发任务图的模拟状态保持原义，不因真实路径新增而改造历史模拟结论。独立HTTP/浏览器定义的结构覆盖不证明业务充分。CLI `planned:verify` 重新诊断包内的定义。加 `--inspect` 只核对归档和版本，演进包额外核对历史迁移摘要与原快照引用。默认复验演进包返回 `evolution_dataset_required`，原业务快照由平台在受控授权后提供。加 `--cold-start` 的结果标注空库诊断。所有模式均 `taskAccepted: false`，历史 Review 继续归属原执行。
 
@@ -168,6 +170,8 @@ Cookie为8小时HttpOnly/SameSite=Strict的随机会话，数据库仅保存令�
 执行DTO保持`kind:planned_web`，新增`executionMode:task_dag`及真实`tasks`、`maxConcurrentTasks`、`actions.canPause/canResume`。任务详情提供依赖、尝试/基础/候选提交、阶段、差异、独立检查及用量，不含私有目录/租约令牌/回执正文。客户端只依据GET核对状态。最终已验收包额外包含经封存绑定的`delivery/task-execution.json`和全任务用量；归档重检始终不认可历史完成。任务图封签覆盖整个执行记录及最终原始结论，恢复仅发行最终历史交付许可，不将解析JSON重新授予任务品牌。
 
 当前返工候选增加每任务只读 `history`（旧尝试/候选、检查、调用和未知用量），源码包的任务历史同样保留旧失败，不覆盖计费。完整集成的可信原始检查发现唯一上游负责者的阻塞时，最多一次退回该任务及其依赖下游；所有 open blocking 必须属于该负责者，多个或混合负责者保留完整意见并停止，不扩大文件权限。当前图、每逻辑任务的累计编码/Review次数和绝对截止时间不重置，新的预留只允许收紧到剩余额度。该行为不新增客户端指定 owner/path/issue/passed 的接口。以本轮固定组合独立验收为准，不能用接口说明代替通过证据。
+
+研发入场在预留模型次数前检查已安装的浏览器运行依赖。缺少兼容依赖时返回 409 `browser_dependency_unavailable`，提示按锁文件运行 `npm ci`。启动与验收仍另行核对真实浏览器及进程停止。
 
 `costEstimate` 按本次开发冻结的编码和审查角色报价估算。无报价、缺失有效回执或有多币种时，给出可核对的分币种小计，总额使用 `known:false,amount:null,currency:null`。实际 `totalModelCalls` 与 token 用量另行显示。未知 token 保留 null，不补零。任务 `error/errorCode` 为安全提示，网页以文本显示。
 
@@ -470,18 +474,29 @@ repair用于当前失败候选具有有效、完整、同代码版本的阻塞Re
 | GET基础路径 | 无 | 200，`{coverage, capabilities, proposals}` |
 | POST `/propose` | `{contractRevision}` | 202，`{proposal}`；预算内生成一次新提案 |
 | POST `/import` | `{contractRevision,proposal,feedback}` | 201，人工定义草稿；0模型请求，仍须单独认可 |
+| POST `/:id/renew-policy` | `{revision,contractRevision,executionId,feedback}` | 201，同内容的新规则待批准草案。重复请求一致时 200。 |
 | POST `/:id/revise` | `{revision, proposal, feedback}` | 200，实际内容修订后的定义 |
 | POST `/:id/approve` | `{revision, feedback}` | 200，只认可当前测试定义 |
 | POST `/:id/reject` | `{revision, feedback}` | 200，保留被驳回版本及依据 |
 | POST `/:id/cancel` | `{}` | 200，请求停止，不代表远端已确认停止 |
 
-`capabilities`含`canPropose/contractRevision/model/reason/budget`，预算为`maxAttempts/remainingAttempts/timeoutMs`；默认每run最多3次、每次60秒。未配置模型、未完成当前双确认、工程草案不一致、预算耗尽或项目在途均禁止新提案。未知用量为null。HTTP不接受预算、配置或依赖注入。
+`capabilities` 含 `canPropose/contractRevision/model/reason/budget`，预算含 `maxAttempts/remainingAttempts/timeoutMs`。默认每个运行最多 3 次。普通计划每次最多 60 秒，至少 16 项需求的计划每次最多 120 秒。未配置模型、未完成当前双确认、工程草案不一致、预算耗尽或项目在途均禁止新提案。未知用量为 null。HTTP 请求体只传当前模型配置和预算绑定的 `contractRevision`。
+
+至少 16 项需求且有已确认页面的计划按接口、缺项补齐和浏览器三个阶段推进。首次接口请求聚焦批准需求的一个子集，后续补齐针对真实缺项。工程契约、依赖和最终全量覆盖仍以完整确认版本为准。接口检查覆盖完整后，使用同一 `/propose` 接口生成浏览器检查，每次只派发一个请求。分阶段记录带 `generationStage`，可接续时带 `nextGenerationStage`，接口草案还会报告缺少覆盖的 `missingHttpRequirementIds`。补齐阶段从核对过的接口记录追加检查，复用已有请求、依赖与断言，重复断言编号可由服务器统一编号。每阶段各自保存私有回执及用量。重启后可用已结束的阶段接续，正在派发且远端停止未知的阶段继续占据活动槽。
+
+手动计划的默认额度用尽后，最近的当前模型记录若是有完整回执的接口草案，可另行确认至多一次接口补齐和一次浏览器生成。`capabilities.continuation` 单独返回 `stage/canPropose/contractRevision/budget/model`。仍向 `/propose` 提交本次许可的 `contractRevision`，该值与当前草案及下一阶段绑定。基础字段继续供导入使用。补齐失败或状态待核对时停止，浏览器派发后不再提供额外重试。自动交付沿用已确认的自动返工预算。
+
+显式设置 `TASKFLOW_VERIFICATION_HTTP_WIRE=deepseek-beta-slots-v1` 时，大型计划可用 `deepseek-v4-pro` 的 DeepSeek Beta 模式接收固定数量的 HTTP 步骤槽。每个槽为一个受控步骤或空项。服务器只解码指定回包并继续执行原 DSL、依赖和全量覆盖校验。私有回执保留原结束原因与参数，公开记录提供哈希、字节数和用量。生成方式、角色配置及额度绑定在本次报价；外部停止未知时保留原活动槽。[供应商协议](https://api-docs.deepseek.com/guides/tool_calls/)
+
+接口中间草案供查看。浏览器阶段补齐可观察的页面断言后，服务用原接口步骤和新浏览器步骤校验联合定义，生成可以修订和批准的同版本草案。自动交付也按阶段耗用原额度，完整联合定义进入原审批与编码门禁。
 
 新增`canImportDefinition/manualBudget/manualReason`；人工定义每run最多20份，保存不调用模型，不占用或退还模型预算。`origin:'manual'|'model'`区分来源，旧存档迁移默认为model；`attempt`是统一记录序号，模型预算仅计origin=model。人工定义model/finishReason/receipt为null，usage为明确的0/0、dispatched=false、receiptState=not_applicable；原失败模型记录与费用不改。导入须当前双确认和有效工程，通过同一DSL/覆盖校验、凭据检查、项目检查点及冻结门禁；未知请求仍阻断。人工导入不是已运行或已通过，不能绕过已驳回内容的认可限制；编码后定义不可替换。未配置测试模型仍可导入已有定义，但不授予编码配置或执行许可。
 
 提案绑定project/run、sourceRevision/sourceGeneration、specRevision/planRevision、engineeringHash/contextHash/policyHash。模型仅接收确认规格、任务和工程接口投影，不接收候选代码及测试结论。服务校验HTTP DSL结构、需求覆盖和依赖；`coverage:'structural_only'`不证明断言业务充分。
 
 记录含`id/status/revision/manifestHash/policyHash/binding/proposal/approval/history/current/approved/executed/actions`，另含尝试、模型、用量、回执状态及净化错误。认可为`approval.phase:'definition_only'`，始终`executed:false`；不编译DSL、不启动编码、不调用验收器，也不产生软件passed。驳回后必须改变定义，重新生成相同被驳回定义也不能绕过。修订、来源/规格/计划/规则变化会撤销当前许可；旧记录保留且动作关闭。
+
+`renew-policy` 仅接受负责人对旧冻结联合清单提出的同范围续认。服务器从原正常停止候选和保存的批准派生内容，核对需求、工程、任务和原文版本，仅在规则指纹变化且规范化清单内容完全相同时生成新草案。独立批准后，`repairOnlyProposalIds` 中的草案只可用于绑定原候选的保留源码修复。付费前重新核查原报告、Git 状态、模型回执和完整历史阻塞。新执行仍须实际修改代码并完整复验。旧定义、旧候选和旧核验结果保留原版本。
 
 定义与私有回执分别存于`data/verification-planning/verification.sqlite`及`receipts/`。记录的回执字段仅提供hash/字节数，原始模型回包和路径保留在服务端；规划JSON、文档和ZIP不嵌入提案或私有回执。恢复时活动或未知请求保留`reconciliation_required`，不推断远端结束。请求已派发且未收到完整回执时，取消/超时即使使本地HTTP Promise结束，也保留待协调活动槽；未派发的取消可以确认。当前没有自动核对远端或强行清除未知状态的接口。规划、代码执行、测试提案检查点共同保护需求发布；模拟活动沿用规划检查点拦截。项目删除也须通过提案检查点。保存待应用需求不受在途提案阻止。
 
