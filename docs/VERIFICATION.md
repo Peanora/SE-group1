@@ -8,6 +8,11 @@
 - `1e52ebc` 真实 MXC/Edge 运行器相关 17/17。合法 256 KiB 响应在 4 KiB 日志预算下仍可通过，独立协议总量达上限后确认停止；原超量、重复和错误协议检查保留。原预约 `7334ad8` 同版只读重跑为独立 HTTP 171/171、双视口 Edge 125/125，运行证据在本地 `output/completion-20261122/reservations-runtime-budget-diagnostic-checked/`。
 - 模型和工程兼容性定向 99/99、文件提案重提 20/20。原预约与采购两个真实旧审批由失效反例回到通过，工程内容与策略热升级前一致。
 - 固定版 `48c491b` 的集成源码在 Windows MXC 和 Edge 下以同一并发 4 命令跑完 1,454 项，1,446 通过、8 跳过、0 失败或取消。`npm run check` 检查 275 个脚本。原始 TAP 在本地 `output/completion-20261122/final-integrated-native.tap`。
+- 同源码单独启用 `TASKFLOW_EXECUTION_NATIVE_TESTS=1` 和原 v3 固定报告。补跑主套件的 8 个可选入口，8/8 通过，含嵌套断言计 38 通过、0 跳过。原 v3 历史候选在新增回归下按预期被拒绝。两个运行的统计分别保留。
+- `76cbd49` 在深层 Windows 目录运行全部原生开关，共 1,490 项，1,489 通过、1 失败、0 跳过。#475 的 Worker 已注册，但 Git 克隆在内部 `.keep` 路径达到 260 字符时退出 128，尚未发出本机模型请求。固定同一代码在较短临时目录独立重跑该文件的三项原生检查，3/3 通过。未更改系统 Git 配置，保留了长路径失败记录。
+- `26329b5` 的 `npm run check` 检查 275 个脚本。短路径工作区使用全新数据与随机端口实际 `npm start`，本地模式拒绝未澄清的规格确认，答完三项后完成双确认并导出 19,267 字节的文档 ZIP。0 模型调用，Ctrl+C 后确认监听端口释放。
+- 演进归档原生组合 15/15。真实 V1–V3 历史 ZIP 均可静态核对，缺少原私有数据时默认复验以 `evolution_dataset_required` 停止。通过的合成数据复验单独记录在任务执行证据中。
+- 最终固定的集成源码 `26329b5` 在短路径工作区启用全部 Windows MXC、Edge 与历史竞态回归，运行 `node --test --test-concurrency=4 --test-reporter=tap tests/*.test.mjs`。1,494 项全部通过，0 失败、取消和跳过，用时 645.3 秒。TAP 位于本地 `output/completion-20261122/final-native.tap`，SHA256 `8f7ac98f7b562e7263e3bf9d7cfd18a4a20af5deff68d9557b9911ef4db25fd7`。自动套件无真实供应商调用。
 - 最新产品运行状态、真实模型与本机夹具的边界见[本轮任务记录](tasks/2026-11-22-completion.md)。
 
 ## 2026-11-21 验收清单返工
