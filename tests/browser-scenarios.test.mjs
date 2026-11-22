@@ -175,7 +175,7 @@ if (!process.env.TASKFLOW_BROWSER_MOCK_CHILD) {
           on: (name, handler) => handlers.set(name, handler), route: async (_pattern, handler) => { context.routeHandler = handler; }, routeWebSocket: async (_pattern, handler) => { context.socketHandler = handler; },
           close: async () => { context.closed = true; },
           newPage: async () => {
-            const page = { current: 'about:blank', on: (name, handler) => pageHandlers.set(name, handler), url: () => page.current, close: async () => {},
+            const page = { current: 'about:blank', on: (name, handler) => pageHandlers.set(name, handler), url: () => page.current, isClosed: () => context.closed === true, close: async () => { context.closed = true; },
               goto: async target => { page.current = target; await context.routeHandler({ request: () => ({ url: () => target }), continue: async () => {}, abort: async () => {} });
                 return await behavior.onGoto?.({ context, page, pageHandlers, manifest, target }) ?? { status: () => 200 }; },
               getByTestId: testId => ({ fill: async (value, options) => { seen.actions.push({ op: 'fill', testId, timeout: options.timeout }); context.value = value; await behavior.onFill?.({ context, manifest, timeout: options.timeout }); }, click: async options => { seen.actions.push({ op: 'click', testId, timeout: options.timeout }); assert.equal(testId, 'submit'); await behavior.onClick?.({ context, manifest, timeout: options.timeout }); if (behavior.delayedSubmit) setTimeout(() => { context.message = 'submitted'; }, 35); else context.message = 'submitted'; } }),
@@ -255,6 +255,51 @@ if (!process.env.TASKFLOW_BROWSER_MOCK_CHILD) {
   });
   test('trusted mock waits within the declared action budget for asynchronous UI state', async t => {
     const f = await fixture(t, { delayedSubmit: true }), report = await run(f); assert.equal(report.status, 'passed');
+  });
+  const staleObservation = 'cdpSession.send: Protocol error (Runtime.callFunctionOn): Cannot find context with specified id';
+  test('the first same-origin document observation can lose its context without repeating the click', async t => {
+    const f = await fixture(t, { actionTimeoutMs: 250, onInspect: ({ context, testId }) => {
+      if (testId !== 'message' || context.replaced) return;
+      context.replaced = true;
+      context.page.current = new URL('/after-submit', context.page.current).href;
+      throw new Error(staleObservation);
+    } });
+    const report = await run(f);
+    assert.equal(report.status, 'passed', JSON.stringify(report));
+    assert.equal(report.terminationConfirmed, true);
+    assert.equal(f.seen.actions.filter(action => action.op === 'click').length, 2);
+    assert.equal(f.seen.contexts.filter(context => context.replaced).length, 2);
+  });
+  test('browser context recovery leaves closed pages, other origins, and other CDP errors failed', async t => {
+    for (const failure of ['closed', 'origin', 'unexpected', 'different-protocol']) {
+      let observations = 0;
+      const f = await fixture(t, { actionTimeoutMs: 250, onInspect: ({ context, testId, pageHandlers }) => {
+        if (testId !== 'message') return;
+        observations++;
+        if (failure === 'closed') context.closed = true;
+        if (failure === 'origin') context.page.current = 'http://blocked.invalid/';
+        if (failure === 'unexpected') pageHandlers.get('framenavigated')({ url: () => 'http://blocked.invalid/' });
+        if (observations > 2) assert.fail('Failed observations may not repeat');
+        throw new Error(failure === 'different-protocol' ? staleObservation.replace('Runtime.callFunctionOn', 'Page.getFrameTree') : staleObservation);
+      } });
+      assert.equal((await run(f)).status, 'failed', failure);
+      assert.equal(observations, 2, failure);
+    }
+  });
+  test('repeated stale browser contexts cannot exceed the original action deadline', async t => {
+    let observations = 0;
+    const actionTimeoutMs = 120;
+    const f = await fixture(t, { actionTimeoutMs, onInspect: ({ testId }) => {
+      if (testId === 'message') {
+        observations++;
+        throw new Error(staleObservation);
+      }
+    } });
+    const report = await run(f);
+    assert.equal(report.status, 'failed');
+    assert.equal(report.terminationConfirmed, true);
+    assert.ok(observations > 2 && observations <= 2 * Math.ceil(actionTimeoutMs / 25) + 2);
+    assert.equal(f.seen.actions.filter(action => action.op === 'click').length, 2);
   });
   test('trusted mock fill and click wait for a unique visible control and give the operation only the remaining action budget', async t => {
     const f = await fixture(t, { actionTimeoutMs: 300, onInspect: ({ context, testId }) => {
