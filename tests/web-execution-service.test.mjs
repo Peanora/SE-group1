@@ -711,20 +711,37 @@ test('recheck admission cancellation prevents a late inspector from constructing
 
 test('the row admission deadline aborts a slow inspector and rejects synchronous elapsed-budget overruns before Review dispatch', async t => {
   for (const synchronous of [false, true]) {
-    const f = await recheckFixture(t); await setRecheckTimeout(f, 25); let signal;
-    f.state.inspectHook = async (options, value) => {
-      signal = options.signal;
-      if (synchronous) { const until = Date.now() + 80; while (Date.now() < until) { /* Block the timer to exercise the explicit elapsed check. */ } }
-      else await new Promise(resolve => setTimeout(resolve, 100));
-      return value();
-    };
-    const { execution } = await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' });
-    const result = await waitFor(f.service, value => value.executions[0].status === 'timed_out');
-    assert.equal(signal.aborted, true); assert.equal(f.state.rechecks.length, 0); assert.equal(result.executions[0].reviewCalls, 0);
-    assert.equal(result.executions[0].taskAccepted, false); assert.equal(result.executions[0].budget.timeoutMs, 25);
-    assert.equal(result.capabilities.canStart, true, 'a settled inspector may release the slot after the timeout');
-    const db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite')), privateRow = db.prepare('SELECT snapshot FROM executions WHERE id=?').get(execution.id); db.close();
-    assert.equal(JSON.parse(privateRow.snapshot).admission.sourceReportPath, f.state.original.reportPath);
+    const f = await recheckFixture(t); await setRecheckTimeout(f, 25); const release = deferred(); let signal;
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+    try {
+      f.state.inspectHook = async (options, value) => {
+        signal = options.signal;
+        if (synchronous) {
+          // Advance the wall clock without firing the timer, as a synchronous overrun would.
+          t.mock.timers.setTime(Date.now() + 80);
+          assert.equal(signal.aborted, false);
+        } else await release.promise;
+        return value();
+      };
+      const { execution } = await f.service.action({ ...startInput, executionId: f.state.sourceId, action: 'recheck' });
+      await waitControlledBoundary(() => signal);
+      if (!synchronous) {
+        // Exercise the timer only after the inspector actually owns the signal.
+        t.mock.timers.tick(25);
+        assert.equal(signal.aborted, true);
+        assert.equal((await f.service.list(ids)).capabilities.canStart, false);
+        release.resolve();
+      }
+      const result = await waitControlledBoundary(async () => {
+        const value = await f.service.list(ids);
+        return value.executions[0].status === 'timed_out' && value;
+      });
+      assert.equal(signal.aborted, true); assert.equal(f.state.rechecks.length, 0); assert.equal(result.executions[0].reviewCalls, 0);
+      assert.equal(result.executions[0].taskAccepted, false); assert.equal(result.executions[0].budget.timeoutMs, 25);
+      assert.equal(result.capabilities.canStart, true, 'a settled inspector may release the slot after the timeout');
+      const db = new DatabaseSync(path.join(f.rootDir, 'service.sqlite')), privateRow = db.prepare('SELECT snapshot FROM executions WHERE id=?').get(execution.id); db.close();
+      assert.equal(JSON.parse(privateRow.snapshot).admission.sourceReportPath, f.state.original.reportPath);
+    } finally { release.resolve(); t.mock.timers.reset(); }
   }
 });
 
