@@ -975,6 +975,8 @@ test('strict wire receipts survive re-open, are explicit in the quote and become
       const request = JSON.parse(body), tool = request.tools?.[0].function;
       const previous = dispatched.length;
       if (!tool) {
+        assert.match(request.messages[0].content, /禁止提供 limits/u);
+        assert.match(request.messages[0].content, /每个目标须至少出现在一步 visible\/text\/value\/count/u);
         dispatched.push({ endpoint: String(url) });
         return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(browser) } }] }));
       }
