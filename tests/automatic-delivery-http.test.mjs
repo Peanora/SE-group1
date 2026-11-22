@@ -265,7 +265,7 @@ test('restart identifies an existing verification request with unknown use and n
   const f = await fixture(t, { allowDevelopment: false });
   const delivery = await f.start();
   const blocked = await waitFor(delivery.status, state => state.status === 'failed', '夹具保存验收清单');
-  await f.restart({ checkpoint: 'verification', afterClose: directory => {
+  await f.restart({ checkpoint: 'verification', environment: { LLM_API_KEY: 'different-fixture-key' }, afterClose: directory => {
     const db = new DatabaseSync(path.join(directory, 'verification-planning', 'verification.sqlite'));
     try { db.prepare("UPDATE proposals SET status='generating',active=1,dispatched=1,receipt_state='not_received',receipt_hash=NULL,receipt_bytes=NULL,input_tokens=NULL,output_tokens=NULL WHERE id=?").run(blocked.proposalId); }
     finally { db.close(); }
