@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { fork } from 'node:child_process';
+import { once } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { minimalEnv } from '../lib/managed-process.mjs';
 import { createPlannedEvolutionService } from '../lib/planned-evolution.mjs';
 import { inspectVerificationPlanning } from '../lib/verification-planning-service.mjs';
 import { contentRevision, planningRevision } from '../lib/planning-review.mjs';
@@ -31,7 +34,7 @@ test('a bound evolution observes pending reconciliation after restart without re
   const rootDir = path.join(directory, 'evolutions'), data = planning('project-evolution-restart');
   const identity = { projectId: data.project.id, runId: data.run.id }, evolutionId = 'evolution-1', executionId = 'execution-1';
   const definitionRevision = 'a'.repeat(64), contractRevision = 'b'.repeat(64), assertAccess = () => true;
-  let service, starts = 0, execution = { id: executionId, status: 'running', active: true, accepted: false };
+  let service, starts = 0, linkedIntent, execution = { id: executionId, status: 'running', active: true, accepted: false };
   t.after(async () => {
     await service?.shutdown();
     const target = await realpath(directory);
@@ -41,7 +44,16 @@ test('a bound evolution observes pending reconciliation after restart without re
   });
   const options = { rootDir, sourceRootDir: directory, getPlanningSync: () => structuredClone(data),
     verificationService: { assertApprovedDefinition(input) { assert.deepEqual(input, { ...identity, proposalId: 'definition', revision: definitionRevision }); } },
-    plannedService: { list: async () => ({ executions: [structuredClone(execution)] }), startEvolution: async () => { starts++; return { execution }; } },
+    plannedService: {
+      list: async () => ({ executions: [structuredClone(execution)] }), evolutionStartAuthority: 'fixture-ledger',
+      findEvolutionStart: value => value.intentId === linkedIntent ? executionId : null,
+      startEvolution: async (_input, { evolutionStart, assertAdmission }) => {
+        assert.equal(assertAdmission(), true);
+        linkedIntent = evolutionStart.intentId;
+        starts++;
+        return { execution };
+      },
+    },
     releaseService: { authorizeStoppedDataset: () => assert.fail('no release operation') },
     datasetService: { snapshot: () => assert.fail('no data operation') }, withCheckpoint: (_id, work) => work() };
   service = await createPlannedEvolutionService(options);
@@ -122,4 +134,119 @@ test('evolution drafts retain owned data, bind exact review and survive restart 
   const saved = (await restored.list(identity)).evolutions[0]; assert.equal(saved.status, 'approved'); assert.equal(saved.revision, finalDraft.revision);
   state.approved = false; assert.equal((await restored.list(identity)).evolutions[0].current, false);
   await assert.rejects(restored.revise({ ...key, revision: saved.revision, migration, reason: '撤销验收定义后不能修改。' }, { assertAccess }));
+});
+
+test('HTTP start crash windows preserve the exact execution and permit only an undispatched retry', async t => {
+  const temp = await realpath(os.tmpdir());
+  for (const fault of ['after-reservation', 'before-reservation', 'rollback-association', 'replaced-ledger', 'revoke-before-reservation']) await t.test(fault, async t => {
+    const directory = await mkdtemp(path.join(temp, 'evolution-start-intent-'));
+    const data = planning('project-start-intent');
+    const identity = { projectId: data.project.id, runId: data.run.id };
+    const evolutionId = 'evolution-1';
+    const record = { version: 1, input: { ...identity, releaseId: 'older-release', proposalId: 'definition', definitionRevision: 'a'.repeat(64) },
+      planningKey: inspectVerificationPlanning(data, identity.projectId, identity.runId).key,
+      revisionNumber: 1, reason: '保留旧数据。', migration: { version: 1, kind: 'none', operations: [] } };
+    const revision = contentRevision(record);
+    record.approval = { revision, at: new Date().toISOString(), feedback: '确认已有数据保留。' };
+    await writeFile(path.join(directory, 'input.json'), JSON.stringify({ data, record, revision, evolutionId, identity }));
+    const applications = [];
+    t.after(async () => {
+      for (const { child, exited } of applications) {
+        if (child.connected) child.send('close', error => { if (error) child.kill(); });
+        await exited;
+      }
+      const target = await realpath(directory);
+      assert.equal(path.dirname(target), temp);
+      assert.match(path.basename(target), /^evolution-start-intent-/u);
+      await rm(target, { recursive: true, force: true });
+    });
+    async function boot(mode) {
+      const child = fork(new URL('./fixtures/planned-evolution-start-api.mjs', import.meta.url), [directory, mode],
+        { execArgv: [], env: minimalEnv(), stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+      const exited = once(child, 'exit');
+      applications.push({ child, exited });
+      const [{ port }] = await Promise.race([once(child, 'message'), exited.then(([code]) => assert.fail('API exited before listen: ' + code))]);
+      return {
+        request: (method, fields, authorized = true) => fetch('http://127.0.0.1:' + port, {
+          method, signal: AbortSignal.timeout(8000),
+          headers: { 'content-type': 'application/json', ...(authorized ? { authorization: 'Bearer fixture-owner' } : {}) },
+          ...(fields ? { body: JSON.stringify(fields) } : {}),
+        }),
+        exited,
+      };
+    }
+    const ledgerFile = path.join(directory, 'execution', 'planned.sqlite');
+    const queryExecution = sql => {
+      const db = new DatabaseSync(ledgerFile, { readOnly: true });
+      try { return db.prepare(sql).all(); }
+      finally { db.close(); }
+    };
+    function modifyFixtureLedger(sql) {
+      const db = new DatabaseSync(ledgerFile);
+      try { db.exec(sql); }
+      finally { db.close(); }
+    }
+    const readEvolution = async api => {
+      const response = await api.request('GET');
+      assert.equal(response.status, 200);
+      return (await response.json()).evolutions[0];
+    };
+    const original = await boot(fault === 'replaced-ledger' ? 'before-reservation' : fault);
+    let resumed;
+    if (fault === 'rollback-association') {
+      const failed = await original.request('POST', { evolutionId });
+      assert.equal(failed.status, 500);
+      assert.deepEqual(queryExecution('SELECT * FROM evolution_starts'), []);
+      modifyFixtureLedger('DROP TRIGGER forced_association_rollback');
+      resumed = original;
+    } else if (fault === 'revoke-before-reservation') {
+      const failed = await original.request('POST', { evolutionId });
+      assert.equal(failed.status, 409);
+      assert.deepEqual(await failed.json(), { code: 'evolution_access_revoked' });
+      resumed = original;
+    } else {
+      await assert.rejects(original.request('POST', { evolutionId }), TypeError);
+      const [exitCode] = await original.exited;
+      assert.equal(exitCode, fault === 'after-reservation' ? 42 : 41);
+      if (fault === 'replaced-ledger') modifyFixtureLedger("UPDATE evolution_start_authority SET nonce='different-ledger' WHERE id=1");
+      resumed = await boot('no-fault');
+    }
+    const evolution = await readEvolution(resumed);
+    let executionId;
+    if (fault === 'after-reservation') {
+      const [execution] = queryExecution('SELECT id,status,active FROM executions');
+      assert.deepEqual([execution.status, execution.active], ['reconciliation_required', 1]);
+      assert.equal(evolution.executionId, execution.id);
+      assert.equal(evolution.status, 'reconciliation_required');
+      assert.equal(evolution.actions.canStart, false);
+      executionId = execution.id;
+    } else {
+      assert.deepEqual(queryExecution('SELECT id FROM executions'), []);
+      assert.deepEqual(queryExecution('SELECT * FROM budgets'), []);
+      assert.equal(evolution.executionId, null);
+      if (fault === 'replaced-ledger') {
+        assert.equal(evolution.status, 'reconciliation_required');
+        assert.equal(evolution.actions.canStart, false);
+        assert.equal((await resumed.request('POST', { evolutionId })).status, 409);
+        assert.deepEqual(queryExecution('SELECT * FROM budgets'), []);
+        return;
+      }
+      assert.equal(evolution.status, 'approved');
+      assert.equal(evolution.actions.canStart, true);
+      const retry = await resumed.request('POST', { evolutionId });
+      assert.equal(retry.status, 202);
+      executionId = (await retry.json()).execution.id;
+    }
+    const denied = await Promise.all(['missing', evolutionId].map(id => resumed.request('POST', { evolutionId: id }, false)));
+    assert.deepEqual(await Promise.all(denied.map(response => response.json())), [
+      { code: 'evolution_access_revoked' }, { code: 'evolution_access_revoked' },
+    ]);
+    const duplicated = await resumed.request('POST', { evolutionId });
+    assert.equal(duplicated.status, 409);
+    assert.equal((await readEvolution(resumed)).executionId, executionId);
+    assert.deepEqual(queryExecution('SELECT id FROM executions').map(row => row.id), [executionId]);
+    assert.deepEqual(queryExecution('SELECT evolution_id,evolution_revision,execution_id FROM evolution_starts').map(row => [...Object.values(row)]), [[evolutionId, revision, executionId]]);
+    assert.deepEqual(queryExecution('SELECT attempts,used_calls,reserved_calls FROM budgets').map(row => [...Object.values(row)]), [[1, 0, 6]]);
+    await assert.rejects(stat(path.join(directory, 'unexpected-model-call')), { code: 'ENOENT' });
+  });
 });

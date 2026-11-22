@@ -409,7 +409,7 @@ export async function createApp(options = {}) {
           const assertAccess = () => { requireLocalExecutionRequest(request, server); requestChecks.get(request)?.(); if (teamAccess) teamAccess.requireRole(request.headers.cookie, method === 'GET' ? ['owner', 'reviewer', 'observer'] : ['approve', 'reject'].includes(segments[7]) ? ['owner', 'reviewer'] : ['owner']); return true; };
           const identity = { projectId, runId };
           if (segments.length === 6 && method === 'GET') {
-            const result = await evolutionService.list(identity); assertAccess(); const role = teamAccess?.identity(request.headers.cookie)?.role ?? 'owner';
+            assertAccess(); const result = await evolutionService.list(identity); assertAccess(); const role = teamAccess?.identity(request.headers.cookie)?.role ?? 'owner';
             return respond(response, 200, { ...result, capabilities: { canPrepare: role === 'owner' }, evolutions: result.evolutions.map(row => ({ ...row,
               actions: Object.fromEntries(Object.entries(row.actions ?? {}).map(([key, value]) => [key, value === true && (key === 'canApprove' ? ['owner', 'reviewer'].includes(role) : role === 'owner')])) })) });
           }
