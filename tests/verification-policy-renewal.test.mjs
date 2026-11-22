@@ -137,6 +137,9 @@ test('policy renewal preserves exact frozen assertions and requires its own appr
   assert.equal(view.capabilities.canStart, false);
   assert.deepEqual(view.capabilities.repairOnlyProposalIds, [draft.id]);
   await assert.rejects(planned.start({ ...ids, proposalId: draft.id, revision: draft.revision, contractRevision: view.capabilities.contractRevision }), code('policy_renewal_repair_required'));
+  const request = { ...ids, executionId: 'not-owned', contractRevision: view.capabilities.contractRevision };
+  await assert.rejects(planned.repair({ ...request, renewedDefinition: { proposalId: draft.id, revision: draft.revision, reportPath: 'evil' } }), code('invalid_input'));
+  await assert.rejects(planned.repair({ ...request, renewedDefinition: { proposalId: draft.id, revision: draft.revision } }), code('not_found'));
   assert.deepEqual((await planned.list(ids)).executions, []);
 });
 

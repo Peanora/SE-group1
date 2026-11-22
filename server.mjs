@@ -503,7 +503,8 @@ export async function createApp(options = {}) {
           }
           if (segments.length === 8 && segments[7] === 'repair' && method === 'POST') {
             const input = await readJson(request);
-            const body = exactFields(input, ['contractRevision', ...['repairNote', 'renewedDefinition'].filter(key => Object.hasOwn(input, key))]);
+            const names = ['contractRevision', ...['repairNote', 'renewedDefinition'].filter(key => Object.hasOwn(input, key))];
+            const body = Object.hasOwn(input, 'renewedDefinition') ? dataFields(input, names) : exactFields(input, names);
             return respond(response, 202, await plannedExecutionService.repair({ ...identity, executionId: segments[6], ...body }, { subject: teamAccess ? teamAccess.executionSubject(request.headers.cookie) : createLocalExecutionSubject() }));
           }
           if (segments.length === 8 && segments[7] === 'download' && method === 'GET') {
