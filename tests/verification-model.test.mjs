@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createVerificationModel, verificationModelPolicy, verificationRequestEvidence } from '../lib/verification-model.mjs';
+import { strictHttpTool, strictHttpWire, strictSlotNames } from '../lib/strict-http-wire.mjs';
 import { inspectStagedHttp } from '../lib/staged-http-verification.mjs';
 import { assertCompiledManifest, compileManifest, createVerificationControl, inspectVerificationProposal } from '../lib/verification-contract.mjs';
 
@@ -406,4 +407,79 @@ test('native failure evidence distinguishes incomplete transport and complete ma
     });
     assert.equal(calls, 0);
   }
+});
+
+const strictConfig = { ...config, baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-pro', wireFormat: strictHttpWire, thinking: 'disabled' };
+function encodedSlots(raw, count = 6) {
+  const fields = strictSlotNames(false, count);
+  return Object.fromEntries(fields.map((name, index) => [name, index < 3 ? raw[name] : raw.steps[index - 3] ? JSON.stringify(raw.steps[index - 3]) : '']));
+}
+function strictEnvelope(argumentsText, { name = strictHttpTool, finish = 'tool_calls', repeat = false, content = null } = {}) {
+  const tool = { id: 'native-tool', type: 'function', function: { name, arguments: argumentsText } };
+  return JSON.stringify({ choices: [{ finish_reason: finish, message: { content, tool_calls: repeat ? [tool, tool] : [tool] } }],
+    usage: { prompt_tokens: 23, completion_tokens: 34 } });
+}
+
+test('opted-in strict staged HTTP accepts one bounded named result and retains exact raw argument bytes', async () => {
+  const supplied = { ...input(), generationStage: 'http' };
+  const raw = proposal(), argumentsText = JSON.stringify(encodedSlots(raw), null, 2);
+  let receipt;
+  const model = createVerificationModel({ config: strictConfig, fetchImpl: async (url, options) => {
+    assert.equal(String(url), 'https://api.deepseek.com/beta/chat/completions');
+    const body = JSON.parse(options.body), [tool] = body.tools;
+    assert.equal(body.tools.length, 1);
+    assert.equal(body.response_format, undefined);
+    assert.equal(tool.function.strict, true);
+    assert.equal(tool.function.name, strictHttpTool);
+    assert.equal(tool.function.parameters.additionalProperties, false);
+    assert.deepEqual(tool.function.parameters.required, strictSlotNames(false, 6));
+    assert.match(body.messages[0].content, /assertions 不得为空/u);
+    return new Response(strictEnvelope(argumentsText));
+  } });
+  const draft = await model({ ...supplied, onReceipt: value => { receipt = value; } });
+  assert.deepEqual(draft.proposal, raw);
+  assert.deepEqual(receipt, { model: strictConfig.model, finishReason: 'tool_calls', usage: { inputTokens: 23, outputTokens: 34 }, content: argumentsText });
+  assert.equal(draft.coverage, 'structural_only');
+  assert.throws(() => assertCompiledManifest(draft.proposal, binding));
+});
+
+test('strict staged HTTP rejects ambiguous tool replies and invalid slots without executing any tool', async () => {
+  const text = JSON.stringify(encodedSlots(proposal()));
+  const envelopeFailures = [
+    strictEnvelope(text, { name: 'other-tool' }), strictEnvelope(text, { repeat: true }), strictEnvelope(text, { content: 'extra' }),
+    strictEnvelope(text, { finish: 'stop' }), strictEnvelope(text, { finish: 'length' }),
+  ];
+  for (const serialized of envelopeFailures) {
+    let received;
+    const model = createVerificationModel({ config: strictConfig, fetchImpl: async () => new Response(serialized) });
+    await assert.rejects(model({ ...input(), generationStage: 'http', onReceipt: receipt => { received = receipt; } }),
+      { code: /^(invalid_model_response|abnormal_finish)$/u });
+    assert.equal(received.usage.inputTokens, 23);
+    assert.ok(received.content === text || received.content === serialized);
+  }
+  const edits = [
+    value => { value.step07 = '{}'; }, value => { delete value.step06; }, value => { value.step06 = []; },
+    value => { value.step06 = '[]'; }, value => { value.step06 = '{"type":"request","type":"restart"}'; },
+    value => { const step = JSON.parse(value.step01); step.request.assertions = []; value.step01 = JSON.stringify(step); },
+  ];
+  for (const change of edits) {
+    const invalid = encodedSlots(proposal()); change(invalid);
+    const model = createVerificationModel({ config: strictConfig, fetchImpl: async () => new Response(strictEnvelope(JSON.stringify(invalid))) });
+    await assert.rejects(model({ ...input(), generationStage: 'http' }), { code: 'invalid_model_response' });
+  }
+  const duplicate = text.replace('"step06":""', '"step06":"{}","step06":""');
+  await assert.rejects(createVerificationModel({ config: strictConfig, fetchImpl: async () => new Response(strictEnvelope(duplicate)) })
+    ({ ...input(), generationStage: 'http' }), { code: 'invalid_model_response' });
+});
+
+test('strict arguments never persist credentials encoded within a nested raw step', async () => {
+  const raw = proposal();
+  raw.steps[0].request.assertions.push({ id: 'text', op: 'textIncludes', value: 'test-marker' });
+  const slots = encodedSlots(raw);
+  const unicode = [...strictConfig.apiKey].map(letter => String.fromCharCode(92) + 'u' + letter.charCodeAt(0).toString(16).padStart(4, '0')).join('');
+  slots.step01 = slots.step01.replace('test-marker', unicode);
+  let saved;
+  const model = createVerificationModel({ config: strictConfig, fetchImpl: async () => new Response(strictEnvelope(JSON.stringify(slots))) });
+  await assert.rejects(model({ ...input(), generationStage: 'http', onReceipt: value => { saved = value; } }), { code: 'credential_response' });
+  assert.deepEqual(saved, { model: strictConfig.model, finishReason: 'tool_calls', usage: { inputTokens: 23, outputTokens: 34 }, content: '[REDACTED]' });
 });

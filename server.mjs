@@ -142,13 +142,18 @@ export async function createApp(options = {}) {
   const verificationRoot = path.resolve(options.verificationPlanningRootDir ?? path.join(store.directory, 'verification-planning'));
   const plannedRoot = path.resolve(options.plannedExecutionRootDir ?? path.join(store.directory, 'planned-executions'));
   const verificationRecovery = createVerificationRecovery({ root: verificationRoot, getPlanning: (projectId, runId) => store.getPersistedRun(projectId, runId) });
+  const verificationWire = (options.agentEnvironment ?? process.env).TASKFLOW_VERIFICATION_HTTP_WIRE;
+  function resolveAgent(role) {
+    const config = agentSettings.resolve(role);
+    return role === 'verification' && verificationWire ? { ...config, wireFormat: verificationWire } : config;
+  }
   let sourceChangeService, verificationPlanningService, plannedExecutionService, teamAccess, localReleasesService, plannedDatasetService, evolutionService, automaticDelivery;
   try {
     verificationPlanningService = options.verificationPlanningService === null ? null : options.verificationPlanningService ?? await (await import('./lib/verification-planning-service.mjs')).createVerificationPlanningService({
       rootDir: verificationRoot,
       getPlanning: async (projectId, runId) => store.getPersistedRun(projectId, runId),
       getPlanningSync: (projectId, runId) => store.getPersistedRun(projectId, runId),
-      getConfig: () => agentSettings.resolve('verification'),
+      getConfig: () => resolveAgent('verification'),
     });
     if (options.plannedExecutionService === undefined) await reconcileEndedPreviews(path.join(plannedRoot, 'previews'));
     plannedExecutionService = options.plannedExecutionService === null ? null : options.plannedExecutionService ?? await (await import('./lib/planned-execution-service.mjs')).createPlannedExecutionService({
@@ -196,7 +201,7 @@ export async function createApp(options = {}) {
       store, orchestrator, verification: verificationPlanningService, planned: plannedExecutionService, recovery: verificationRecovery,
       getSettingsRevision: () => agentSettings.view().revision,
       getSettingsFingerprint: authorizationId => createHmac('sha256', authorizationId)
-        .update(JSON.stringify(AGENT_ROLES.map(({ id }) => agentSettings.resolve(id)))).digest('hex'),
+        .update(JSON.stringify(AGENT_ROLES.map(({ id }) => resolveAgent(id)))).digest('hex'),
       restoreSubject: value => teamAccess ? teamAccess.restoreExecutionSubject(value) : restoreLocalExecutionSubject(value),
       checkProject: projectId => orchestrator.withProjectCheckpoint(projectId, () => {
         const services = [executionService, verificationPlanningService, plannedExecutionService].filter(Boolean);

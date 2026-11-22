@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { createVerificationPlanningService, verificationPlanningPolicy } from '../lib/verification-planning-service.mjs';
+import { strictHttpTool, strictHttpWire } from '../lib/strict-http-wire.mjs';
 import { createVerificationModel, verificationModelPolicy } from '../lib/verification-model.mjs';
 import { canonicalJSON, compileManifest, inspectVerificationProposal, verificationPolicyHash } from '../lib/verification-contract.mjs';
 import { contentRevision, planningRevision } from '../lib/planning-review.mjs';
@@ -954,4 +955,86 @@ test('an unfinished HTTP stage reopens and adds only missing checks before brows
   assert.equal(Object.hasOwn(sent[2], 'httpTargetSteps'), false);
   assert.equal((await reopened.approve(edit(final))).proposal.approved, true);
   assert.deepEqual((await reopened.list(ids)).proposals.map(row => row.receiptState), ['saved', 'saved', 'saved']);
+});
+
+const wireConfig = { ...config, baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-pro', thinking: 'disabled', wireFormat: strictHttpWire };
+
+test('strict wire receipts survive re-open, are explicit in the quote and become an ordinary reviewed joint draft', async t => {
+  const large = planning(ids.projectId, ids.runId, 16);
+  const requirements = large.run.spec.requirements.map(row => row.id);
+  const initial = proposal(); initial.steps[0].requirementIds = requirements.slice(0, -1);
+  const last = { ...structuredClone(initial.steps[0]), id: 'extra', requirementIds: ['R16'] };
+  const browser = { version: 1, sessions: ['visitor'], steps: [
+    { id: 'home', session: 'visitor', requirementIds: requirements, op: 'goto', path: '/' },
+    { id: 'list', session: 'visitor', requirementIds: requirements, op: 'visible', testId: 'resources', value: true },
+  ] };
+  let selected = wireConfig;
+  const dispatched = [];
+  const f = await fixture(t, { getPlanning: () => large, getPlanningSync: () => large, getConfig: () => selected,
+    dependencies: { createModel: options => createVerificationModel({ ...options, fetchImpl: async (url, { body }) => {
+      const request = JSON.parse(body), tool = request.tools?.[0].function;
+      const previous = dispatched.length;
+      if (!tool) {
+        dispatched.push({ endpoint: String(url) });
+        return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(browser) } }] }));
+      }
+      const values = { id: initial.id, name: initial.name, sessions: [], step01: JSON.stringify(previous ? last : initial.steps[0]) };
+      const argumentsText = JSON.stringify(Object.fromEntries(tool.parameters.required.map(key => [key, values[key] ?? ''])), null, 2);
+      dispatched.push({ endpoint: String(url), argumentsText });
+      return new Response(JSON.stringify({ choices: [{ finish_reason: 'tool_calls', message: { tool_calls: [
+        { type: 'function', function: { name: strictHttpTool, arguments: argumentsText } },
+      ] } }] }));
+    } }) },
+  });
+  const before = await f.service.list(ids), first = await wait(f.service, (await propose(f.service)).id, 'draft');
+  assert.equal(first.finishReason, 'tool_calls');
+  assert.equal(first.wireFormat, strictHttpWire);
+  assert.equal(first.slotCount, 22);
+  assert.deepEqual(first.missingHttpRequirementIds, ['R16']);
+  assert.equal(first.actions.canApprove, false);
+  assert.equal(Object.hasOwn(first, 'content'), false);
+  const saved = JSON.parse(await readFile(path.join(f.rootDir, 'receipts', first.id + '.json'), 'utf8'));
+  assert.equal(saved.content, dispatched[0].argumentsText);
+  assert.equal(saved.finishReason, 'tool_calls');
+  await f.service.shutdown();
+  const reopened = await f.open();
+  selected = { ...wireConfig }; delete selected.wireFormat;
+  const ordinary = await reopened.list(ids);
+  assert.notEqual(ordinary.capabilities.contractRevision, before.capabilities.contractRevision);
+  await assert.rejects(propose(reopened), code('contract_changed'));
+  assert.equal(dispatched.length, 1);
+  selected = wireConfig;
+  const second = await wait(reopened, (await propose(reopened)).id, 'draft');
+  assert.equal(second.generationStage, 'http-supplement');
+  assert.equal(second.finishReason, 'tool_calls');
+  assert.equal(second.slotCount, 4);
+  assert.deepEqual(second.missingHttpRequirementIds, []);
+  assert.deepEqual(second.proposal.steps[0], first.proposal.steps[0]);
+  const final = await wait(reopened, (await propose(reopened)).id, 'draft');
+  assert.equal(final.generationStage, 'browser');
+  assert.equal(final.finishReason, 'stop');
+  assert.equal(Object.hasOwn(final, 'wireFormat'), false);
+  assert.deepEqual(final.proposal.browser.steps, browser.steps);
+  assert.deepEqual(dispatched.map(row => row.endpoint), ['https://api.deepseek.com/beta/chat/completions',
+    'https://api.deepseek.com/beta/chat/completions', 'https://api.deepseek.com/chat/completions']);
+  assert.equal((await reopened.approve(edit(final))).proposal.approved, true);
+});
+
+test('strict provider dispatch with incomplete response cannot be approved or automatically resent', async t => {
+  const large = planning(ids.projectId, ids.runId, 16);
+  let requests = 0;
+  const f = await fixture(t, { getPlanning: () => large, getPlanningSync: () => large, config: wireConfig, timeoutMs: 100,
+    dependencies: { createModel: options => createVerificationModel({ ...options, fetchImpl: async () => {
+      requests++;
+      return new Response(new ReadableStream({ pull() { return new Promise(() => {}); } }));
+    } }) },
+  });
+  const first = await wait(f.service, (await propose(f.service)).id, 'reconciliation_required');
+  assert.equal(first.dispatched, true);
+  assert.equal(first.receiptState, 'not_received');
+  assert.deepEqual(first.usage, { inputTokens: null, outputTokens: null });
+  assert.equal(first.actions.canApprove, false);
+  assert.equal((await f.service.list(ids)).capabilities.canPropose, false);
+  await assert.rejects(propose(f.service), code('project_busy'));
+  assert.equal(requests, 1);
 });
