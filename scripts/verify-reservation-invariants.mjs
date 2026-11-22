@@ -85,6 +85,10 @@ try {
     if (!check(`login-${actor}`, login.status, 200) || !sessions.has(actor)) throw new Error('公开演示账号登录失败。');
   }
   const resourceId = 'ROOM-A', slot = '2030-07-01-PM';
+  for (const route of ['/api/holds', '/api/waitlist']) {
+    const invisible = await request('alice', 'POST', route, { resourceId: 'ROOM-W', slot, reference: 'OUTSIDE', unknownField: true });
+    check(`visibility-precedes-validation-${route.split('/').at(-1)}`, { status: invisible.status, code: invisible.data?.error?.code }, { status: 404, code: 'not_found' });
+  }
   const original = { resourceId, slot, reference: '  INVARIANTS-A  ', key: 'invariants-a' };
   const hold = await request('alice', 'POST', '/api/holds', original);
   check('hold-created', hold.status, 201);
