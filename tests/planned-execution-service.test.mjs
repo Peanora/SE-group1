@@ -49,7 +49,7 @@ async function fixture(t, options = {}) {
   async function open(extra = {}) {
     service = await createPlannedExecutionService({ rootDir: path.join(directory, 'planned'), verificationService: verification, getPlanningSync: () => data,
       withCheckpoint: async (_id, work) => { if (options.holdCheckpoint) await checkpoint.promise; return work(); }, config, executable: process.execPath,
-      dependencies: { createProvider: value => { providerSettings.push(structuredClone(value.config)); verifyReservation(); return async () => assert.fail('inert core must not call a real provider'); }, createReviewer: () => async () => assert.fail('inert core must not call a real reviewer'),
+      dependencies: { ...(options.loadBrowserDriver ? { loadBrowserDriver: options.loadBrowserDriver } : {}), createProvider: value => { providerSettings.push(structuredClone(value.config)); verifyReservation(); return async () => assert.fail('inert core must not call a real provider'); }, createReviewer: () => async () => assert.fail('inert core must not call a real reviewer'),
         startExecution: input => {
           contexts.push(structuredClone(input.task));
           verifyReservation(); coreCalls++;
@@ -87,6 +87,16 @@ async function fixture(t, options = {}) {
     async finished() { return until(async () => { const state = await service.list(ids); return state.executions.findLast(item => ['failed', 'accepted', 'stopped', 'reconciliation_required'].includes(item.status)) && state; }); },
   };
 }
+
+test('missing Playwright dependency is rejected before coding, reservation or execution', async t => {
+  const f = await fixture(t, { loadBrowserDriver: async () => { throw new Error('loader diagnostic must stay private'); } });
+  await assert.rejects(f.service.start(await f.input()), error => error.code === 'browser_dependency_unavailable'
+    && error.status === 409 && error.message.includes('npm ci') && !error.message.includes('loader diagnostic'));
+  assert.equal(f.coreCalls(), 0);
+  assert.deepEqual(f.query('SELECT * FROM budgets'), []);
+  assert.deepEqual(f.query('SELECT * FROM executions'), []);
+  assert.deepEqual(f.providerSettings, []);
+});
 
 test('native admission receives each confirmed requirement body and acceptance, beyond the plan summary', async t => {
   const f = await fixture(t); await f.service.start(await f.input()); await f.finished();
