@@ -65,3 +65,20 @@ for(const[name,input,pattern]of[
 ])test(`v2 rejects ${name} before POST`,async t=>{const page=await pageFor(t);await mapDraft(page,input);await button(page,'revise').click();await page.waitForFunction(()=>errors.length===1);assert.match(await page.getByRole('alert').innerText(),pattern);assert.equal(await page.evaluate(()=>requests.some(row=>row.method==='POST')),false)});
 test('v2 loading refresh never steals focus after the user deliberately selects another field',async t=>{const page=await pageFor(t,390);await runningRelease(page);await page.getByRole('button',{name:'停止并保存数据',exact:true}).focus();await page.evaluate(()=>{holds.releases=1;window.loadingRead=panel.refresh()});await page.waitForFunction(()=>pending.length===1);await field(page,'reason').focus();await field(page,'reason').fill('User moved here while loading');await page.evaluate(()=>document.querySelector('[data-field="reason"]').setSelectionRange(5,10));await page.evaluate(()=>releasePending(0));await page.evaluate(()=>loadingRead);assert.deepEqual(await field(page,'reason').evaluate(node=>({active:document.activeElement===node,start:node.selectionStart,end:node.selectionEnd})),{active:true,start:5,end:10});assert.equal(await field(page,'reason').inputValue(),'User moved here while loading')});
 test('v2 missing top capability fields fail closed for initial activation and prepare',async t=>{const page=await pageFor(t);await page.evaluate(()=>{states.a.releases=[];states.a.localCapabilities=undefined;states.a.evolutionCapabilities=undefined});await refresh(page);await field(page,'executionId').selectOption('accepted-candidate');assert.equal(await button(page,'activateInitial').isDisabled(),true);await page.evaluate(()=>{states.a.releases=[structuredClone(initial.releases[0])]});await refresh(page);await field(page,'reason').fill('Missing capability cannot authorize');await field(page,'releaseId').selectOption('release-old');await field(page,'proposalId').selectOption('approved-definition');assert.equal(await button(page,'prepare').isDisabled(),true);assert.equal(await page.evaluate(()=>requests.some(row=>row.method==='POST')),false)});
+
+for (const width of [1440, 390]) {
+  test(`reopened evolution at ${width}px shows pending reconciliation without development or activation`, async t => {
+    const page = await pageFor(t, width);
+    await page.getByRole('checkbox').check();
+    await page.evaluate(() => {
+      Object.assign(states.a.evolutions[0], { status: 'reconciliation_required', executionId: 'original-execution',
+        error: '演进开发的停止状态或模型用量尚待核对。原开发记录保留，请在「代码与验收」查看。',
+        actions: { canRevise: false, canApprove: false, canStart: false, canActivate: false } });
+    });
+    await refresh(page);
+    assert.match(await field(page, 'evolutionId').locator('option:checked').innerText(), /状态待核对/u);
+    assert.match(await page.locator('#host').innerText(), /模型用量尚待核对/u);
+    for (const action of ['revise', 'approve', 'start', 'activate']) assert.equal(await button(page, action).isDisabled(), true, action);
+    assert.equal(await page.evaluate(() => requests.some(row => row.method === 'POST')), false);
+  });
+}

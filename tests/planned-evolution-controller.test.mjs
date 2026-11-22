@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { createPlannedEvolutionService } from '../lib/planned-evolution.mjs';
+import { inspectVerificationPlanning } from '../lib/verification-planning-service.mjs';
 import { contentRevision, planningRevision } from '../lib/planning-review.mjs';
 import { validateEngineeringPlan } from '../lib/engineering-plan.mjs';
 import { engineeringTasks } from '../lib/engineering-planner.mjs';
@@ -22,6 +25,63 @@ function planning(projectId) {
   run.planRevision = planningRevision(run); run.approvals.plan = { revision: run.planRevision, specRevision };
   return { project: { id: projectId, currentSourceRevision: run.sourceRevision, sourceGeneration: 1 }, run };
 }
+
+test('a bound evolution observes pending reconciliation after restart without redispatch or activation', async t => {
+  const temp = await realpath(os.tmpdir()), directory = await mkdtemp(path.join(temp, 'evolution-observation-'));
+  const rootDir = path.join(directory, 'evolutions'), data = planning('project-evolution-restart');
+  const identity = { projectId: data.project.id, runId: data.run.id }, evolutionId = 'evolution-1', executionId = 'execution-1';
+  const definitionRevision = 'a'.repeat(64), contractRevision = 'b'.repeat(64), assertAccess = () => true;
+  let service, starts = 0, execution = { id: executionId, status: 'running', active: true, accepted: false };
+  t.after(async () => {
+    await service?.shutdown();
+    const target = await realpath(directory);
+    assert.equal(path.dirname(target), temp);
+    assert.ok(path.basename(target).startsWith('evolution-observation-'));
+    await rm(target, { recursive: true, force: true });
+  });
+  const options = { rootDir, sourceRootDir: directory, getPlanningSync: () => structuredClone(data),
+    verificationService: { assertApprovedDefinition(input) { assert.deepEqual(input, { ...identity, proposalId: 'definition', revision: definitionRevision }); } },
+    plannedService: { list: async () => ({ executions: [structuredClone(execution)] }), startEvolution: async () => { starts++; return { execution }; } },
+    releaseService: { authorizeStoppedDataset: () => assert.fail('no release operation') },
+    datasetService: { snapshot: () => assert.fail('no data operation') }, withCheckpoint: (_id, work) => work() };
+  service = await createPlannedEvolutionService(options);
+  // Start with a persisted controller-approved migration, before its first development dispatch.
+  const record = { version: 1, input: { ...identity, releaseId: 'owned-release', proposalId: 'definition', definitionRevision },
+    planningKey: inspectVerificationPlanning(data, identity.projectId, identity.runId).key,
+    revisionNumber: 1, reason: '保留旧事项。', migration: { version: 1, kind: 'none', operations: [] } };
+  const revision = contentRevision(record), now = new Date().toISOString();
+  record.approval = { revision, at: now, feedback: '确认迁移。' };
+  const db = new DatabaseSync(path.join(rootDir, 'evolutions.sqlite'));
+  try {
+    db.prepare("INSERT INTO evolutions VALUES(?,?,?,?,?,'approved',0,?,?,?,?)")
+      .run(evolutionId, identity.projectId, identity.runId, 'request-1', contentRevision(record.input), revision, JSON.stringify(record), now, now);
+  } finally { db.close(); }
+  const request = { ...identity, evolutionId, revision, contractRevision };
+  const started = await service.start(request, { assertAccess });
+  assert.equal(started.evolution.executionId, executionId);
+  assert.equal(started.evolution.status, 'running');
+  await service.shutdown();
+
+  execution = { ...execution, status: 'reconciliation_required', active: true };
+  service = await createPlannedEvolutionService(options);
+  const [reopened] = (await service.list(identity)).evolutions;
+  assert.equal(reopened.status, 'reconciliation_required');
+  assert.equal(reopened.executionId, executionId);
+  assert.equal(reopened.revision, revision);
+  assert.match(reopened.error, /模型用量.*待核对/u);
+  assert.deepEqual(reopened.actions, { canRevise: false, canApprove: false, canStart: false, canActivate: false });
+  await assert.rejects(service.start(request, { assertAccess }), { code: 'evolution_start_unavailable' });
+  await assert.rejects(service.activate({ ...identity, evolutionId, revision }, { assertAccess }), { code: 'evolution_not_accepted' });
+  assert.equal(execution.active, true, 'the original development service still owns the active slot');
+  assert.equal(starts, 1);
+
+  execution = { ...execution, status: 'accepted', active: false, accepted: true };
+  const [settled] = (await service.list(identity)).evolutions;
+  assert.equal(settled.status, 'accepted');
+  assert.equal(settled.error, null);
+  assert.equal(settled.actions.canActivate, true);
+  assert.equal(starts, 1);
+});
 
 // Real source/Git/owned data and snapshot workers; planning/controller adapters
 // are explicit fixtures. This is not a model-generated product acceptance.
