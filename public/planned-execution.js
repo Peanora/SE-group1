@@ -40,7 +40,7 @@ const count = value => Number.isSafeInteger(value) && value >= 0 ? String(value)
 const money = ({ amount, currency }) => `${amount} ${currency}`;
 
 function priceLabel(prices) {
-  if (!prices) return '模型单价未配置，费用估算未知。';
+  if (!prices) return '费用估算：未知。未配置模型单价。';
   const rate = price => price ? `${price.currency} ${price.inputPerMillion} 输入 / ${price.outputPerMillion} 输出` : '未知';
   return `每百万 token 单价：编码 ${rate(prices.coding)}，审查 ${rate(prices.review)}。执行开始时固定单价，完成后按实际 token 估算。`;
 }
