@@ -145,6 +145,25 @@ test('existing DSL rejects unknown fields, paths, commands, passed, coverage, de
   await assert.rejects(createVerificationModel({ config, fetchImpl: async () => envelope(overflow) })(input()), { code: 'invalid_model_response' });
 });
 
+test('staged HTTP preparation completes preceding capture edges only', async () => {
+  const staged = { ...input(), generationStage: 'http' };
+  const raw = proposal(); raw.steps[1].dependsOn = [];
+  const model = value => createVerificationModel({ config, fetchImpl: async () => reply(value) });
+  const { proposal: returned } = await model(raw)(staged);
+  assert.deepEqual(returned, raw, 'the adapter returns the unchanged provider data');
+  const invalid = [
+    value => { delete value.steps[0].request.captures; },
+    value => { value.steps.reverse(); },
+    value => { value.steps[1].request.captures = value.steps[0].request.captures; delete value.steps[0].request.captures; },
+    value => { value.steps[1].request.captures = value.steps[0].request.captures; },
+    value => { value.steps[0].dependsOn = ['submit']; },
+  ];
+  for (const mutate of invalid) {
+    const unsafe = structuredClone(raw);
+    mutate(unsafe);
+    await assert.rejects(model(unsafe)(staged), { code: 'invalid_model_response' });
+  }
+});
 test('malformed, blank and nontext proposals retain four-field receipts and known usage before rejection', async () => {
   for (const content of ['{"version":', ' \n\t ', '', '```json\n{}\n```', null, undefined, '{}', '[]']) {
     let receipt;

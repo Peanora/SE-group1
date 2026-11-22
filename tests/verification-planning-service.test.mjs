@@ -889,9 +889,10 @@ test('an unfinished HTTP stage reopens and adds only missing checks before brows
   const large = planning(ids.projectId, ids.runId, 16);
   const requirements = large.run.spec.requirements.map(value => value.id);
   const partial = proposal(); partial.steps[0].requirementIds = requirements.slice(0, -1);
+  partial.steps[0].request.captures = [{ name: 'resourceId', path: '$.id' }];
   const supplement = { sessions: [], steps: [{
-    ...structuredClone(partial.steps[0]), id: 'extra', dependsOn: ['read'], requirementIds: ['R16'],
-    request: { ...structuredClone(partial.steps[0].request), id: 'get-extra' },
+    ...structuredClone(partial.steps[0]), id: 'extra', dependsOn: [], requirementIds: ['R16'],
+    request: { id: 'get-extra', method: 'GET', path: '/resources/${resourceId}', assertions: partial.steps[0].request.assertions },
   }] };
   const browser = { version: 1, sessions: ['visitor'], steps: [
     { id: 'home', session: 'visitor', requirementIds: requirements, op: 'goto', path: '/' },
@@ -918,11 +919,13 @@ test('an unfinished HTTP stage reopens and adds only missing checks before brows
   assert.equal(sent[1].remainingHttpSteps, 39);
   assert.deepEqual(sent[1].previousHttp, first.proposal);
   assert.deepEqual(second.proposal.steps[0], first.proposal.steps[0]);
+  assert.deepEqual(second.proposal.steps[1].dependsOn, ['read']);
+  assert.deepEqual(supplement.steps[0].dependsOn, []);
   assert.notEqual(second.proposal.steps[1].request.assertions[0].id, first.proposal.steps[0].request.assertions[0].id);
   assert.equal(second.proposal.steps[1].request.assertions[0].value, supplement.steps[0].request.assertions[0].value);
   assert.equal(second.actions.canApprove, false);
   const saved = JSON.parse(await readFile(path.join(f.rootDir, 'receipts', second.id + '.json'), 'utf8'));
-  assert.deepEqual(JSON.parse(saved.content), supplement, 'the original provider response retains its colliding check ID');
+  assert.deepEqual(JSON.parse(saved.content), supplement, 'the original provider response retains its check ID and dependencies');
   const final = await wait(reopened, (await propose(reopened)).id, 'draft');
   assert.equal(final.generationStage, 'browser');
   assert.equal(Object.hasOwn(final, 'nextGenerationStage'), false);
