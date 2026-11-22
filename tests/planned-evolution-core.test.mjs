@@ -45,19 +45,25 @@ test('cross-version core preserves real old code/data/history, publishes trusted
   let record;
   await t.test('real independent checks each migrate a separate old-data copy and preserve every retained code path', async () => {
     execution = startPlannedWebExecution(options); record = await execution.done; assert.equal(record.status, 'accepted', JSON.stringify(record)); assert.equal(isPlannedWebTaskAccepted(record, manifest), true);
-    assert.equal(record.baseCommit, f.originBinding.candidateCommit); assert.equal(record.totalModelCalls, 4); assert.equal(record.evolutionHistory.totalModelCalls, 2); assert.equal(record.evolutionSource.source.specRevision, f.originBinding.specRevision); assert.equal(record.specRevision, f.targetBinding.specRevision);
-    assert.equal(record.versions.length, 2); assert.ok(record.versions[0].acceptance.browser.checks.some(check => String(check.actual).includes('PRIVATE_ROW_')));
+    assert.equal(record.baseCommit, f.originBinding.candidateCommit); assert.equal(record.totalModelCalls, 3); assert.equal(record.evolutionHistory.totalModelCalls, 2); assert.equal(record.evolutionSource.source.specRevision, f.originBinding.specRevision); assert.equal(record.specRevision, f.targetBinding.specRevision);
+    assert.equal(record.versions.length, 2);
+    const failedGate = record.versions[0].acceptance;
+    assert.equal(failedGate.test.status, 'passed');
+    assert.equal(failedGate.browser.status, 'failed');
+    assert.ok(failedGate.browser.checks.some(check => String(check.actual).includes('PRIVATE_ROW_')));
+    assert.equal(failedGate.review, null);
+    assert.deepEqual(record.modelCalls.map(call => call.role), ['coding', 'coding', 'review']);
     const version = record.versions.at(-1), receipts = [version.selfCheck.dataset, version.acceptance.test.dataset, ...version.acceptance.browser.dataset]; assert.equal(receipts.length, 4); assert.equal(new Set(receipts.map(receipt => receipt.migrationId)).size, 4);
     assert.deepEqual(receipts.map(receipt => receipt.phase), ['self_check', 'http', 'browser-DESKTOP', 'browser-MOBILE']); assert.ok(receipts.every(receipt => receipt.binding.candidateCommit === record.candidateCommit && receipt.inputSnapshotHash === f.snapshot.snapshotHash && receipt.operationsHash === record.evolutionSource.migration.operationsHash));
     for (const filename of f.retainedPaths) assert.ok((await readFile(path.join(record.workspace, filename))).length > 0);
     assert.equal(await readFile(path.join(record.workspace, 'public/app.js'), 'utf8'), f.files.find(file => file.path === 'public/app.js').content);
-    assert.notEqual(f.workspace, f.runtimeWorkspace); assert.equal(calls, 4); assert.equal(metadata.length, 4); assert.equal(proofs.length, 4);
+    assert.notEqual(f.workspace, f.runtimeWorkspace); assert.equal(calls, 3); assert.equal(metadata.length, 3); assert.equal(proofs.length, 3);
     for (const text of prompts) { assert.equal(text.includes('PRIVATE_ROW_'), false); assert.equal(text.includes(f.workspace), false); assert.equal(text.includes(f.snapshot.filename), false); assert.equal(text.includes('requestIdentity'), false); }
     for (const proof of proofs) { const call = record.modelCalls.find(call => call.id === proof.callId); assert.equal(proof.receiptHash, call.receiptHash); assert.equal(hash(await readFile(call.receiptPath)), proof.receiptHash); }
   });
   await t.test('evolved source reinspection uses both real bindings and raw historical receipts without requiring old target current', async () => {
     f.state.current = false;
-    try { const handle = await inspectPlannedSource({ rootDir: f.sourceRootDir, reportPath: record.reportPath, binding, writablePaths: f.retainedPaths }), value = assertPlannedSource(handle, binding, f.retainedPaths); assert.equal(value.provenance.sourceModelReceiptHashes.length, 6); assert.deepEqual(value.previousIssues.map(issue => issue.id), [f.issue.id]); assert.equal(value.provenance.evolution.originBinding.specRevision, f.originBinding.specRevision); }
+    try { const handle = await inspectPlannedSource({ rootDir: f.sourceRootDir, reportPath: record.reportPath, binding, writablePaths: f.retainedPaths }), value = assertPlannedSource(handle, binding, f.retainedPaths); assert.equal(value.provenance.sourceModelReceiptHashes.length, 5); assert.deepEqual(value.previousIssues.map(issue => issue.id), [f.issue.id]); assert.equal(value.provenance.evolution.originBinding.specRevision, f.originBinding.specRevision); }
     finally { f.state.current = true; }
   });
   await t.test('forged origin or historical costs and removed original receipt cannot produce reusable source', async () => {
