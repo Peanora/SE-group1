@@ -13,6 +13,7 @@ import { validateProjectFiles } from '../lib/project-files.mjs';
 import { getModelRequestEvidence, runModelRequestWithEvidence } from '../lib/model-request-evidence.mjs';
 import { assertExecutionSubjectCurrent } from '../lib/team-access.mjs';
 import { inspectPlannedSource, assertPlannedSource } from '../lib/planned-source.mjs';
+import { openWorkerEvolution } from '../lib/planned-worker-evolution.mjs';
 
 async function main() {
   workerNeed(process.argv.length === 4 && process.argv[2] === '--job' && WORKER_ID.test(process.argv[3])); const jobId = process.argv[3];
@@ -41,7 +42,9 @@ async function main() {
     const now = Date.now();
     for (const [id, session] of sessions) if (session.expiresAt <= now) sessions.delete(id);
   }
-  const current = () => { const row = store.assertWorker(lease); workerNeed(!startupCancelled && row.grant_hash === workerHash(grant) && grant.policyHash === workerPolicyHash()); assertExecutionSubjectCurrent(grant.subject); return true; };
+  let evolution;
+  const assertWorker = () => { const row = store.assertWorker(lease); workerNeed(!startupCancelled && row.grant_hash === workerHash(grant) && grant.policyHash === workerPolicyHash()); assertExecutionSubjectCurrent(grant.subject); return true; };
+  const current = () => evolution ? evolution.assertCurrent() : assertWorker();
   const outputDir = store.jobDirectory(jobId);
   function status(after = 0) { return { job: store.get(jobId), snapshot: handle?.snapshot() ?? null, events: store.events(jobId, after) }; }
   async function action(command) {
@@ -135,6 +138,13 @@ async function main() {
   const provider = wrap('coding', createProjectCodeModel({ config, fetchImpl: fetchCurrent })), reviewer = wrap('review', createProjectReviewModel({ config: reviewConfig, fetchImpl: fetchCurrent }));
   try {
     let initialSource, repairNote;
+    if (grant.evolution !== undefined) {
+      workerNeed(grant.mode === 'whole' && generation === 1);
+      evolution = await openWorkerEvolution({ root: path.dirname(store.rootDir), jobDir: outputDir, grant, manifest,
+        executable: bootstrap.executable, signal: preparation.signal, assertWorker });
+      current();
+      store.event(lease, { type: 'evolution_source_verified', evolutionId: grant.evolution.evolutionId });
+    }
     if (grant.repair !== undefined) {
       const repair = inspectWorkerRepair(grant.repair), rootDir = path.dirname(store.rootDir);
       const reportPath = path.join(rootDir, ...repair.sourceReportPath.split('/'));
@@ -154,7 +164,8 @@ async function main() {
     const options = { outputDir, binding: grant.binding, task: grant.task, manifest, provider, reviewer, executable: bootstrap.executable, maxCalls: grant.budget.maxCalls,
       maxReviewCalls: grant.budget.maxReviewCalls, maxConcurrency: grant.budget.maxConcurrency, timeoutMs: Math.max(1, grant.deadlineAt - Date.now()), deadlineAt: grant.deadlineAt, ...(resumePermit ? { resumePermit } : {}), assertCurrent: current,
       onEvent: event => { try { store.event(lease, event); } catch {} } };
-    handle = grant.mode === 'graph' ? startPlannedTaskExecution(options) : startPlannedWebExecution({ ...options, binding: { ...grant.binding, taskId: 'whole' }, initialSource, repairNote });
+    handle = grant.mode === 'graph' ? startPlannedTaskExecution(options) : startPlannedWebExecution({ ...options, binding: { ...grant.binding, taskId: 'whole' }, initialSource, repairNote,
+      ...(evolution ? { evolutionSeed: evolution.seed } : {}) });
     timer = setTimeout(() => handle.cancel(), Math.max(1, grant.deadlineAt - Date.now()));
     const actual = await handle.done; finished = true; clearTimeout(timer); const graph = grant.mode === 'graph' ? actual : undefined, record = graph?.status === 'accepted' ? plannedTaskIntegration(graph, manifest) : actual;
     if (actual.status === 'retired_for_recovery') { workerNeed(handoffWork); await handoffWork; return; }
@@ -165,11 +176,16 @@ async function main() {
   } catch (error) {
     finished = true; clearTimeout(timer);
     try {
-      if (!handle && grant.repair && error?.reconciliationRequired !== true && error?.result?.terminationConfirmed !== false) {
+      if (!handle && (grant.repair || grant.evolution) && error?.reconciliationRequired !== true && error?.result?.terminationConfirmed !== false) {
+        if (grant.evolution) {
+          const code = typeof error?.code === 'string' && /^[a-z0-9_]{1,64}$/u.test(error.code) ? error.code : 'invalid_evolution_seed';
+          try { store.event(lease, { type: 'evolution_preparation_failed', code }); } catch { /* Preserve the independent stop proof. */ }
+        }
         const usage = { inputTokens: 0, outputTokens: 0 };
         const record = { ...grant.binding, id: randomUUID(), kind: 'controller_admission',
           status: startupCancelled ? 'stopped' : Date.now() >= grant.deadlineAt ? 'timed_out' : 'failed', finishedAt: new Date().toISOString(),
-          error: '保留源码的原候选未完成复核。本次未派发模型请求。', terminationConfirmed: true, totalModelCalls: 0, modelCalls: [], usage };
+          error: grant.evolution ? '演进的旧版本或数据快照未完成复核。本次未派发模型请求。' : '保留源码的原候选未完成复核。本次未派发模型请求。',
+          terminationConfirmed: true, totalModelCalls: 0, modelCalls: [], usage };
         const outcome = signStoppedWorkerResult({ signer, store, lease, manifest, record });
         store.finish(lease, { record, envelope: null, outcome }, { actualCalls: 0, usage, terminationConfirmed: true });
       } else {
@@ -178,6 +194,9 @@ async function main() {
       }
     } catch { try { store.markUnknown(jobId); } catch {} }
   }
-  finally { try { config.apiKey = ''; reviewConfig.apiKey = ''; } finally { setTimeout(closeResources, 1000); } }
+  finally {
+    try { await evolution?.close(); }
+    finally { config.apiKey = ''; reviewConfig.apiKey = ''; setTimeout(closeResources, 1000); }
+  }
 }
 main().catch(() => { process.exitCode = 1; });
