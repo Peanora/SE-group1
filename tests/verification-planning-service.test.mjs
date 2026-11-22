@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { createVerificationPlanningService, verificationPlanningPolicy } from '../lib/verification-planning-service.mjs';
 import { createVerificationModel, verificationModelPolicy } from '../lib/verification-model.mjs';
-import { compileManifest, verificationPolicyHash } from '../lib/verification-contract.mjs';
+import { canonicalJSON, compileManifest, inspectVerificationProposal, verificationPolicyHash } from '../lib/verification-contract.mjs';
 import { contentRevision, planningRevision } from '../lib/planning-review.mjs';
 import { validateEngineeringPlan } from '../lib/engineering-plan.mjs';
 import { engineeringTasks } from '../lib/engineering-planner.mjs';
@@ -839,12 +839,14 @@ test('large planning admission freezes its longer model deadline and reports exa
   assert.equal((await f.service.list(ids)).capabilities.budget.remainingAttempts, 0);
 });
 
-test('predecessor approval keeps its exact revision, manifest and execution freeze after a generator upgrade', async t => {
-  const priorHash = {
-    '1a2f269ca3d663fc90a10273b3cb3c8eeed366f11d0c32d98152d74e560b714c': 'cc771ddf230f6ddccb1d5cc413ea5cd47e5d5e6cec0570064bf6269bd1c2f9a4',
-    'c3d90eb76c23183e8d9b47057119e0ea449887db1cab43c04882bf341736a8b7': '30178f9cdbad793616ad18c44602ae76c687983b8bb40d8275a70f09ebb4d53a',
-  }[verificationPolicyHash];
-  assert.ok(priorHash, 'fixture uses a known frozen DSL byte layout');
+test('predecessor definition keeps its original identity and only authorizes execution under a compatible validation policy', async t => {
+  const layouts = [
+    { dsl: '1a2f269ca3d663fc90a10273b3cb3c8eeed366f11d0c32d98152d74e560b714c', planning: 'cc771ddf230f6ddccb1d5cc413ea5cd47e5d5e6cec0570064bf6269bd1c2f9a4' },
+    { dsl: 'c3d90eb76c23183e8d9b47057119e0ea449887db1cab43c04882bf341736a8b7', planning: '30178f9cdbad793616ad18c44602ae76c687983b8bb40d8275a70f09ebb4d53a' },
+  ];
+  const predecessor = layouts.find(layout => layout.dsl === verificationPolicyHash) ?? layouts[0];
+  const sameValidationPolicy = predecessor.dsl === verificationPolicyHash;
+  const priorHash = predecessor.planning;
   const planningRecord = planning(), body = proposal();
   body.browser = { version: 1, sessions: ['visitor'], steps: [
     { id: 'home', session: 'visitor', requirementIds: ['R1'], op: 'goto', path: '/' },
@@ -854,7 +856,7 @@ test('predecessor approval keeps its exact revision, manifest and execution free
   const imported = await importManual(f.service, body), approved = (await f.service.approve(edit(imported))).proposal;
   await f.service.shutdown();
   const database = new DatabaseSync(path.join(f.rootDir, 'verification.sqlite'));
-  let revision;
+  let revision, manifestHash;
   try {
     const row = database.prepare('SELECT snapshot,approval,proposal FROM proposals WHERE id=?').get(approved.id);
     const snapshot = JSON.parse(row.snapshot), approval = JSON.parse(row.approval);
@@ -862,16 +864,28 @@ test('predecessor approval keeps its exact revision, manifest and execution free
     snapshot.key = contentRevision(snapshot.binding);
     revision = contentRevision({ proposal: JSON.parse(row.proposal), binding: snapshot.binding, policyHash: priorHash });
     approval.revision = revision;
-    database.prepare('UPDATE proposals SET context_key=?,snapshot=?,revision=?,approval=? WHERE id=?')
-      .run(snapshot.key, JSON.stringify(snapshot), revision, JSON.stringify(approval), approved.id);
+    const { policyHash: _policy, manifestHash: _hash, checks: _checks, ...definition } = inspectVerificationProposal({
+      proposal: JSON.parse(row.proposal), binding: snapshot.context.binding, requirements: snapshot.context.requirements.map(item => item.id), tasks: snapshot.context.task.tasks,
+    });
+    manifestHash = createHash('sha256').update(canonicalJSON({ ...definition, policyHash: predecessor.dsl })).digest('hex');
+    database.prepare('UPDATE proposals SET context_key=?,snapshot=?,revision=?,approval=?,manifest_hash=? WHERE id=?')
+      .run(snapshot.key, JSON.stringify(snapshot), revision, JSON.stringify(approval), manifestHash, approved.id);
   } finally { database.close(); }
   const restored = await f.open(), viewed = (await restored.list(ids)).proposals[0];
-  assert.equal(viewed.current, true);
-  assert.equal(viewed.approved, true);
+  assert.equal(viewed.status, 'approved');
+  assert.equal(viewed.current, sameValidationPolicy);
+  assert.equal(viewed.approved, sameValidationPolicy);
   assert.equal(viewed.revision, revision);
   assert.equal(viewed.policyHash, priorHash);
-  assert.equal(viewed.manifestHash, approved.manifestHash);
+  assert.equal(viewed.manifestHash, manifestHash);
   const input = { ...ids, proposalId: approved.id, revision };
+  if (!sameValidationPolicy) {
+    assert.notEqual(manifestHash, approved.manifestHash);
+    assert.throws(() => restored.assertApprovedDefinition(input), code('approval_required'));
+    await assert.rejects(restored.withApprovedExecution(input, () => assert.fail('Old definition must not authorize execution.')));
+    return;
+  }
+  assert.equal(manifestHash, approved.manifestHash);
   assert.equal(restored.assertApprovedDefinition(input).policyHash, priorHash);
   await restored.withApprovedExecution(input, grant => {
     assert.equal(grant.binding.policyHash, priorHash);
