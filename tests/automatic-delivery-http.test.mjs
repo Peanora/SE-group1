@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createApp } from '../server.mjs';
 import { createEngineeringModel } from '../lib/engineering-model.mjs';
@@ -45,12 +46,13 @@ async function waitFor(read, matches, label) {
   assert.fail(`等待${label}超时：${JSON.stringify(result)}`);
 }
 
-async function fixture(t, { clarify = false, verificationDefinition = definition } = {}) {
+async function fixture(t, { clarify = false, verificationDefinition = definition, allowDevelopment = true, teamEnabled = false } = {}) {
   const temporaryRoot = await realpath(os.tmpdir());
   const directory = await mkdtemp(path.join(temporaryRoot, 'automatic-delivery-http-'));
-  const store = await new ProjectStore(directory).init();
+  let store;
   const calls = { spec: 0, engineering: 0, verification: 0, start: 0 };
   const executions = new Map();
+  const checkpoints = new Map();
   let app, verification;
   t.after(async () => {
     try { if (app) await app.close(); else await verification?.shutdown(); }
@@ -62,7 +64,7 @@ async function fixture(t, { clarify = false, verificationDefinition = definition
     }
   });
   const getPlanning = (...args) => store.getPersistedRun(...args);
-  verification = await createVerificationPlanningService({ rootDir: path.join(directory, 'verification-planning'),
+  function openVerification() { return createVerificationPlanningService({ rootDir: path.join(directory, 'verification-planning'),
     getPlanning, getPlanningSync: getPlanning, config,
     dependencies: { createModel: () => async input => {
       calls.verification++;
@@ -71,19 +73,20 @@ async function fixture(t, { clarify = false, verificationDefinition = definition
       await input.onReceipt({ model: config.model, finishReason: 'stop', usage, content: JSON.stringify(proposal) });
       return { proposal, model: config.model, usage, policyHash: verificationModelPolicy.hash, coverage: 'structural_only' };
     } },
-  });
+  }); }
   const contractRevision = 'c'.repeat(64);
   const plannedExecutionService = {
     list: async identity => {
       const { proposals } = await verification.list(identity);
       const supportedProposalIds = proposals.filter(item => item.current && item.approved && item.proposal.browser).map(item => item.id);
       const row = executions.get(identity.runId);
-      return { capabilities: { canStart: !!supportedProposalIds.length && !row?.active, contractRevision, supportedProposalIds },
-        executions: row ? [structuredClone(row)] : [] };
+      const rows = Array.isArray(row) ? row : row ? [row] : [];
+      return { capabilities: { canStart: allowDevelopment && !!supportedProposalIds.length && !rows.some(item => item.active), contractRevision, supportedProposalIds },
+        executions: structuredClone(rows) };
     },
     start: async ({ projectId, runId, proposalId, revision, contractRevision: selected }, { subject }) => {
       assert.equal(selected, contractRevision);
-      assert.equal(describeExecutionSubject(subject).kind, 'local');
+      assert.equal(describeExecutionSubject(subject).kind, teamEnabled ? 'team' : 'local');
       const { run } = getPlanning(projectId, runId);
       assert.equal(run.status, 'succeeded');
       assert.equal(run.approvals.plan.revision, run.planRevision);
@@ -92,17 +95,31 @@ async function fixture(t, { clarify = false, verificationDefinition = definition
       assert.ok(proposals.some(item => item.id === proposalId && item.revision === revision && item.approved));
       assert.equal(executions.has(runId), false);
       calls.start++;
-      const execution = { id: randomUUID(), proposalId, revision, current: true, active: true, status: 'generating',
-        binding: { planRevision: run.planRevision, specRevision: run.specRevision }, workflow: { stage: 'coding' }, actions: { canDownload: false } };
+      const execution = { id: randomUUID(), projectId, runId, proposalId, revision, current: true, active: true, status: 'generating',
+        binding: { projectId, runId, sourceRevision: run.sourceRevision, sourceGeneration: run.sourceGeneration,
+          planRevision: run.planRevision, specRevision: run.specRevision }, workflow: { stage: 'coding' }, actions: { canDownload: false } };
       executions.set(runId, execution);
       return { execution: structuredClone(execution) };
     },
     withProjectCheckpoint: async (_id, work) => work(),
     shutdown: async () => {},
   };
-  app = await createApp({ store, executionService: null, sourceChangeService: null, verificationPlanningService: verification,
+  let origin;
+  async function open(environment = {}) {
+    store = await new ProjectStore(directory).init();
+    const save = store.save.bind(store);
+    store.save = project => {
+      const run = project.runs.at(-1), state = run?.automaticDelivery;
+      for (const key of [state?.pendingDispatch?.kind, state?.status === 'needs_clarification' ? 'clarification' : null,
+        run?.stages.find(item => item.id === 'spec')?.status === 'running' ? `spec-${run.specificationHistory?.at(-1)?.requestState ?? 'starting'}` : null]) {
+        if (key && !checkpoints.has(key)) checkpoints.set(key, structuredClone(project));
+      }
+      return save(project);
+    };
+    verification = await openVerification();
+    app = await createApp({ store, executionService: null, sourceChangeService: null, verificationPlanningService: verification, teamEnabled,
     plannedExecutionService, stepDelayMs: 0, agentEnvironment: {
-      LLM_BASE_URL: config.baseUrl, LLM_MODEL: config.model, LLM_API_KEY: config.apiKey,
+      LLM_BASE_URL: config.baseUrl, LLM_MODEL: config.model, LLM_API_KEY: config.apiKey, ...environment,
     }, planner: { ...planner, getModelConfig: () => ({ configured: true, model: config.model }),
       analyzeWithModel: (text, name, options) => {
         calls.spec++;
@@ -115,19 +132,41 @@ async function fixture(t, { clarify = false, verificationDefinition = definition
         return modelResponse(engineeringDraft);
       } }),
     },
-  });
-  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
-  const origin = `http://127.0.0.1:${app.server.address().port}`;
-  async function request(route, body, headers) {
-    const response = await fetch(origin + route, body === undefined ? { headers } : {
-      method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
     });
-    return { status: response.status, body: await response.json() };
+    await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+    origin = `http://127.0.0.1:${app.server.address().port}`;
+  }
+  await open();
+  let defaultCookie;
+  async function request(route, body, headers, method = 'POST') {
+    const authHeaders = { ...(defaultCookie ? { cookie: defaultCookie } : {}), ...headers };
+    const response = await fetch(origin + route, body === undefined ? { headers: authHeaders } : {
+      method, headers: { 'content-type': 'application/json', ...authHeaders }, body: JSON.stringify(body),
+    });
+    return { status: response.status, body: await response.json(), cookie: response.headers.get('set-cookie')?.split(';')[0] };
+  }
+  let teamOwnerId;
+  if (teamEnabled) {
+    const owner = await request('/api/team/setup', { name: 'owner', password: 'fixture-owner-password' });
+    assert.equal(owner.status, 201, JSON.stringify(owner.body));
+    defaultCookie = owner.cookie;
+    teamOwnerId = owner.body.user.id;
   }
   const created = await request('/api/projects', { name: '资源项目', filename: 'r.md', content: source });
   assert.equal(created.status, 201);
   const runsRoute = `/api/projects/${created.body.project.id}/runs`;
-  return { request, runsRoute, calls, executions, async start(input = consent) {
+  return { request, runsRoute, calls, executions, checkpoints, teamOwnerId, useCookie: cookie => { defaultCookie = cookie; }, async restart({ checkpoint, environment, afterClose } = {}) {
+    await app.close();
+    app = null;
+    if (checkpoint) {
+      const snapshot = checkpoints.get(checkpoint);
+      assert.ok(snapshot, `缺少 ${checkpoint} 停点`);
+      await writeFile(path.join(directory, `${snapshot.id}.json`), JSON.stringify(snapshot), 'utf8');
+    }
+    if (afterClose) await afterClose(directory);
+    await open(environment);
+    allowDevelopment = true;
+  }, async start(input = consent) {
     const creation = await request(runsRoute, input);
     assert.equal(creation.status, 201, JSON.stringify(creation.body));
     const { id } = creation.body.run, route = `${runsRoute}/${id}`;
@@ -137,6 +176,133 @@ async function fixture(t, { clarify = false, verificationDefinition = definition
       return response.body;
     } };
   } };
+}
+
+test('reopening the workbench keeps clarification on the original run and original authorization', async t => {
+  const f = await fixture(t, { clarify: true });
+  const delivery = await f.start();
+  await waitFor(delivery.status, state => state.status === 'needs_clarification', '初次澄清');
+  await f.restart();
+  await waitFor(delivery.status, state => state.status === 'needs_clarification', '重启后澄清');
+  assert.deepEqual(f.calls, { spec: 1, engineering: 0, verification: 0, start: 0 });
+  const view = await f.request(delivery.route);
+  const { id: issueId, qa } = view.body.run.planningIssue;
+  const result = await f.request(`${delivery.route}/action`, { action: 'answer_planning_issue', issueId, continue: true, answers: { [qa[0].id]: answer } });
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.equal(result.body.run.id, delivery.id);
+  await waitFor(delivery.status, state => !!state.executionId, '同运行继续开发');
+  assert.deepEqual(f.calls, { spec: 2, engineering: 1, verification: 1, start: 1 });
+});
+
+test('reopening after a complete specification receipt revalidates it without another specification request', async t => {
+  const f = await fixture(t, { allowDevelopment: false });
+  const delivery = await f.start();
+  await waitFor(delivery.status, state => state.status === 'failed', '夹具完成前置流程');
+  assert.ok(f.checkpoints.has('spec-settled'));
+  await f.restart({ checkpoint: 'spec-settled' });
+  const observed = await waitFor(async () => (await f.request(delivery.route)).body.run, state => state.specificationRevalidations?.length === 1, '重验规格回执');
+  assert.equal(observed.id, delivery.id);
+  assert.equal(observed.specificationCalls, 1);
+  assert.equal(f.calls.spec, 1);
+});
+
+test('a planning dispatch with no durable outcome keeps usage unconfirmed after restart', async t => {
+  const f = await fixture(t, { clarify: true });
+  const delivery = await f.start();
+  await waitFor(delivery.status, state => state.status === 'needs_clarification', '规格调用落盘');
+  await f.restart({ checkpoint: 'spec-dispatch_intent' });
+  const state = await waitFor(delivery.status, value => value.status === 'interrupted', '规划请求待核对');
+  assert.equal(state.usageUncertain, true);
+  assert.match(state.message, /用量.*未知/u);
+  assert.deepEqual(f.calls, { spec: 1, engineering: 0, verification: 0, start: 0 });
+});
+
+test('restart does not reuse automatic spending authorization when the effective model configuration changes', async t => {
+  const f = await fixture(t, { clarify: true });
+  const delivery = await f.start();
+  await waitFor(delivery.status, state => state.status === 'needs_clarification', '原配置等待澄清');
+  await f.restart({ environment: { LLM_API_KEY: 'different-fixture-key' } });
+  const stopped = await waitFor(delivery.status, state => state.status === 'interrupted', '原用量授权失效');
+  assert.match(stopped.message, /授权.*设置/u);
+  const { body } = await f.request(delivery.route);
+  assert.doesNotMatch(JSON.stringify(body), /settingsFingerprint|fixture-automatic-delivery-key|different-fixture-key/u);
+  assert.deepEqual(f.calls, { spec: 1, engineering: 0, verification: 0, start: 0 });
+});
+
+test('team authorization is recovered privately and can no longer resume after the original owner is revoked', async t => {
+  const f = await fixture(t, { clarify: true, teamEnabled: true });
+  const delivery = await f.start();
+  await waitFor(delivery.status, state => state.status === 'needs_clarification', '团队首次澄清');
+  await f.restart();
+  await waitFor(delivery.status, state => state.status === 'needs_clarification', '原团队授权继续');
+  const original = await f.request(delivery.route);
+  assert.doesNotMatch(JSON.stringify(original.body.run.automaticDelivery), /rootDir|authorityId|memberId|taskflow_session|settingsFingerprint/u);
+  const another = { name: 'second', password: 'fixture-second-password' };
+  assert.equal((await f.request('/api/team/members', { ...another, role: 'owner' })).status, 201);
+  const other = await f.request('/api/team/login', another);
+  assert.equal(other.status, 200);
+  f.useCookie(other.cookie);
+  const revoked = await f.request(`/api/team/members/${f.teamOwnerId}`, { role: 'observer', active: false }, {}, 'PATCH');
+  assert.equal(revoked.status, 200, JSON.stringify(revoked.body));
+  await f.restart();
+  await waitFor(delivery.status, state => state.status === 'interrupted', '原团队授权撤销');
+  assert.deepEqual(f.calls, { spec: 1, engineering: 0, verification: 0, start: 0 });
+});
+
+test('restart finds a saved verification proposal even when the automatic state did not receive its ID', async t => {
+  const f = await fixture(t, { allowDevelopment: false });
+  const delivery = await f.start();
+  const blocked = await waitFor(delivery.status, state => state.status === 'failed', '夹具保存验收清单');
+  assert.ok(blocked.proposalId);
+  await f.restart({ checkpoint: 'verification' });
+  const resumed = await waitFor(delivery.status, state => !!state.executionId, '恢复清单后启动开发');
+  assert.equal(resumed.proposalId, blocked.proposalId);
+  assert.deepEqual(f.calls, { spec: 1, engineering: 1, verification: 1, start: 1 });
+  assert.equal(Object.hasOwn(resumed, 'pendingDispatch'), false);
+});
+
+test('restart identifies an existing verification request with unknown use and never replaces it', async t => {
+  const f = await fixture(t, { allowDevelopment: false });
+  const delivery = await f.start();
+  const blocked = await waitFor(delivery.status, state => state.status === 'failed', '夹具保存验收清单');
+  await f.restart({ checkpoint: 'verification', afterClose: directory => {
+    const db = new DatabaseSync(path.join(directory, 'verification-planning', 'verification.sqlite'));
+    try { db.prepare("UPDATE proposals SET status='generating',active=1,dispatched=1,receipt_state='not_received',receipt_hash=NULL,receipt_bytes=NULL,input_tokens=NULL,output_tokens=NULL WHERE id=?").run(blocked.proposalId); }
+    finally { db.close(); }
+  } });
+  const stopped = await waitFor(delivery.status, state => state.status === 'interrupted', '验收请求待核对');
+  assert.equal(stopped.proposalId, blocked.proposalId);
+  assert.equal(stopped.usageUncertain, true);
+  assert.deepEqual(f.calls, { spec: 1, engineering: 1, verification: 1, start: 0 });
+});
+
+test('restart adopts only one development execution for the frozen plan and definition', async t => {
+  const f = await fixture(t);
+  const delivery = await f.start();
+  const launched = await waitFor(delivery.status, state => !!state.executionId, '已启动开发');
+  await f.restart({ checkpoint: 'development' });
+  const resumed = await waitFor(delivery.status, state => !!state.executionId, '重新认领原开发');
+  assert.equal(resumed.executionId, launched.executionId);
+  assert.deepEqual(f.calls, { spec: 1, engineering: 1, verification: 1, start: 1 });
+});
+
+for (const conflict of ['missing', 'ambiguous', 'stale']) {
+  test(`development intent with ${conflict} evidence is interrupted without a second dispatch`, async t => {
+    const f = await fixture(t);
+    const delivery = await f.start();
+    await waitFor(delivery.status, state => !!state.executionId, '已启动开发');
+    await f.restart({ checkpoint: 'development', afterClose: () => {
+      const row = f.executions.get(delivery.id);
+      if (conflict === 'missing') f.executions.delete(delivery.id);
+      if (conflict === 'ambiguous') f.executions.set(delivery.id, [row, { ...row, id: randomUUID() }]);
+      if (conflict === 'stale') row.binding.planRevision = '0'.repeat(64);
+    } });
+    const stopped = await waitFor(delivery.status, state => state.status === 'interrupted', '开发派发待核对');
+    assert.equal(stopped.executionId, undefined);
+    assert.equal(stopped.usageUncertain, true);
+    assert.equal(stopped.retryVerification, undefined);
+    assert.equal(f.calls.start, 1);
+  });
 }
 
 test('automatic delivery requires local model consent and leaves manual approvals in place', async t => {

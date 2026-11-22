@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readFile, stat } from 'node:fs/promises';
@@ -8,11 +8,11 @@ import { Orchestrator } from './lib/orchestrator.mjs';
 import { HttpError, parseDocument } from './lib/documents.mjs';
 import { createZip } from './lib/zip.mjs';
 import { SimulatedTaskService } from './lib/simulated-tasks.mjs';
-import { createLocalExecutionSubject } from './lib/team-access.mjs';
+import { createLocalExecutionSubject, restoreLocalExecutionSubject } from './lib/team-access.mjs';
 import { createVerificationRecovery } from './lib/verification-recovery.mjs';
 import { loginContinuationDraft, loginRevisionNote, loginRevisionTask, previousLoginPlan } from './lib/verification-login-continuation.mjs';
 import { reconcileEndedPreviews } from './lib/preview-output-recovery.mjs';
-import { createAgentSettings } from './lib/agent-settings.mjs';
+import { AGENT_ROLES, createAgentSettings } from './lib/agent-settings.mjs';
 import { createAgentPlanner } from './lib/agent-planner.mjs';
 import { AUTOMATIC_BUDGET, createAutomaticDelivery } from './lib/automatic-delivery.mjs';
 import { repeatedCounterSteps } from './public/verification-draft.js';
@@ -170,6 +170,9 @@ export async function createApp(options = {}) {
     automaticDelivery = createAutomaticDelivery({
       store, orchestrator, verification: verificationPlanningService, planned: plannedExecutionService, recovery: verificationRecovery,
       getSettingsRevision: () => agentSettings.view().revision,
+      getSettingsFingerprint: authorizationId => createHmac('sha256', authorizationId)
+        .update(JSON.stringify(AGENT_ROLES.map(({ id }) => agentSettings.resolve(id)))).digest('hex'),
+      restoreSubject: value => teamAccess ? teamAccess.restoreExecutionSubject(value) : restoreLocalExecutionSubject(value),
       checkProject: projectId => orchestrator.withProjectCheckpoint(projectId, () => {
         const services = [executionService, verificationPlanningService, plannedExecutionService].filter(Boolean);
         const check = index => index === services.length ? undefined : services[index].withProjectCheckpoint(projectId, () => check(index + 1));
