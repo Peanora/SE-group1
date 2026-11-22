@@ -24,7 +24,7 @@ if (flag === '--archive') {
   const archive = await inspectPlannedArchive(await readFile(target));
   ({ files, binding: { candidateCommit } } = archive);
 } else {
-  const git = args => execFileSync('git', ['-C', target, ...args], { encoding: 'utf8' }).trim();
+  const git = args => execFileSync('git', ['--no-optional-locks', '-C', target, ...args], { encoding: 'utf8' }).trim();
   if (git(['status', '--porcelain'])) throw new Error('请传入已固定且干净的候选工作区。');
   candidateCommit = git(['rev-parse', 'HEAD']);
   files = await readProjectFiles(target);
@@ -127,6 +127,10 @@ try {
   check('parallel-capacity', race.map(result => result.status).sort(), [201, 409]);
   const availability = await request('scheduler', 'GET', `/api/availability?resourceId=${resourceId}&slot=${raceSlot}`);
   check('parallel-capacity-persisted', { status: availability.status, held: availability.data?.held, available: availability.data?.available }, { status: 200, held: 1, available: 0 });
+  const duplicatedWaiter = await request('bob', 'POST', '/api/waitlist', { resourceId, slot: raceSlot, reference: 'INVARIANTS-C' });
+  check('queued-reference-is-unique-across-slots', [400, 409].includes(duplicatedWaiter.status), true);
+  const duplicateHold = await request('alice', 'POST', '/api/holds', { resourceId, slot: '2030-07-02-AM', reference: 'INVARIANTS-C', key: 'invariants-duplicate' });
+  check('hold-cannot-reuse-queued-reference', [400, 409].includes(duplicateHold.status), true);
   await stop();
   runtime = await startWebRuntime({ workspace, timeoutMs: 30000 });
   const restarted = await request('bob', 'GET', `/api/bookings/${promotedId}`);
