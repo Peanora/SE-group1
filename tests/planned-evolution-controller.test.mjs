@@ -138,7 +138,7 @@ test('evolution drafts retain owned data, bind exact review and survive restart 
 
 test('HTTP start crash windows preserve the exact execution and permit only an undispatched retry', async t => {
   const temp = await realpath(os.tmpdir());
-  for (const fault of ['after-reservation', 'before-reservation', 'rollback-association', 'replaced-ledger', 'revoke-before-reservation']) await t.test(fault, async t => {
+  for (const fault of ['after-reservation', 'before-reservation', 'rollback-association', 'replaced-ledger', 'revoke-before-reservation', 'legacy-unbound', 'legacy-linked']) await t.test(fault, async t => {
     const directory = await mkdtemp(path.join(temp, 'evolution-start-intent-'));
     const data = planning('project-start-intent');
     const identity = { projectId: data.project.id, runId: data.run.id };
@@ -191,7 +191,8 @@ test('HTTP start crash windows preserve the exact execution and permit only an u
       assert.equal(response.status, 200);
       return (await response.json()).evolutions[0];
     };
-    const original = await boot(fault === 'replaced-ledger' ? 'before-reservation' : fault);
+    const interruptedAfterReservation = fault === 'after-reservation' || fault === 'legacy-linked';
+    const original = await boot(fault === 'replaced-ledger' || fault === 'legacy-unbound' ? 'before-reservation' : fault === 'legacy-linked' ? 'after-reservation' : fault);
     let resumed;
     if (fault === 'rollback-association') {
       const failed = await original.request('POST', { evolutionId });
@@ -207,8 +208,17 @@ test('HTTP start crash windows preserve the exact execution and permit only an u
     } else {
       await assert.rejects(original.request('POST', { evolutionId }), TypeError);
       const [exitCode] = await original.exited;
-      assert.equal(exitCode, fault === 'after-reservation' ? 42 : 41);
+      assert.equal(exitCode, interruptedAfterReservation ? 42 : 41);
       if (fault === 'replaced-ledger') modifyFixtureLedger("UPDATE evolution_start_authority SET nonce='different-ledger' WHERE id=1");
+      if (fault === 'legacy-unbound' || fault === 'legacy-linked') {
+        const legacy = new DatabaseSync(path.join(directory, 'evolutions', 'evolutions.sqlite'));
+        try {
+          const old = { ...record };
+          if (fault === 'legacy-linked') old.executionId = queryExecution('SELECT id FROM executions')[0].id;
+          legacy.prepare("UPDATE evolutions SET status=?,record=? WHERE id=?").run(old.executionId ? 'running' : 'starting', JSON.stringify(old), evolutionId);
+          modifyFixtureLedger('DELETE FROM evolution_starts');
+        } finally { legacy.close(); }
+      }
       resumed = await boot('no-fault');
     }
     const verifyProjectBlocked = async () => {
@@ -220,10 +230,10 @@ test('HTTP start crash windows preserve the exact execution and permit only an u
       assert.deepEqual(await planned.json(), { code: 'not_ready' });
       assert.deepEqual(queryExecution('SELECT * FROM budgets'), []);
     };
-    if (fault === 'replaced-ledger') await verifyProjectBlocked();
+    if (fault === 'replaced-ledger' || fault === 'legacy-unbound') await verifyProjectBlocked();
     const evolution = await readEvolution(resumed);
     let executionId;
-    if (fault === 'after-reservation') {
+    if (interruptedAfterReservation) {
       const [execution] = queryExecution('SELECT id,status,active FROM executions');
       assert.deepEqual([execution.status, execution.active], ['reconciliation_required', 1]);
       assert.equal(evolution.executionId, execution.id);
@@ -234,11 +244,13 @@ test('HTTP start crash windows preserve the exact execution and permit only an u
       assert.deepEqual(queryExecution('SELECT id FROM executions'), []);
       assert.deepEqual(queryExecution('SELECT * FROM budgets'), []);
       assert.equal(evolution.executionId, null);
-      if (fault === 'replaced-ledger') {
+      if (fault === 'replaced-ledger' || fault === 'legacy-unbound') {
         assert.equal(evolution.status, 'reconciliation_required');
         assert.equal(evolution.actions.canStart, false);
+        if (fault === 'legacy-unbound') assert.match(evolution.error, /旧版演进启动记录缺少可核对的执行编号和启动意图/u);
         assert.equal((await resumed.request('POST', { evolutionId })).status, 409);
         await verifyProjectBlocked();
+        await assert.rejects(stat(path.join(directory, 'unexpected-model-call')), { code: 'ENOENT' });
         return;
       }
       assert.equal(evolution.status, 'approved');
@@ -258,7 +270,8 @@ test('HTTP start crash windows preserve the exact execution and permit only an u
     assert.equal(duplicated.status, 409);
     assert.equal((await readEvolution(resumed)).executionId, executionId);
     assert.deepEqual(queryExecution('SELECT id FROM executions').map(row => row.id), [executionId]);
-    assert.deepEqual(queryExecution('SELECT evolution_id,evolution_revision,execution_id FROM evolution_starts').map(row => [...Object.values(row)]), [[evolutionId, revision, executionId]]);
+    assert.deepEqual(queryExecution('SELECT evolution_id,evolution_revision,execution_id FROM evolution_starts').map(row => [...Object.values(row)]),
+      fault === 'legacy-linked' ? [] : [[evolutionId, revision, executionId]]);
     assert.deepEqual(queryExecution('SELECT attempts,used_calls,reserved_calls FROM budgets').map(row => [...Object.values(row)]), [[1, 0, 6]]);
     await assert.rejects(stat(path.join(directory, 'unexpected-model-call')), { code: 'ENOENT' });
   });
