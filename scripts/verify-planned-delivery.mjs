@@ -5,14 +5,32 @@ import { loadEnv } from '../server.mjs';
 import { revalidatePlannedArchive } from '../lib/planned-archive.mjs';
 
 const [, , flag, filename, mode, extra] = process.argv;
-if (flag !== '--archive' || !filename || extra || mode !== undefined && mode !== '--cold-start') {
-  console.error('使用 --archive ZIP路径 [--cold-start] 进行免费交付复核。不继承历史Review或软件通过。'); process.exitCode = 2;
+if (flag !== '--archive' || !filename || extra || (mode !== undefined && !['--cold-start', '--inspect'].includes(mode))) {
+  console.error('使用 --archive ZIP路径 [--inspect | --cold-start] 进行免费交付核对或复验。不继承历史Review或软件通过。'); process.exitCode = 2;
 } else {
-  await loadEnv(); const controller = new AbortController(), stop = () => controller.abort(); process.once('SIGINT', stop); process.once('SIGTERM', stop);
+  if (mode !== '--inspect') await loadEnv();
+  const controller = new AbortController(), stop = () => controller.abort(); process.once('SIGINT', stop); process.once('SIGTERM', stop);
   const deadline = mode === '--cold-start' ? setTimeout(stop, 120000) : null;
   try {
     const archiveFile = path.resolve(filename);
-    if (mode === '--cold-start') {
+    if (mode === '--inspect') {
+      const { inspectPlannedArchive } = await import('../lib/planned-archive.mjs');
+      const stat = await lstat(archiveFile);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 8 * 1024 * 1024) throw new Error('归档文件无效');
+      const archive = await inspectPlannedArchive(await readFile(archiveFile));
+      console.log(JSON.stringify({
+        status: 'integrity_verified',
+        taskAccepted: false,
+        historicalAcceptanceVerified: false,
+        totalModelCalls: 0,
+        archiveHash: archive.archiveHash,
+        startGuidePresent: archive.startGuidePresent,
+        binding: archive.binding,
+        sourceFiles: archive.files.map(file => file.path),
+        verificationReport: archive.verificationReport,
+        notice: archive.notice,
+      }, null, 2));
+    } else if (mode === '--cold-start') {
       const { inspectPlannedArchive } = await import('../lib/planned-archive.mjs');
       const { runPlannedColdStart } = await import('../lib/planned-cold-start.mjs');
       const stat = await lstat(archiveFile);
