@@ -1,5 +1,20 @@
 # 本地原型接口约定
 
+## 多 Agent 规格评审
+
+`GET /api/health` 增加 `specificationMeeting:{available:true,version:2,adapter:"offline_fixture"}`。不调用模型，不改变真实交付门禁。
+
+复用 `POST /api/projects/:projectId/runs/:runId/action`，启用和推进仅在手动 v2 `awaiting_spec` 状态由负责人操作，联合确认沿用原审批权限：
+
+- 启用：`{action:"start_spec_meeting",revision:specRevision,scenario:"reservation"}`；另支持 `reject_review`、`late_review` 离线场景。相同基线不得原样新建轮次以清除阻塞。
+- 推进一步：`{action:"advance_spec_meeting",revision:specRevision,roundId}`。不接受客户端 `passed` 等结论字段。返回最新运行及 `planningIssue`，所有结论由后端产生和保存。
+- 裁决：复用 `answer_planning_issue`，`issueId` 取当前问题，`answers` 为议题ID到准确选项的映射，`continue:false` 保存草稿，`true` 要求全部阻塞已答。新答案生成新规格和新会议；离线问题不允许模型解释请求。
+- 联合确认：`{action:"approve_spec",revision:specRevision,meetingRevision:bundleRevision,feedback}`。已启用会议时缺失联合包版本、自测/必审未通过、旧版本、未关阻塞或包变化均返回409。成功才继续原架构/任务及计划确认。
+
+运行新增 `specReview:{required,currentRoundId,rounds}`。轮次包含 `binding`、`seats`、`coverage`、`proposals`、`issues`、`decisions`、`obligations`、`nodes`、`checklist`、`bundleRevision`、`confirmation`。节点状态为 `pending`、`passed`、`awaiting_review`、`awaiting_user`、`rejected`；轮次还包含 `in_progress`、`waiting`、`blocked`、`awaiting_decision`、`awaiting_confirmation`、`superseded`。缺席/超时返回持久等待，不伪造通过；重试仍用推进动作，退回须实际修订。项目并发操作继续返回409。
+
+通过原产物接口读取 `spec-review-minutes.json` 和 `stage-review-checklist.json`，并随规划ZIP导出。纪要明确 `kind:offline_fixture`，清单标记 `definitionOnly:true`、逐规则 `executed:false`；确认类型为 `human_confirmation_of_offline_review`。它们不是源码、真实测试或软件交付证据。接口和版本限制见 [详细说明](SPECIFICATION_MEETING.md)。
+
 ## 自动交付入口
 
 `GET /api/health` 的 `automaticDelivery` 提供能力可用性、启动条件是否就绪和各阶段预算。 `POST /api/projects/:projectId/runs` 可在 `mode:"model"` 下携带 `automaticDelivery:{modelUsageConfirmed:true}`。仅接受本机请求，启用团队权限时须由负责人发起。省略该字段会使用人工确认。自动入口的规格、工程与验收清单预算分别为 4、5、3 次模型请求，系统更低的上限优先。开发仅启动一次，其整体或逐任务预算沿用研发服务。

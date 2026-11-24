@@ -1,6 +1,7 @@
 import { canEditPlanTasks, createPlanningReview } from './planning-review.js';
 import { createSpecRepair } from './spec-repair.js';
 import { createPlanningIssue } from './planning-issue.js';
+import { createSpecificationMeeting } from './specification-meeting.js';
 import { createExecutionPanel } from './execution-panel.js';
 import { createVerificationPlans } from './verification-plans.js';
 import { createPlannedExecutionPanel } from './planned-execution.js';
@@ -564,6 +565,11 @@ const planningIssue = createPlanningIssue({
   submit: reviewAction,
 });
 
+const specificationMeeting = createSpecificationMeeting({ container: $('#specification-meeting-host'),
+  getState: () => ({ run: historicalRun() ? { ...state.run, sourceSuperseded: true } : state.run,
+    busy: state.busy || state.selectionPending, canEdit: !state.health?.teamAccess?.enabled || state.actorRole === 'owner' }),
+  submit: reviewAction, inspectIssue: () => { workspaceLayout.show('plan'); planningIssue.open(); }, showArtifact });
+
 function renderProjects() {
   $('#project-count').textContent = state.projects.length;
   $('#project-list').innerHTML = state.projects.length ? state.projects.map(project => {
@@ -652,7 +658,7 @@ function renderControls() {
   $('#workflow-subtitle').textContent = run ? `${run.automaticDelivery ? '自动交付' : run.mode === 'model' ? '模型规划' : '本地规则规划'}　运行 ${run.id.slice(-8)}${run.automaticDelivery ? '' : run.workflowVersion === 2 ? '　两次人工确认' : '　旧版流程'}` : '六个阶段，保留每版依据';
   $('#workflow-confirmation-legend').textContent = run?.automaticDelivery ? '自动校验规格与计划' : run && run.workflowVersion !== 2 ? '旧版流程：导出前确认' : '先确认规格，再确认计划';
   $('#source-history-notice').hidden = !historical;
-  planningReview.render(); specRepair.render();
+  planningReview.render(); specRepair.render(); specificationMeeting.render();
   if (automaticActive && automatic?.status !== 'needs_clarification') $('#review-banner').hidden = true;
   const issueOpen = planningIssue.render();
   if (issueOpen) $('#spec-repair-host').hidden = true;

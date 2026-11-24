@@ -93,3 +93,11 @@ dialog{padding:0;border:1px solid #dce4f0;border-radius:13px;box-shadow:0 28px 9
 .spec-repair-actions{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin-top:6px}
 .spec-repair-actions .text-button{margin-left:auto}
 @media(max-width:760px){.spec-repair{padding:18px 15px}.spec-repair-meta{grid-template-columns:1fr;gap:8px}.spec-repair-fields{grid-template-columns:1fr}.spec-repair-actions{display:grid;grid-template-columns:1fr}.spec-repair-actions .text-button{margin-left:0;min-height:38px}.spec-repair-actions .button{min-height:40px;font-size:12px}}
+.specification-meeting { margin: 18px 0; padding: 20px; background: #f5f8ff; border: 1px solid #cbd8ee; border-radius: 10px; overflow-wrap: anywhere; }
+.specification-meeting h3 { margin-top: 0; }
+.specification-meeting p, .specification-meeting li { font-size: 13px; line-height: 1.7; }
+.specification-meeting select { max-width: 100%; margin: 8px; padding: 8px; }
+.spec-meeting-nodes { padding-left: 22px; }
+.spec-meeting-nodes > li { margin: 12px 0; padding-bottom: 10px; border-bottom: 1px solid #d9e2f0; }
+.specification-meeting details { margin: 10px 0; }
+.specification-meeting pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow: auto; font-size: 12px; background: white; padding: 12px; }
