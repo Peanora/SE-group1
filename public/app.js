@@ -11,10 +11,12 @@ import { createSimulatedTasks, SIM_STATUS } from './simulated-tasks.js';
 import { createWorkspaceLayout } from './workspace-layout.js';
 import { createWorkspaceNotices } from './workspace-notices.js';
 import { deliverySteps } from './delivery-workflow.js';
+import { createTaskOrchestration } from './task-orchestration-view.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const escape = (value = '') => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const taskOrchestration = createTaskOrchestration($('#records-body'), { escape, onLayoutChange: () => { if (state.tab === 'tasks') renderRecords(); } });
 const state = { health: null, projects: [], project: null, run: null, automatic: null, stageId: 'spec', taskId: null, artifactName: 'task.md', tab: 'events', raw: false, busy: false, epoch: 0, selectionPending: false, pollTimer: null, feedback: '', importFile: null, filename: 'requirements.md' };
 let sourceReadyProject = '';
 let deliveryMarkup = '';
@@ -707,21 +709,6 @@ function renderEvents() {
   if (!events.length) return emptyContent('log', '每一步都将在这里留下记录', '开始编排后，查看阶段执行、失败原因与操作结果。');
   return `<div class="event-list">${events.slice(-200).map((event) => `<div class="event-row"><span class="event-icon ${escape(event.level)}">${event.level === 'success' ? '✓' : event.level === 'error' ? '!' : '·'}</span><time class="event-time" datetime="${escape(event.time)}">${escape(formatTime(event.time))}</time><span class="event-stage">${escape(event.stageId ? stageTitle(event.stageId) : '运行控制')}</span><p class="event-message">${escape(event.message)}</p></div>`).join('')}</div>`;
 }
-function taskLayout(tasks) {
-  const byId = new Map(tasks.map((task) => [task.id, task]));
-  const levels = new Map(); const visiting = new Set();
-  function getLevel(id) {
-    if (levels.has(id)) return levels.get(id);
-    if (visiting.has(id)) return 0;
-    visiting.add(id);
-    const task = byId.get(id);
-    const level = Math.max(0, ...(task?.dependsOn || []).filter((dependency) => byId.has(dependency)).map((dependency) => getLevel(dependency) + 1));
-    visiting.delete(id); levels.set(id, level); return level;
-  }
-  const counts = new Map(); const positions = new Map();
-  for (const task of tasks) { const level = getLevel(task.id); const row = counts.get(level) || 0; positions.set(task.id, { x: 24 + level * 230, y: 22 + row * 110 }); counts.set(level, row + 1); }
-  return { positions, width: Math.max(750, (Math.max(...levels.values()) + 1) * 230 + 24), height: Math.max(280, Math.max(...counts.values()) * 110 + 26) };
-}
 function renderTasks() {
   const simulation = simulatedTasks.selection(), preview = simulation ? null : planningReview.taskDraft();
   const owner = !state.health?.teamAccess?.enabled || state.actorRole === 'owner';
@@ -729,26 +716,66 @@ function renderTasks() {
   const note = preview ? '蓝色是改动的任务，橙色是需要一起核对的下游任务。' : !owner ? '当前账户只能查看任务。' : simulation ? '正在查看模拟记录。请返回开发任务图修改计划。'
     : historicalRun() ? '历史需求版本只读。' : editable && state.run.status === 'succeeded' ? '修改后保存为新计划版本，再重新确认计划和验收清单。' : editable ? '选中任务即可修改。' : '计划生成并进入审阅后可以修改任务。';
   const toolbar = `<div class="task-change-toolbar"><div><strong>开发任务</strong><p>${note}</p></div><div>${simulation ? '<button type="button" class="button button-outline" data-return-task-plan>返回任务计划</button>' : ''}<button type="button" class="button button-outline" data-edit-selected-task ${!editable || state.busy || state.selectionPending ? 'disabled' : ''}>修改此任务</button><button type="button" class="button button-primary" data-add-feature ${!owner || !state.project || state.busy || state.selectionPending ? 'disabled' : ''}>新增功能</button></div></div>`;
-  return toolbar + renderTaskWorkspace();
+  return `<section class="task-orchestration-root" aria-label="开发任务编排">${toolbar}${renderTaskWorkspace(simulation, preview, owner)}</section>`;
 }
-function renderTaskWorkspace() {
-  const simulation = simulatedTasks.selection();
-  const preview = simulation ? null : planningReview.taskDraft();
+function renderTaskWorkspace(simulation, preview, owner) {
   const tasks = simulation ? simulation.tasks.map(task => task.definition) : preview?.tasks || state.run?.tasks || [];
   if (!tasks.length) return emptyContent('graph', '开发任务将在这里展开', '任务拆解完成后，可检查依赖关系、验收条件与需求来源。');
   if (!tasks.some((task) => task.id === state.taskId)) state.taskId = tasks[0].id;
   const selected = tasks.find((task) => task.id === state.taskId);
-  const layout = taskLayout(tasks);
-  const paths = tasks.flatMap((task) => (task.dependsOn || []).filter((id) => layout.positions.has(id)).map((id) => {
-    const from = layout.positions.get(id); const to = layout.positions.get(task.id);
-    const x1 = from.x + 196, x2 = to.x, y1 = from.y + 44, y2 = to.y + 44;
-    return `<path class="task-edge" d="M${x1} ${y1}C${x1 + 30} ${y1},${x2 - 30} ${y2},${x2} ${y2}" marker-end="url(#task-arrow)"/>`;
-  })).join('');
-  const nodes = tasks.map((task) => { const pos = layout.positions.get(task.id), changed = preview?.changedIds.includes(task.id), downstream = preview?.downstreamIds.includes(task.id); return `<button class="dev-task ${simulation ? 'sim-' + simulation.tasks.find(item => item.id === task.id)?.status : ''} ${changed ? 'draft-changed' : downstream ? 'draft-downstream' : ''} ${task.id === state.taskId ? 'selected' : ''}" style="left:${pos.x}px;top:${pos.y}px" data-task="${escape(task.id)}" data-focus-key="task-${escape(task.id)}" aria-pressed="${task.id === state.taskId}"><span class="dev-task-top"><span>${escape(task.id)}</span><span>${escape(simulation ? SIM_STATUS[simulation.tasks.find(item => item.id === task.id)?.status] : changed ? '未保存改动' : downstream ? '下游待核对' : task.category || '开发')}</span></span><span class="dev-task-title">${escape(task.title)}</span></button>`; }).join('');
-  const sources = (selected.requirementIds || []).map((id) => (simulation?.spec ?? state.run.spec)?.requirements?.find((requirement) => requirement.id === id)).filter(Boolean);
+  const run = state.run;
+  const version = simulation?.planRevision ?? run.planRevision;
+  const key = JSON.stringify([run.id, version, simulation?.id]);
+  const graph = taskOrchestration.render({ key, tasks, selected, simulation, preview, statusNames: SIM_STATUS });
+  const taskNames = new Map(tasks.map(task => [task.id, task.title]));
+  const taskLinks = (ids, empty) => ids.length ? ids.map(id => `<button type="button" class="pill" data-task="${escape(id)}" title="${escape(taskNames.get(id) || id)}">${escape(id)}</button>`).join('') : `<span class="pill">${empty}</span>`;
+  const sources = (selected.requirementIds || []).map((id) => (simulation ? simulation.spec : run.spec)?.requirements?.find((requirement) => requirement.id === id)).filter(Boolean);
   const boundary = [['计划修改范围', selected.writePaths], ['输入资料', selected.inputs?.length ? selected.inputs : ['当前计划未明确输入资料，请结合前置任务与规格来源核对。']], ['预期产出', selected.outputs?.length ? selected.outputs : ['当前计划未明确输出，请结合目标与验收条件核对。']]]
     .filter(([, values]) => Array.isArray(values) && values.length).map(([label, values]) => `<h4>${label}</h4><ul>${values.map(value => `<li>${escape(value)}</li>`).join('')}</ul>`).join('');
-  return `<div class="task-workspace"><div class="task-graph-zone"><div class="task-caption">开发任务依赖图 / ${tasks.length} 个任务 / ${simulation ? '模拟运行 · 不代表真实软件验收' : '待实施计划'} / 点击查看状态、验收与来源</div><div class="task-graph-scroll"><div class="task-graph" style="width:${layout.width}px;height:${layout.height}px"><svg class="task-edges" width="${layout.width}" height="${layout.height}" aria-hidden="true"><defs><marker id="task-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#bfccdf"/></marker></defs>${paths}</svg>${nodes}</div></div></div><aside class="task-detail"><p class="task-detail-id">${escape(selected.id)} / ${escape(selected.category || '开发任务')}</p><h3>${escape(selected.title)}</h3><p>${escape(selected.description)}</p>${simulatedTasks.detail(selected.id)}<h4>前置任务</h4><div>${selected.dependsOn?.length ? selected.dependsOn.map((id) => `<button class="pill" data-task="${escape(id)}">${escape(id)}</button>`).join('') : '<span class="pill">无前置任务</span>'}</div><h4>验收条件</h4><ul>${(selected.acceptance || []).map((item) => `<li>${escape(item)}</li>`).join('')}</ul>${selected.suggestedFiles?.length ? `<h4>建议文件</h4><div>${selected.suggestedFiles.map((file) => `<span class="pill">${escape(file)}</span>`).join('')}</div>` : ''}${boundary}<h4>需求来源</h4>${sources.length ? sources.map((source) => `<div class="task-source-quote"><strong>${escape(source.id)} ${escape(source.title)}</strong><br>${escape(source.sourceQuote || source.description)}</div>`).join('') : '<p>基础工程或集成验证任务</p>'}</aside></div>`;
+  const files = (selected.suggestedFiles || []).map(file => `<span class="pill">${escape(file)}</span>`).join('');
+  const sourceDetails = sources.map(source => `<div class="task-source-quote"><strong>${escape(source.id)} ${escape(source.title)}</strong><br>${escape(source.sourceQuote || source.description)}</div>`).join('');
+  return `${renderTaskHandoff(run, simulation, preview, owner)}
+    <div class="task-workspace">
+      ${graph.html}
+      <aside class="task-detail" aria-label="所选任务详情">
+        <p class="task-detail-id">${escape(selected.id)} / ${escape(selected.category || '开发任务')}</p>
+        <h3>${escape(selected.title)}</h3><p>${escape(selected.description)}</p>
+        ${simulatedTasks.detail(selected.id)}
+        <h4>前置任务</h4><div>${taskLinks(selected.dependsOn || [], '无前置任务')}</div>
+        <h4>后续任务</h4><div>${taskLinks(graph.nextIds, '无后续任务')}</div>
+        <h4>验收条件</h4><ul>${(selected.acceptance || []).map(item => `<li>${escape(item)}</li>`).join('')}</ul>
+        ${files ? `<h4>建议文件</h4><div>${files}</div>` : ''}${boundary}
+        <h4>需求来源</h4>${sourceDetails || '<p>基础工程或集成验证任务</p>'}
+      </aside>
+    </div>`;
+}
+function renderTaskHandoff(run, simulation, preview, owner) {
+  const specRevision = simulation ? simulation.specRevision : run.specRevision;
+  const planRevision = simulation ? simulation.planRevision : run.planRevision;
+  const confirmedSpec = specRevision && (simulation || run.approvals?.spec?.revision === specRevision);
+  const confirmedPlan = confirmedSpec && planRevision && (simulation || run.approvals?.plan?.revision === planRevision
+    && run.approvals.plan.specRevision === specRevision);
+  const revision = (version, hash) => [version ? `第 ${version} 版` : '', hash?.slice(0, 8)].filter(Boolean).join(' / ') || '旧版记录';
+  const specVersion = !simulation || specRevision === run.specRevision ? run.specVersion : null;
+  const planVersion = simulation ? simulation.planVersion : run.planVersion;
+  const specLabel = confirmedSpec ? '规格已确认' : '设计规格';
+  const planLabel = preview ? '计划修订预览' : confirmedPlan ? '计划已确认' : run.workflowVersion === 2 ? '计划待确认' : '开发计划';
+  const canOpenSpec = (!simulation || specRevision === run.specRevision) && run.artifacts?.some(item => item.name === 'spec.md');
+  const actionable = !simulation && !historicalRun() && !automaticOwnsRun() && !state.busy && !state.selectionPending;
+  const review = actionable && (owner || state.actorRole === 'reviewer') && run.status === 'awaiting_review';
+  const verification = actionable && owner && !preview && run.status === 'succeeded' && executionContext().planningStatus === 'confirmed';
+  return `<div class="task-orchestration-group">
+    <div class="task-orchestration-lifecycle">
+      <div><strong>${specLabel}</strong><small>${escape(revision(specVersion, specRevision))}</small></div>
+      <span aria-hidden="true">→</span>
+      <div><strong>${planLabel}</strong><small>${escape(revision(planVersion, planRevision))}</small></div>
+    </div>
+    <div class="task-orchestration-actions">
+      ${canOpenSpec ? '<button type="button" class="button button-outline" data-artifact="spec.md" data-focus-key="task-open-spec">查看设计规格</button>' : ''}
+      ${review ? '<button type="button" class="button button-primary" data-task-handoff="plan-approval" data-focus-key="task-approve-plan">去确认计划</button>' : ''}
+      ${verification ? '<button type="button" class="button button-primary" data-task-handoff="verification" data-focus-key="task-go-verification">准备验收与开发</button>' : ''}
+    </div>
+  </div>`;
 }
 function inlineMarkdown(text) {
   return escape(text).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -806,9 +833,9 @@ function renderRecords() {
   $('#records-hint').textContent = ({ events: '执行状态与操作记录', tasks: '待实施计划与独立模拟运行（非真实验收）', artifacts: '可阅读、可交接的项目产物' })[state.tab];
   const oldEvents = $('.event-list'); const followEvents = !oldEvents || oldEvents.scrollHeight - oldEvents.scrollTop - oldEvents.clientHeight < 45;
   const savedScroll = {};
-  for (const name of ['event-list', 'task-graph-scroll', 'task-detail', 'artifact-content', 'artifact-list']) { const element = $(`.${name}`); if (element) savedScroll[name] = { x: element.scrollLeft, y: element.scrollTop }; }
+  for (const name of ['event-list', 'task-graph-scroll', 'task-detail', 'artifact-content', 'artifact-list']) { const element = $(`.${name}`); if (element) savedScroll[name] = { x: element.scrollLeft, y: element.scrollTop, context: element.dataset.graphContext }; }
   replacePreservingFocus($('#records-body'), state.tab === 'tasks' ? renderTasks() : state.tab === 'artifacts' ? renderArtifacts() : renderEvents());
-  for (const [name, pos] of Object.entries(savedScroll)) { const element = $(`.${name}`); if (element) { element.scrollLeft = pos.x; element.scrollTop = pos.y; } }
+  for (const [name, pos] of Object.entries(savedScroll)) { const element = $(`.${name}`); if (element && element.dataset.graphContext === pos.context) { element.scrollLeft = pos.x; element.scrollTop = pos.y; } }
   if (state.tab === 'events' && followEvents && $('.event-list')) $('.event-list').scrollTop = $('.event-list').scrollHeight;
 }
 function renderRun() { renderControls(); renderWorkflow(); renderInspector(); renderRecords(); syncExecutionPanel(); syncSimulatedTasks(); workspaceLayout.sync(); renderDeliveryProgress(); notices.syncContext(); notices.failure(state.run); }
@@ -1077,7 +1104,13 @@ document.addEventListener('click', (event) => {
   const close = event.target.closest('[data-close-dialog]'); if (close) close.closest('dialog')?.close();
   const project = event.target.closest('[data-project]'); if (project && !state.busy) selectProject(project.dataset.project);
   const stage = event.target.closest('[data-stage]'); if (stage) { state.stageId = stage.dataset.stage; renderWorkflow(); renderInspector(); }
-  const task = event.target.closest('[data-task]'); if (task) { state.taskId = task.dataset.task; renderRecords(); rememberSelection(); }
+  const handoff = event.target.closest('[data-task-handoff]');
+  if (handoff) { openDeliveryStage(handoff.dataset.taskHandoff); return; }
+  const task = event.target.closest('[data-task]');
+  if (task) {
+    state.taskId = task.dataset.task; renderRecords(); rememberSelection();
+    if (!task.classList.contains('dev-task')) taskOrchestration.revealSelected();
+  }
   const artifact = event.target.closest('[data-artifact]'); if (artifact) showArtifact(artifact.dataset.artifact);
   const tab = event.target.closest('[data-tab]'); if (tab) { state.tab = tab.dataset.tab; renderRecords(); }
   const remove = event.target.closest('[data-delete-project]'); if(remove){ if(!remove.disabled) deleteProject(remove.dataset.deleteProject); return; }
