@@ -13,13 +13,145 @@ const proposalStatus = row => (row.status === 'generating' && STAGE_LABELS[row.g
   || STATUSES[row.status];
 
 const STYLE = `
-.verification-plans{margin-top:20px;min-width:0;padding:20px 22px;border:1px solid #e3e9f1;border-radius:12px;background:#fff;color:#344c6d;font:13px/1.8 "Microsoft YaHei",sans-serif}
-.verification-plans *{box-sizing:border-box;min-width:0}.verification-plans [hidden]{display:none!important}.verification-plans h2{margin:0;font-size:19px}.verification-plans h3{font-size:15px}
-.verification-plans p,.verification-plans summary{overflow-wrap:anywhere}.verification-plans label{display:grid;gap:5px;margin:12px 0}.verification-plans textarea,.verification-plans select{width:100%;max-width:100%;padding:8px;border:1px solid #cfd9e6;border-radius:6px;background:#fff;color:inherit;font:inherit}
-.verification-plans textarea{min-height:90px;resize:vertical}.verification-plans .vp-json{min-height:270px;font:12px/1.7 monospace}.verification-plans .vp-consent{display:flex;align-items:flex-start;gap:8px}.verification-plans .vp-consent input{flex:none;margin-top:7px}
-.verification-plans button{padding:8px 13px;margin:4px 8px 4px 0;border:1px solid #cbd7e7;border-radius:6px;background:#f8fafc;color:#344c6d;font:inherit;cursor:pointer;white-space:normal}.verification-plans button:disabled{opacity:.5;cursor:default}.verification-plans .vp-primary{background:#2469b0;border-color:#2469b0;color:white}
-.verification-plans .vp-note{padding:10px 12px;border-left:3px solid #90b6dc;background:#f3f7fc}.verification-plans .vp-error{border-color:#c25b4f;background:#fff4f2;color:#983c35}.verification-plans pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;padding:10px;background:#f4f6f9;font:12px/1.7 monospace}.verification-plans details{margin:12px 0}.verification-plans summary{cursor:pointer;font-weight:600}
-@media(max-width:600px){.verification-plans{padding:16px 12px}.verification-plans button{width:100%;margin:5px 0}}
+.verification-plans {
+  --vp-ink: var(--tf-ink, #182342);
+  --vp-muted: var(--tf-muted, #596781);
+  --vp-line: var(--tf-line, #d5ddf0);
+  --vp-accent: var(--tf-accent, #3846ce);
+  --vp-wash: var(--tf-accent-soft, #e8ecff);
+  --vp-bg: var(--tf-rail, #f1f4f9);
+  min-width: 0;
+  color: var(--vp-ink);
+  font: 13px/1.55 "Segoe UI", "Microsoft YaHei UI", sans-serif;
+}
+.verification-plans * { box-sizing: border-box; min-width: 0; }
+.verification-plans [hidden] { display: none !important; }
+.verification-plans :focus-visible { outline: 2px solid var(--vp-accent); outline-offset: 3px; }
+.verification-plans :is(h2,h3,h4,h5,p,ol) { margin: 0; }
+.verification-plans :is(p,summary,h3,strong) { overflow-wrap: anywhere; }
+.verification-plans h2 { font-size: 17px; font-weight: 660; }
+.verification-plans h3 { font-size: 19px; font-weight: 660; }
+.verification-plans h4 { font-size: 14px; font-weight: 650; }
+.verification-plans h5 { font-size: 12px; font-weight: 650; }
+
+.verification-plans :where(button,select,textarea,.vp-import > summary) {
+  min-height: 37px;
+  padding: 7px 9px;
+  border: 1px solid var(--vp-line);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--vp-ink);
+  font: inherit;
+}
+.verification-plans :is(button,summary) { cursor: pointer; }
+.verification-plans :is(button, .vp-import > summary):not(:disabled):hover { border-color: #a7b2df; }
+.verification-plans button:disabled { opacity: .52; cursor: default; }
+.verification-plans button.vp-primary { color: #fff; border-color: var(--vp-accent); background: var(--vp-accent); }
+.verification-plans :is(select,textarea) { width: 100%; max-width: 100%; }
+.verification-plans select { text-overflow: ellipsis; }
+.verification-plans textarea { display: block; min-height: 75px; resize: vertical; }
+.verification-plans .vp-json { min-height: 310px; font: 12px/1.68 var(--mono-type, Consolas, monospace); }
+.verification-plans label { display: grid; gap: 4px; font-weight: 580; }
+.verification-plans textarea { font-weight: 400; }
+
+.verification-plans .vp-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(125px, 1fr) auto auto auto;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 0 10px;
+  border-bottom: 1px solid var(--vp-line);
+}
+.verification-plans .vp-toolbar h2 { margin-inline-end: 5px; }
+.verification-plans .vp-record-select { grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 6px; }
+.verification-plans .vp-record-select > span { color: var(--vp-muted); font-size: 12px; }
+.verification-plans .vp-import[open] { grid-column: 1 / -1; }
+.verification-plans .vp-import > summary { width: fit-content; list-style-position: inside; color: var(--vp-accent); font-weight: 590; }
+.verification-plans .vp-import-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 8px 11px;
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid var(--vp-line);
+  border-radius: 6px;
+  background: var(--vp-bg);
+}
+.verification-plans .vp-import-fields p { grid-column: 1 / -1; color: var(--vp-muted); }
+.verification-plans .vp-import-fields button { grid-column: 1 / -1; justify-self: start; }
+.verification-plans .vp-import-fields .vp-json { min-height: 148px; }
+
+.verification-plans .vp-workstate { margin: 8px 0; color: var(--vp-muted); }
+.verification-plans .vp-note { margin: 7px 0; padding: 8px 10px; border-inline-start: 3px solid var(--vp-accent); background: var(--vp-wash); }
+.verification-plans .vp-error { border-color: #c35c60; color: #932d37; background: #fff0ef; }
+.verification-plans .vp-authorization {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 7px 9px;
+  border: 1px solid var(--vp-line);
+  border-radius: 6px;
+  background: var(--vp-bg);
+}
+.verification-plans .vp-budget { flex: 1 1 270px; color: var(--vp-muted); font-size: 12px; }
+.verification-plans .vp-consent { display: flex; flex: 1 1 245px; align-items: start; gap: 5px; font-size: 12px; }
+.verification-plans .vp-consent input { flex: none; margin: 2px 0 0; accent-color: var(--vp-accent); }
+
+.verification-plans .vp-detail { margin-top: 10px; border: 1px solid var(--vp-line); border-radius: 7px; background: #fff; }
+.verification-plans .vp-record-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 10px 11px;
+  border-bottom: 1px solid var(--vp-line);
+}
+.verification-plans .vp-record-head > p:first-of-type { color: var(--vp-muted); font-size: 12px; text-align: end; }
+.verification-plans .vp-record-status { grid-column: 1 / -1; color: var(--vp-muted); font-size: 12px; }
+.verification-plans .vp-record-status:is([data-status="failed"],[data-status="timed_out"]) { color: #932d37; }
+.verification-plans .vp-record-status[data-status="reconciliation_required"] { color: #825313; }
+.verification-plans .vp-detail > .vp-error { margin: 9px 10px 0; }
+.verification-plans .vp-detail-grid { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(218px, 1fr); align-items: start; }
+.verification-plans .vp-document { padding: 10px 11px; }
+.verification-plans .vp-document-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.verification-plans .vp-document-head button { min-height: 32px; padding-block: 4px; color: var(--vp-accent); }
+.verification-plans .vp-editor { display: grid; gap: 8px; }
+.verification-plans .vp-editor > p { color: var(--vp-muted); font-size: 12px; }
+.verification-plans .vp-decisions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--vp-line); }
+.verification-plans .vp-decisions button { text-align: left; }
+.verification-plans .vp-check-context { padding: 10px 11px; border-inline-start: 1px solid var(--vp-line); background: #f8faff; }
+.verification-plans :is(.vp-coverage,.vp-record-facts) { margin: 6px 0; color: var(--vp-muted); font-size: 12px; }
+.verification-plans .vp-check-group { border-top: 1px solid var(--vp-line); }
+.verification-plans .vp-check-group h5 { padding-block: 6px 3px; }
+.verification-plans .vp-check-group ol { max-height: 168px; padding: 0; overflow: auto; list-style: none; overscroll-behavior: contain; }
+.verification-plans .vp-check-group li {
+  display: grid;
+  grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr);
+  gap: 5px;
+  padding: 4px 0;
+  color: var(--vp-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.verification-plans .vp-check-group li + li { border-top: 1px solid #e7ebf4; }
+.verification-plans .vp-check-context details { margin-top: 5px; border-top: 1px solid var(--vp-line); }
+.verification-plans .vp-check-context summary { padding-block: 5px; font-weight: 620; }
+.verification-plans pre { max-height: 280px; margin: 4px 0; padding: 7px; background: var(--vp-bg); white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; font: 11px/1.6 var(--mono-type, Consolas, monospace); }
+
+@media (max-width: 1080px) {
+  .verification-plans .vp-toolbar { grid-template-columns: minmax(0,1fr) repeat(3,auto); }
+  .verification-plans .vp-toolbar h2 { grid-column: 1 / -1; }
+}
+@media (max-width: 700px) {
+  .verification-plans .vp-toolbar { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .verification-plans :is(.vp-record-select,.vp-import) { grid-column: 1 / -1; }
+  .verification-plans :is(.vp-import-fields,.vp-detail-grid,.vp-record-head) { grid-template-columns: minmax(0,1fr); }
+  .verification-plans .vp-record-head > p:first-of-type { text-align: start; }
+  .verification-plans .vp-check-context { border-inline-start: 0; border-top: 1px solid var(--vp-line); }
+  .verification-plans .vp-json { min-height: 220px; }
+}
 `;
 const text = value => value == null ? '未知' : String(value);
 const count = value => Number.isSafeInteger(value) && value >= 0 ? String(value) : '未知';
@@ -219,37 +351,79 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
       && row.actions?.[{ revise: 'canRevise', approve: 'canApprove', reject: 'canReject' }[kind]] === true;
   }
   function build(element) {
-    root = node('section', null, 'verification-plans'); root.setAttribute('aria-label', '独立测试提案'); root.append(node('style', STYLE), node('h2', '独立测试提案（尚未运行）'),
-      node('p', '生成或导入包含接口和浏览器检查的清单。审阅检查项并确认后，即可进入编码。', 'vp-note'));
+    root = node('section', null, 'verification-plans'); root.setAttribute('aria-label', '独立测试提案');
+    const toolbar = node('header', null, 'vp-toolbar'), title = node('h2', '验收清单');
+    root.append(node('style', STYLE), toolbar);
     const refreshButton = button('刷新测试提案', () => { diagnosticKey = ''; void refresh(); }), state = node('p'), errorBox = node('p', '', 'vp-note vp-error'), noticeBox = node('p', '', 'vp-note');
-    state.setAttribute('role', 'status'); errorBox.setAttribute('role', 'alert'); noticeBox.setAttribute('role', 'status'); root.append(refreshButton, state, errorBox, noticeBox);
-    const body = node('div'), cost = node('p', '', 'vp-note'), consent = node('input'); consent.type = 'checkbox';
+    state.className = 'vp-workstate';
+    state.setAttribute('role', 'status'); errorBox.setAttribute('role', 'alert'); noticeBox.setAttribute('role', 'status'); root.append(state, errorBox, noticeBox);
+    const body = node('div', null, 'vp-body'), authorization = node('div', null, 'vp-authorization'), cost = node('p', '', 'vp-budget'), consent = node('input'); consent.type = 'checkbox';
     const consentLabel = node('label', null, 'vp-consent'); consentLabel.append(consent, node('span', '我已核对当前模型和尝试预算，同意本次生成验收提案产生用量。'));
-    const propose = button('生成独立测试提案', () => { void perform('propose', { automaticRepair: autoRepairOnPropose }); }, true); body.append(cost, consentLabel, propose);
-    const importDetails = node('details'), importJSON = node('textarea', null, 'vp-json'), importFeedback = node('textarea'), importButton = button('保存为待审阅定义', () => { void perform('import'); });
+    const propose = button('生成独立测试提案', () => { void perform('propose', { automaticRepair: autoRepairOnPropose }); }, true);
+    authorization.append(cost, consentLabel);
+    body.append(authorization);
+    const importDetails = node('details', null, 'vp-import'), importArea = node('div', null, 'vp-import-fields');
+    const importJSON = node('textarea', null, 'vp-json'), importFeedback = node('textarea'), importButton = button('保存为待审阅定义', () => { void perform('import'); });
     importJSON.maxLength = 262144; importJSON.spellcheck = false; importFeedback.maxLength = 5000;
-    importDetails.append(node('summary', '导入已有测试定义（不调用模型）'), node('p', '将已有定义保存为人工草稿，保留原模型尝试与费用。导入后仍须单独审阅和认可，尚未运行测试。'), field('待导入测试定义 JSON', importJSON), field('导入依据（必填，最多5000字）', importFeedback), importButton); body.append(importDetails);
+    importArea.append(node('p', '导入后保存为人工草稿，保留原模型尝试与费用，仍须单独审阅和认可。'),
+      field('待导入测试定义 JSON', importJSON), field('导入依据（必填，最多5000字）', importFeedback), importButton);
+    importDetails.append(node('summary', '导入已有测试定义（不调用模型）'), importArea);
     for (const [name, control] of [['importJSON', importJSON], ['importFeedback', importFeedback]]) control.addEventListener('input', () => { if (syncContext()) { render(); void refresh(); return; } saved[name] = control.value; persist(); render(); });
     const select = node('select'); select.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } chooseSelection(select.value); });
-    body.append(field('测试提案记录', select));
-    const detail = node('div'), identity = node('p'), status = node('p', '', 'vp-note'), facts = node('p'), failure = node('div', '', 'vp-note vp-error'), failureText = node('p'), missing = node('ul'), capacity = node('p'), openDraft = button('载入失败草案并修改', () => { void openRecovery(); }, true), binding = node('details'), bindingText = node('pre'), coverage = node('p'), goToCode = button('去开始开发', onApproved, true);
+    const selectField = field('测试提案记录', select); selectField.className = 'vp-record-select';
+    toolbar.append(title, selectField, refreshButton, propose, importDetails);
+    const detail = node('section', null, 'vp-detail'), recordHead = node('header', null, 'vp-record-head');
+    const recordTitle = node('h3'), identity = node('p'), status = node('p', '', 'vp-record-status');
+    recordHead.append(recordTitle, identity, status);
+    const facts = node('p', null, 'vp-record-facts'), failure = node('div', '', 'vp-note vp-error'), failureText = node('p'), missing = node('ul'), capacity = node('p'), openDraft = button('载入失败草案并修改', () => { void openRecovery(); }, true), binding = node('details'), bindingText = node('pre'), coverage = node('p', null, 'vp-coverage'), goToCode = button('去开始开发', onApproved, true);
     const quickHint = node('p'), quickRepair = button('修复并保存待审阅清单', () => { void perform('quickRepair'); }, true);
     failure.append(failureText, missing, capacity, quickHint, quickRepair, openDraft);
-    binding.append(node('summary', '提案版本与绑定'), bindingText); detail.append(identity, status, facts, failure, binding);
+    binding.append(node('summary', '提案版本与绑定'), bindingText);
+    const detailGrid = node('div', null, 'vp-detail-grid'), documentPane = node('section', null, 'vp-document'), checkContext = node('aside', null, 'vp-check-context');
+    const checkList = node('div', null, 'vp-check-list');
+    checkContext.append(node('h4', '检查与版本'), coverage, checkList, facts, binding);
+    detailGrid.append(documentPane, checkContext);
+    detail.append(recordHead, failure, detailGrid);
     const stale = node('p', '', 'vp-note'), load = button('载入当前提案版本', () => { if (syncContext()) { render(); void refresh(); return; } if (!action && currentRow(selected())) { loadRow(selected()); notice = '已载入当前提案版本。保存修订与认可定义是两个操作。'; render(); } });
     const json = node('textarea', null, 'vp-json'), feedback = node('textarea'); json.maxLength = 262144; json.spellcheck = false; feedback.maxLength = 5000;
     for (const [name, control] of [['json', json], ['feedback', feedback]]) control.addEventListener('input', () => {
       if (syncContext()) { render(); void refresh(); return; } if (!draft) return; draft[name] = control.value; draft.touched = true; draft.edits++; persist(); render();
     });
-    const editor = node('div'), editorHelp = node('p');
+    const editor = node('div', null, 'vp-editor'), editorHelp = node('p');
     editor.append(editorHelp, field('HTTP测试定义 JSON', json), field('修订或审阅依据（必填，最多5000字）', feedback));
-    detail.append(stale, load, editor);
+    const documentHead = node('div', null, 'vp-document-head');
+    documentHead.append(node('h4', '清单正文与审阅'), load);
+    documentPane.append(documentHead, stale, editor);
     const revise = button('保存提案修订', () => { void perform('revise'); }), approve = button('认可测试定义（尚未运行）', () => { void perform('approve'); }), reject = button('驳回测试定义', () => { void perform('reject'); }), cancel = button('请求停止提案生成', () => { void perform('cancel'); });
     const saveRepair = button('保存为新待审阅清单', () => { void perform('repair'); }, true);
-    detail.append(coverage, saveRepair, revise, approve, reject, cancel, goToCode);
-    const history = node('details'), historyBody = node('div'); history.append(node('summary', '提案修订与审阅历史'), historyBody); detail.append(history); body.append(detail); root.append(body); element.append(root);
-    refs = { refreshButton, state, errorBox, noticeBox, body, cost, consent, propose, importDetails, importJSON, importFeedback, importButton, select, detail, identity, status, facts, failure, failureText, missing, capacity, quickHint, quickRepair, openDraft, bindingText, stale, load, editor, editorHelp, json, feedback, saveRepair, revise, approve, reject, cancel, historyBody, coverage, goToCode };
+    const decisionBar = node('div', null, 'vp-decisions');
+    decisionBar.append(saveRepair, revise, approve, reject, cancel, goToCode);
+    documentPane.append(decisionBar);
+    const history = node('details'), historyBody = node('div'); history.append(node('summary', '提案修订与审阅历史'), historyBody); checkContext.append(history);
+    body.append(detail); root.append(body); element.append(root);
+    refs = { refreshButton, state, errorBox, noticeBox, body, cost, consent, propose, importDetails, importJSON, importFeedback, importButton, select, detail, recordTitle, identity, status, facts, failure, failureText, missing, capacity, quickHint, quickRepair, openDraft, bindingText, stale, load, editor, editorHelp, json, feedback, saveRepair, revise, approve, reject, cancel, historyBody, coverage, goToCode, checkList };
     consent.addEventListener('change', render);
+  }
+  function renderChecks(proposal) {
+    const groups = [['HTTP 检查', proposal?.steps], ['浏览器检查', proposal?.browser?.steps]];
+    const signature = pretty(groups);
+    if (refs.checkList.dataset.signature === signature) return;
+    refs.checkList.dataset.signature = signature;
+    refs.checkList.replaceChildren();
+    for (const [label, steps] of groups) {
+      if (!Array.isArray(steps) || !steps.length) continue;
+      const group = node('section', null, 'vp-check-group'), list = node('ol');
+      group.append(node('h5', `${label} · ${steps.length}`), list);
+      for (const step of steps) {
+        const item = node('li');
+        const description = step?.request ? [step.request.method, step.request.path]
+          : step?.type === 'concurrent' ? ['并发请求', Array.isArray(step.requests) && `${step.requests.length} 项`]
+            : step?.type === 'restart' ? ['重启与读回'] : [step?.op, step?.path ?? step?.testId];
+        item.append(node('strong', text(step?.id)), node('span', description.filter(part => typeof part === 'string' && part).join(' ') || '查看清单正文'));
+        list.append(item);
+      }
+      refs.checkList.append(group);
+    }
   }
   function render() {
     if (!refs || destroyed) return;
@@ -273,6 +447,7 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
     }
     refs.select.value = saved.selectedId; refs.select.disabled = !!action || !list.length;
     const row = selected(); refs.detail.hidden = !row; loadDiagnostic(row); if (!row) return; chooseRow();
+    refs.recordTitle.textContent = row.proposal?.name || '测试提案记录';
     refs.identity.textContent = `提案 ${row.id} · 记录序号${count(row.attempt)} · ${text(row.startedAt)}`;
     refs.coverage.hidden = !row.proposal;
     const missingHttp = row.missingHttpRequirementIds?.length ?? 0;
@@ -284,7 +459,9 @@ export function createVerificationPlans({ api, getContext, onError = () => {}, o
       refs.coverage.textContent = '这份清单缺少浏览器步骤。请生成或导入一份包含浏览器检查的清单后再开始开发。';
     }
     refs.goToCode.hidden = workflowProgress().state !== 'done';
+    refs.status.dataset.status = row.status;
     refs.status.textContent = `${proposalStatus(row) ?? '未知状态，不可操作'}。${text(row.notice)} 测试尚未运行，软件通过状态未产生。`;
+    renderChecks(row.proposal);
     refs.facts.textContent = row.origin === 'manual' ? '来源：人工导入。本条定义模型请求为0，原模型失败及费用仍在各自历史记录中。' : `模型：${text(row.model)}；输入 ${count(row.usage?.inputTokens)} / 输出 ${count(row.usage?.outputTokens)} token。请求发送：${row.dispatched === true ? '已发送' : row.dispatched === false ? '尚未发送' : '未知'}；回执：${text(row.receiptState)}；结束原因：${text(row.finishReason)}。`;
     refs.failure.hidden = !row.error && !row.errorCode && !(counterDraft(row) && diagnosticFor(row)?.suggestedRepair);
     refs.failureText.textContent = diagnosis?.message || (hasRecovery(row) ? '正在核对这次草案未通过的原因…' : text(row.error));

@@ -58,6 +58,11 @@ test('real workbench confirms both planning versions before its execution panel 
   await page.goto(url + '/?view=details'); await page.locator('#start-run').waitFor({ state: 'visible' });
   const start = page.locator('.execution-panel .ep-controls > button.ep-primary');
   const consent = page.locator('.execution-panel .ep-consent input[type="checkbox"]');
+  const openDelivery = () => page.locator('[data-workspace-view="execution"]').click();
+  const openReference = async () => {
+    await openDelivery();
+    await page.getByRole('tab', { name: '参考实验', exact: true }).click();
+  };
   await page.locator('#start-run').click();
   await page.getByRole('button', { name: '确认规格并继续', exact: true }).waitFor();
   assert.equal(await start.isDisabled(), true); assert.equal(starts.length, 0);
@@ -67,11 +72,30 @@ test('real workbench confirms both planning versions before its execution panel 
   await page.getByRole('button', { name: '确认规格并继续', exact: true }).click();
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).waitFor();
   assert.equal(await start.isDisabled(), true); assert.equal(starts.length, 0);
+  await openDelivery();
+  const overview = page.getByRole('tabpanel', { name: '交付总览', exact: true });
+  await overview.getByRole('heading', { name: '请先确认开发计划', exact: true }).waitFor();
+  assert.equal(await page.locator('#execution-panel-host').isVisible(), false);
+  assert.equal(await page.locator('#project-evolution-host').isVisible(), false);
+  assert.equal(await page.locator('#verification-plans-host').isVisible(), false);
+  assert.match(await overview.getByRole('complementary', { name: '运行版本链' }).innerText(), /设计规格\s+已确认[\s\S]*开发计划\s+待确认/u);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const decision = await overview.getByRole('heading', { name: '请先确认开发计划' }).boundingBox();
+  const rail = await page.locator('.run-rail').boundingBox();
+  assert.ok(decision && rail && decision.y < 844 && decision.y < rail.y, '窄屏首屏先显示交付卡点，再显示运行控制');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('tab', { name: '交付总览', exact: true }).focus();
+  await page.keyboard.press('End');
+  assert.equal(await page.getByRole('tab', { name: '参考实验', exact: true }).getAttribute('aria-selected'), 'true');
+  await page.keyboard.press('Home');
+  await overview.getByRole('button', { name: '打开规划与确认' }).click();
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.execution-panel .ep-body').textContent.includes('编码模型：界面连接替身'));
   const run = app.store.get(project.id).runs.at(-1);
   assert.equal(run.workflowVersion, 2); assert.equal(run.approvals.spec.revision, run.specRevision); assert.equal(run.approvals.plan.revision, run.planRevision);
-  await page.locator('[data-workspace-view="execution"]').click();
+  await openDelivery();
+  await overview.getByRole('button', { name: '核对验收清单' }).waitFor();
+  await page.getByRole('tab', { name: '参考实验', exact: true }).click();
   await consent.check(); await page.waitForFunction(() => !document.querySelector('.execution-panel .ep-primary').disabled);
   await start.click();
   await page.waitForFunction(() => document.querySelector('.execution-panel .ep-primary').disabled);
@@ -97,14 +121,14 @@ test('real workbench confirms both planning versions before its execution panel 
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.screenshot({ path: path.join(shots, 'mobile.png'), fullPage: true });
-  await page.reload(); await page.locator('[data-workspace-view="execution"]').click(); await page.locator('.execution-panel').getByText('可信界面连接替身；未生成软件、未调用模型。', { exact: true }).waitFor();
+  await page.reload(); await openReference(); await page.locator('.execution-panel').getByText('可信界面连接替身；未生成软件、未调用模型。', { exact: true }).waitFor();
   assert.equal(await consent.isChecked(), false); assert.equal(await start.isDisabled(), true);
 
   // Switching the planning selector must remove old execution permission before GET settles.
   const { run: next } = await request(`/api/projects/${project.id}/runs`, { mode: 'local' });
   await page.reload();
   await page.locator('#run-select').selectOption(run.id);
-  await page.locator('[data-workspace-view="execution"]').click();
+  await openReference();
   await page.locator('.execution-panel').getByText('可信界面连接替身；未生成软件、未调用模型。', { exact: true }).waitFor();
   await consent.check(); await page.waitForFunction(() => !document.querySelector('.execution-panel .ep-primary').disabled);
   let release, intercepted = false;
@@ -133,7 +157,7 @@ test('real workbench confirms both planning versions before its execution panel 
   assert.equal(await page.locator('#review-banner input').first().isDisabled(), true);
   await page.locator('#approve-button').evaluate(button => button.click());
   assert.equal(app.store.getRun(project.id, next.id).run.approvals.plan, null);
-  releaseRun(); await page.locator('[data-workspace-view="execution"]').click(); await page.locator('.execution-panel').getByText('可信界面连接替身；未生成软件、未调用模型。', { exact: true }).waitFor();
+  releaseRun(); await openReference(); await page.locator('.execution-panel').getByText('可信界面连接替身；未生成软件、未调用模型。', { exact: true }).waitFor();
   await page.locator('#run-select').selectOption(next.id);
   await page.locator('[data-workspace-view="plan"]').click();
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).waitFor();
@@ -154,7 +178,7 @@ test('real workbench confirms both planning versions before its execution panel 
   await page.locator(`[data-project="${project.id}"]`).click();
   await page.locator('[data-workspace-view="plan"]').click();
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).click();
-  await page.locator('[data-workspace-view="execution"]').click();
+  await openReference();
   await consent.check(); await page.waitForFunction(() => !document.querySelector('.execution-panel .ep-primary').disabled);
   assert.equal(app.store.getRun(project.id, next.id).run.approvals.plan.revision, app.store.getRun(project.id, next.id).run.planRevision);
   assert.equal(starts.length, 1);

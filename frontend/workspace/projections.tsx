@@ -1,3 +1,4 @@
+import { DeliveryOverview, type DeliveryOverviewProps } from './delivery-station';
 import { FileText } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { flushSync } from 'react-dom';
@@ -102,4 +103,8 @@ export function showRunHistory(container: Element, rows: HistoryRow[], activeId:
       </button>
     </li>
   )));
+}
+
+export function showDeliveryOverview(container: Element, props: DeliveryOverviewProps) {
+  render(container, <DeliveryOverview {...props} />);
 }

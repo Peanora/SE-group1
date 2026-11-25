@@ -1,13 +1,13 @@
 import { renderTaskSchedule, wireTaskSchedule } from './task-schedule.js';
 import { clearEventEvidence, renderEventEvidence, renderStageEvidence, renderWorkflowEvidence } from './run-evidence.tsx';
-import { showExecutionTimeline, showProjects, showRunHistory, showRunTimeline } from './projections.tsx';
+import { showDeliveryOverview, showExecutionTimeline, showProjects, showRunHistory, showRunTimeline } from './projections.tsx';
 import { canEditPlanTasks, createPlanningReview } from '../../public/planning-review.js';
 import { createSpecRepair } from '../../public/spec-repair.js';
 import { createPlanningIssue } from '../../public/planning-issue.js';
 import { createSpecificationMeeting } from '../../public/specification-meeting.js';
 import { createExecutionPanel } from '../../public/execution-panel.js';
 import { createVerificationPlans } from '../../public/verification-plans.js';
-import { createPlannedExecutionPanel } from '../../public/planned-execution.js';
+import { createPlannedExecutionPanel, executionRoleProgress } from '../../public/planned-execution.js';
 import { createProjectEvolution } from '../../public/project-evolution.js';
 import { createSourceChanges } from '../../public/source-changes.js';
 import { createSimulatedTasks, SIM_STATUS } from '../../public/simulated-tasks.js';
@@ -31,7 +31,7 @@ const workspaceLayout = createWorkspaceLayout({ getContext: () => ({ projectId: 
   isViewReady: view => view !== 'source' || sourceReadyProject === state.project?.id,
   onViewChange: view => {
     if (view === 'tasks') { state.tab = 'tasks'; renderRecords(); }
-    if (view === 'execution') $('#execution-tools').open = !state.run?.engineeringPlan || !state.health?.plannedExecution?.available;
+    if (view === 'execution') selectDeliverySurface('overview');
   } });
 let executionContextKey = '';
 let sourceContextKey = '';
@@ -100,6 +100,7 @@ function syncExecutionPanel() {
   } else if (verificationPlans && next !== verificationContextKey) { verificationContextKey = next; void verificationPlans.refresh(); }
   const plannedAvailable = available && state.health?.plannedExecution?.available === true && state.health.plannedExecution.profile === 'planned-web-v1';
   $('#planned-execution-section').hidden = !plannedAvailable;
+  $('#planned-execution-unavailable').hidden = !state.health || plannedAvailable;
   if (!plannedAvailable && plannedPanel) { plannedPanel.destroy(); plannedPanel = null; plannedContextKey = ''; }
   if (plannedAvailable && !plannedPanel) {
     plannedPanel = createPlannedExecutionPanel({ api: plannedApi, getContext: executionContext, onError: error => showError(error, 'planned'),
@@ -111,10 +112,11 @@ function syncExecutionPanel() {
   } else if (plannedPanel && next !== plannedContextKey) { plannedContextKey = next; void plannedPanel.refresh(); }
   const evolutionAvailable = plannedAvailable && state.health?.localEvolution?.available === true;
   $('#project-evolution-section').hidden = !evolutionAvailable;
+  $('#local-delivery-unavailable').hidden = !state.health || evolutionAvailable;
   if (!evolutionAvailable && evolutionPanel) { evolutionPanel.destroy(); evolutionPanel = null; evolutionContextKey = ''; }
   const evolutionNext = JSON.stringify(evolutionContext());
   if (evolutionAvailable && !evolutionPanel) {
-    evolutionPanel = createProjectEvolution({ api: plannedApi, getContext: evolutionContext, onError: error => showError(error, 'planned') });
+    evolutionPanel = createProjectEvolution({ api: plannedApi, getContext: evolutionContext, onError: error => showError(error, 'release') });
     evolutionContextKey = evolutionNext; void evolutionPanel.mount($('#project-evolution-host'));
   } else if (evolutionPanel && evolutionNext !== evolutionContextKey) { evolutionContextKey = evolutionNext; void evolutionPanel.refresh(); }
 }
@@ -320,6 +322,72 @@ function nextExecutionStep(steps) {
   return delivery.state === 'done' ? delivery : preparation.state !== 'done' ? preparation
     : ['working', 'failed', 'waiting'].includes(testing.state) ? testing : coding;
 }
+function selectDeliverySurface(surface, focus = false) {
+  const tabs = $$('[data-delivery-surface]');
+  if (!tabs.some(tab => tab.dataset.deliverySurface === surface)) return;
+  for (const tab of tabs) {
+    const selected = tab.dataset.deliverySurface === surface;
+    tab.setAttribute('aria-selected', String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    if (selected && focus) tab.focus();
+  }
+  for (const pane of $$('[data-delivery-pane]')) pane.hidden = pane.dataset.deliveryPane !== surface;
+  $('#verification-plans-section').open = surface === 'checklist';
+  $('#execution-tools').open = surface === 'reference';
+}
+
+function currentDeliveryOverview(steps, next, hint) {
+  const run = state.selectionPending ? null : state.run;
+  const historical = historicalRun(run);
+  const specApproved = steps.find(step => step.id === 'spec-approval').state === 'done';
+  const planApproved = steps.find(step => step.id === 'plan-approval').state === 'done';
+  const execution = !historical && run ? plannedPanel?.workflowProgress().execution : null;
+  const writingIntegration = execution?.executionMode === 'task_dag' && execution.active && execution.workflow?.stage === 'coding';
+  const fixedCommit = execution && !writingIntegration ? executionRoleProgress(execution).commit : null;
+  const candidate = fixedCommit && fixedCommit === execution.candidateCommit ? execution : null;
+  const stageAction = { verification: '核对验收清单', coding: '打开候选工作区', testing: '查看测试和审查', delivery: '打开预览和源码' };
+  const summary = rows => Array.isArray(rows) && rows.length
+    ? rows.filter(row => row.passed === true).length + ' / ' + rows.length + ' 项通过'
+    : '暂无结果';
+  const reviewRecord = candidate?.reviewHistory?.findLast(item => item.candidateCommit === fixedCommit);
+  const review = reviewRecord?.status ?? candidate?.checks?.review;
+  const openBlockers = (reviewRecord?.issues ?? candidate?.checks?.issues ?? [])
+    .filter(issue => issue.severity === 'blocking' && issue.status !== 'resolved').length;
+  const reviewSummary = openBlockers ? `${openBlockers} 项阻塞`
+    : review === 'completed' ? '完成 · 无开放阻塞'
+      : review === 'changes_requested' ? '要求修改'
+        : review === 'not_started' ? '未开始'
+          : review ? '查看审查记录' : '暂无结果';
+  let title = next.text;
+  let note = hint || ({
+    verification: '先核对本次接口与浏览器验收清单。',
+    coding: '查看当前候选、执行任务和实际运行状态。',
+    testing: '以同一候选的独立测试和审查结果核对交付条件。',
+    delivery: '当前已验收的候选可在交付记录中预览和下载。',
+  })[next.id];
+  let action = { label: stageAction[next.id], stage: next.id };
+  if (!planApproved || historical) {
+    title = historical ? '历史运行' : run?.status === 'awaiting_review' ? '请先确认开发计划' : '等待规格与计划';
+    note = historical ? '此运行的需求版本已归档。可回查规划与证据；交付操作以当前需求版本为准。'
+      : '确认规格与开发计划后，可为同一版本准备验收清单。';
+    action = { label: historical ? '查看历史规划' : '打开规划与确认', stage: 'planning' };
+  }
+  return { state: historical ? 'idle' : next.state, status: historical ? '历史版本' : next.text, title, note, action,
+    busy: state.busy || state.selectionPending,
+    versions: [
+      { kind: '需求快照', reference: run?.sourceRevision || '', status: run?.sourceRevision ? '已关联' : '尚未固定' },
+      { kind: '设计规格', reference: run?.specRevision || '', status: specApproved ? '已确认' : run?.specRevision ? '待确认' : '尚未生成' },
+      { kind: '开发计划', reference: run?.planRevision || '', status: planApproved ? '已确认' : run?.planRevision ? '待确认' : '尚未生成' },
+      { kind: '源码候选', reference: candidate?.candidateCommit || '', status: candidate?.candidateCommit ? '已记录提交' : '尚未固定' },
+    ],
+    evidence: [
+      { label: 'HTTP 接口', value: summary(candidate?.checks?.http) },
+      { label: 'Edge 浏览器', value: summary(candidate?.checks?.browser) },
+      { label: '独立代码审查', value: reviewSummary },
+    ],
+  };
+}
+
 function renderExecutionFlow(steps) {
   const next = nextExecutionStep(steps);
   showExecutionTimeline($('#execution-workspace-steps'), steps.slice(-4), next.id, state.selectionPending);
@@ -328,6 +396,7 @@ function renderExecutionFlow(steps) {
     : next.id === 'delivery' ? '当前候选已通过独立验收。打开交付可查看预览与源码。'
       : next.state === 'failed' ? failure?.nextStep || next.detail || '打开当前步骤查看原因和可用操作。'
         : next.detail || '';
+  showDeliveryOverview($('#delivery-overview-host'), currentDeliveryOverview(steps, next, hint));
   const hintLine = $('#execution-next-hint');
   if (hintLine.textContent !== hint) hintLine.textContent = hint;
   hintLine.hidden = !hint;
@@ -447,8 +516,8 @@ function openDeliveryStage(stage) {
     return;
   }
   workspaceLayout.show('execution');
+  selectDeliverySurface(stage === 'verification' ? 'checklist' : 'candidates');
   const verification = $('#verification-plans-section');
-  verification.open = stage === 'verification' && !verification.hidden;
   if (stage === 'verification') {
     const automatic = automaticStatus();
     if (automatic?.status === 'failed' && automatic.stage === 'verification' && automatic.proposalId) {
@@ -456,10 +525,10 @@ function openDeliveryStage(stage) {
     }
     focusWorkspaceTarget(!verification.hidden ? $('summary', verification) : $('#verification-plans-unavailable'));
   }
-  else focusWorkspaceTarget(plannedPanel?.focusStage(stage) || $('#execution-tools > summary'));
+  else focusWorkspaceTarget(plannedPanel?.focusStage(stage) || $('#planned-execution-unavailable'));
 }
 function locateWorkspaceProblem({ source = 'planning', stageId, target } = {}) {
-  const views = { source: 'source', execution: 'execution', planned: 'execution', verification: 'execution', simulation: 'tasks', tasks: 'tasks' };
+  const views = { source: 'source', execution: 'execution', planned: 'execution', release: 'execution', verification: 'execution', simulation: 'tasks', tasks: 'tasks' };
   workspaceLayout.show(views[source] || 'plan');
   if (stageId) { state.stageId = stageId; renderWorkflow(); renderInspector(); }
   if (source === 'planning') $('#workflow-details').open = true;
@@ -469,11 +538,13 @@ function locateWorkspaceProblem({ source = 'planning', stageId, target } = {}) {
     return;
   }
   if (source === 'simulation') $('#simulation-tools').open = true;
-  if (source === 'verification') $('#verification-plans-section').open = true;
-  if (source === 'execution') $('#execution-tools').open = true;
+  if (source === 'verification') selectDeliverySurface('checklist');
+  if (source === 'execution') selectDeliverySurface('reference');
+  if (source === 'planned') selectDeliverySurface('candidates');
+  if (source === 'release') selectDeliverySurface('releases');
   let element = typeof target === 'string' ? $(target) : target;
   if (!element?.isConnected) {
-    const local = source === 'source' ? $('#source-changes-host') : source === 'execution' ? $('#execution-panel-host') : source === 'planned' ? $('#planned-execution-host') : source === 'verification' ? $('#verification-plans-host') : source === 'simulation' ? $('#simulation-panel-host') : stageId === 'spec' && !$('#spec-repair-host').hidden ? $('#spec-repair-host') : $('#stage-inspector');
+    const local = source === 'source' ? $('#source-changes-host') : source === 'execution' ? $('#execution-panel-host') : source === 'planned' ? $('#planned-execution-host') : source === 'release' ? $('#project-evolution-host') : source === 'verification' ? $('#verification-plans-host') : source === 'simulation' ? $('#simulation-panel-host') : stageId === 'spec' && !$('#spec-repair-host').hidden ? $('#spec-repair-host') : $('#stage-inspector');
     element = [...local.querySelectorAll('[role="alert"]')].find(item => item.getClientRects().length) || local;
   }
   element.setAttribute('tabindex', '-1'); element.scrollIntoView({ block: 'nearest' }); element.focus({ preventScroll: true });
@@ -1109,6 +1180,28 @@ $('#automatic-delivery-form').addEventListener('submit', event => {
   void startRun(undefined, { automatic: true });
 });
 $('[data-workspace-next]').addEventListener('click', handleWorkspaceNext);
+$('#delivery-station-tabs').addEventListener('click', event => {
+  const button = event.target.closest('[data-delivery-surface]');
+  if (button) selectDeliverySurface(button.dataset.deliverySurface);
+});
+$('#delivery-station-tabs').addEventListener('keydown', event => {
+  const tabs = $$('[data-delivery-surface]');
+  const index = tabs.indexOf(event.target);
+  if (index < 0) return;
+  const target = { ArrowLeft: (index + tabs.length - 1) % tabs.length,
+    ArrowRight: (index + 1) % tabs.length, Home: 0, End: tabs.length - 1 }[event.key];
+  if (!Number.isInteger(target)) return;
+  event.preventDefault();
+  selectDeliverySurface(tabs[target].dataset.deliverySurface, true);
+});
+$('#delivery-overview-host').addEventListener('click', event => {
+  const stage = event.target.closest('[data-delivery-jump]')?.dataset.deliveryJump;
+  if (stage === 'planning') {
+    workspaceLayout.show('plan');
+    const review = $('#review-heading');
+    focusWorkspaceTarget(review?.getClientRects().length ? review : $('#workflow-heading'));
+  } else if (stage) openDeliveryStage(stage);
+});
 $('#delivery-steps').addEventListener('click', event => {
   const step = event.target.closest('[data-delivery-step]');
   if (step) openDeliveryStage(step.dataset.deliveryStep);

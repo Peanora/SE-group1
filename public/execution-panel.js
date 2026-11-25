@@ -8,26 +8,13 @@ const STATUS = {
   reconciliation_required: '进程状态待核对，尚未确认停止',
   diagnostic_passed: '诊断检查通过，未计为任务验收',
 };
-const STYLE = `
-.execution-panel{min-width:0;margin-top:22px;background:#fff;border:1px solid #e3e9f1;border-radius:12px;color:#344c6d;overflow:hidden;font:12px/1.8 "Microsoft YaHei","DengXian","PingFang SC",sans-serif}
-.execution-panel *{box-sizing:border-box;min-width:0}.execution-panel [hidden]{display:none!important}
-.execution-panel .ep-heading,.execution-panel .ep-body{padding:20px 22px}.execution-panel .ep-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;border-bottom:1px solid #e3e9f1}
-.execution-panel h2{font-size:16px;font-weight:500;margin:0 0 4px}.execution-panel h3{font-size:13px;font-weight:500;margin:16px 0 8px}.execution-panel p{margin:6px 0;overflow-wrap:anywhere}
-.execution-panel .ep-muted{color:#70829b;font-size:11px}.execution-panel .ep-controls{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-top:14px}
-.execution-panel label{display:block}.execution-panel .ep-field{flex:1 1 240px}.execution-panel label>span{display:block;margin-bottom:6px}
-.execution-panel select{width:100%;max-width:100%;min-height:38px;padding:7px 10px;border:1px solid #cedaeb;border-radius:5px;background:#fff;color:#344c6d;font:inherit}
-.execution-panel button,.execution-panel .ep-link{display:inline-flex;justify-content:center;align-items:center;min-height:38px;padding:7px 13px;border:1px solid #d5dfed;border-radius:5px;background:#fff;color:#456384;font:inherit;text-decoration:none;cursor:pointer;white-space:normal;text-align:center;overflow-wrap:anywhere}
-.execution-panel .ep-primary{background:#315deb;border-color:#315deb;color:#fff}.execution-panel button:disabled,.execution-panel select:disabled{opacity:.5;cursor:not-allowed}
-.execution-panel button:focus-visible,.execution-panel select:focus-visible,.execution-panel input:focus-visible,.execution-panel a:focus-visible,.execution-panel summary:focus-visible{outline:3px solid #94aaf3;outline-offset:3px}
-.execution-panel .ep-scope{padding:12px 14px;background:#f7f9ff;border:1px solid #e2e9f5;border-radius:6px;overflow-wrap:anywhere}
-.execution-panel .ep-consent{display:flex;align-items:flex-start;gap:8px;margin:14px 0}.execution-panel .ep-consent input{margin:5px 0 0;flex:none}.execution-panel .ep-consent>span{margin:0}
-.execution-panel .ep-notice{padding:10px 13px;background:#fff7e7;color:#95671f;border-radius:5px;margin:12px 0;overflow-wrap:anywhere}.execution-panel .ep-error{background:#fff0f1;color:#a53f4b}
-.execution-panel .ep-history{margin-top:22px;padding-top:18px;border-top:1px solid #e3e9f1}.execution-panel .ep-actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
-.execution-panel .ep-result{font-size:14px;color:#5a7190}.execution-panel .ep-result[data-accepted=true]{color:#16846a}
-.execution-panel .ep-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 20px;margin:13px 0}.execution-panel .ep-facts p{margin:0}
-.execution-panel details{border:1px solid #e2e8f1;border-radius:5px;margin:10px 0;padding:10px 13px}.execution-panel summary{cursor:pointer;overflow-wrap:anywhere}.execution-panel pre{max-width:100%;max-height:360px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;background:#f6f8fc;border-radius:4px;padding:12px;font:11px/1.8 Consolas,"Microsoft YaHei",monospace;margin:8px 0}
-.execution-panel .ep-event-list{max-height:330px;overflow:auto;padding-left:24px;margin:8px 0}.execution-panel .ep-event-list li{padding:6px 0;border-bottom:1px solid #eef1f5;overflow-wrap:anywhere}.execution-panel time{display:block;color:#8493aa;font-size:10px}
-@media(max-width:760px){.execution-panel .ep-heading,.execution-panel .ep-body{padding:17px 15px}.execution-panel .ep-heading{gap:10px}.execution-panel h2{font-size:14px}.execution-panel .ep-heading>button{padding:5px 10px;flex:none}.execution-panel .ep-facts{grid-template-columns:1fr}.execution-panel .ep-controls>.ep-primary{width:100%}.execution-panel .ep-actions>*{flex:1 1 130px}.execution-panel pre{font-size:11px;padding:9px}}
+// Standalone consumers can load this module without the workbench stylesheet.
+const BASE_STYLE = `
+.execution-panel,.execution-panel *{box-sizing:border-box;min-width:0;overflow-wrap:anywhere}
+.execution-panel [hidden]{display:none!important}
+.execution-panel label>span{display:block}
+.execution-panel select{max-width:100%;width:100%}
+.execution-panel pre{max-width:100%;white-space:pre-wrap;overflow:auto}
 `;
 
 const text = value => value == null ? '未知' : typeof value === 'string' ? value : JSON.stringify(value, null, 2);
@@ -125,27 +112,43 @@ export function createExecutionPanel({ api, getContext, onError = () => {}, onFa
     if (mounted && !destroyed && context.projectId && context.runId && loadState !== 'unavailable') timer = setTimeout(() => { void refresh(); }, 3000);
   }
   function build(element) {
-    root = node('section', 'execution-panel'); root.setAttribute('aria-label', '代码执行与验收');
-    const style = node('style', '', STYLE); root.append(style);
-    const heading = node('header', 'ep-heading'), title = node('div');
-    title.append(node('h2', '', '代码执行与验收'), node('p', 'ep-muted', '查看真实代码版本、独立检查和每轮修订依据。文档完成不代表软件通过验收。'));
-    const refreshButton = button('刷新状态', () => { void refresh(); }); heading.append(title, refreshButton); root.append(heading);
+    root = node('section', 'execution-panel'); root.setAttribute('aria-label', '固定参考执行');
+    root.append(node('style', '', BASE_STYLE));
+    const heading = node('header', 'ep-heading'), title = node('div', 'ep-title');
+    const icon = node('span', 'ep-scene-icon', '‹/›'); icon.setAttribute('aria-hidden', 'true');
+    const sceneName = node('p', 'ep-scene-name');
+    title.append(node('h2', '', '固定参考执行'), sceneName);
+    const stageLabel = node('span', 'ep-stage-label'), headActions = node('div', 'ep-heading-actions');
+    const refreshButton = button('刷新状态', () => { void refresh(); });
+    headActions.append(stageLabel, refreshButton); heading.append(icon, title, headActions); root.append(heading);
     const body = node('div', 'ep-body'); root.append(body);
     const notice = node('p', 'ep-notice'); notice.setAttribute('role', 'status');
     const errorBox = node('p', 'ep-notice ep-error'); errorBox.setAttribute('role', 'alert');
+    const workspace = node('div', 'ep-workspace'); body.append(notice, errorBox, workspace);
+    const launch = node('section', 'ep-card ep-launch'), history = node('section', 'ep-card ep-history');
+    launch.append(node('h3', '', '执行设置'));
+    history.append(node('h3', '', '候选与执行证据'));
+    workspace.append(launch, history);
     const scope = node('div', 'ep-scope');
-    scope.append(node('p', '', '首版仅开放服务端列出的固定示例，不支持将任意需求直接生成软件。执行使用服务端已配置的模型，会产生正常用量。'));
+    scope.append(node('p', '', '首版仅开放服务端列出的固定示例。执行使用服务端已配置的模型，会产生正常用量。'));
     const profileDescription = node('p'), model = node('p', 'ep-muted'), budget = node('p', 'ep-muted'), recheckBudget = node('p', 'ep-muted'), repairBudget = node('p', 'ep-muted'); scope.append(profileDescription, model, budget, recheckBudget, repairBudget);
     const profiles = node('select'); profiles.setAttribute('aria-label', '执行范围');
     const startButton = button('使用配置模型开始执行', () => { void perform('start'); }, true);
     const controls = node('div', 'ep-controls'); controls.append(field('执行范围', profiles), startButton);
     const consentLabel = node('label', 'ep-consent'), consent = node('input'); consent.type = 'checkbox';
     consentLabel.append(consent, node('span', '', '我确认按上述范围和预算调用配置模型。'));
-    const revisions = node('p', 'ep-muted'); body.append(notice, errorBox, scope, controls, consentLabel, revisions);
-    const history = node('div', 'ep-history'), executions = node('select'); executions.setAttribute('aria-label', '执行记录');
-    history.append(field('执行记录', executions)); body.append(history);
-    const empty = node('p', 'ep-muted'), detail = node('div'); history.append(empty, detail);
-    const result = node('p', 'ep-result'), state = node('p'), failure = node('p', 'ep-notice ep-error'), facts = node('div', 'ep-facts');
+    controls.insertBefore(consentLabel, startButton);
+    const revisions = node('p', 'ep-muted'); scope.append(revisions);
+    const disclosure = section('', launch); disclosure.details.className = 'ep-disclosure';
+    const scopeSummary = node('span', 'ep-budget-summary');
+    disclosure.details.firstElementChild.append(node('span', '', '范围、用量与前置条件'), scopeSummary);
+    disclosure.body.append(scope);
+    launch.append(controls);
+    const executions = node('select'); executions.setAttribute('aria-label', '执行记录');
+    history.append(field('执行记录', executions));
+    const empty = node('p', 'ep-muted ep-record-empty'), detail = node('div', 'ep-evidence'); history.append(empty, detail);
+    const result = node('p', 'ep-result'), state = node('p', 'ep-muted'), failure = node('p', 'ep-notice ep-error'), facts = node('div', 'ep-facts');
+    const candidate = node('code'), candidateRow = node('p', 'ep-candidate'); candidateRow.append(node('span', '', '最新候选提交'), candidate);
     const identity = node('p'), calls = node('p'), usage = node('p'), executionBudget = node('p'); facts.append(identity, calls, usage, executionBudget);
     const actions = node('div', 'ep-actions');
     const cancel = button('请求停止', () => { void perform('cancel'); }), retry = button('重新执行', () => { void perform('retry'); });
@@ -155,12 +158,13 @@ export function createExecutionPanel({ api, getContext, onError = () => {}, onFa
     const previewLink = node('a', 'ep-link', '打开本地预览'); previewLink.target = '_blank'; previewLink.rel = 'noopener noreferrer';
     const download = node('a', 'ep-link', '下载已验收源码'); download.setAttribute('download', '');
     actions.append(cancel, retry, recheck, repair, showPreview, stopPreview, previewLink, download);
-    const recheckNotice = node('p', 'ep-muted'), repairNotice = node('p', 'ep-muted'), previewNotice = node('p', 'ep-muted'), versions = node('div');
+    const recheckNotice = node('p', 'ep-muted'), repairNotice = node('p', 'ep-muted'), previewNotice = node('p', 'ep-muted'), versions = node('div', 'ep-versions');
     const diff = section('本次代码差异', detail), diffText = node('pre'); diff.body.append(diffText);
     const eventSection = section('真实执行事件', detail, true), eventList = node('ol', 'ep-event-list'), noEvents = node('p', 'ep-muted', '尚无执行事件。');
     eventSection.body.append(noEvents, eventList);
-    detail.prepend(result, state, failure, facts, recheckNotice, repairNotice, actions, previewNotice, node('h3', '', '代码版本与独立检查'), versions);
-    refs = { refreshButton, notice, errorBox, profileDescription, model, budget, recheckBudget, repairBudget, profiles, startButton, consent, revisions, executions, empty, detail,
+    const evidenceHead = node('div', 'ep-evidence-head'); evidenceHead.append(result, state, candidateRow);
+    detail.prepend(evidenceHead, failure, facts, recheckNotice, repairNotice, actions, previewNotice, node('h4', '', '代码版本与独立检查'), versions);
+    refs = { refreshButton, notice, errorBox, sceneName, stageLabel, scopeSummary, candidate, profileDescription, model, budget, recheckBudget, repairBudget, profiles, startButton, consent, revisions, executions, empty, detail,
       result, state, failure, identity, calls, usage, executionBudget, cancel, retry, recheck, repair, recheckNotice, repairNotice, showPreview, stopPreview, previewLink, download, previewNotice, versions, diffText, eventList, noEvents };
     profiles.addEventListener('change', () => { consent.checked = false; render(); });
     consent.addEventListener('change', render);
@@ -196,6 +200,7 @@ export function createExecutionPanel({ api, getContext, onError = () => {}, onFa
         card = { ...main, title, identity, blocks }; versionNodes.set(id, card);
       }
       card.title.textContent = `版本 ${index + 1} · ${version.commit || '尚未固定提交'}`;
+      card.details.dataset.current = String(index === versions.length - 1);
       card.identity.textContent = `代码摘要：${text(version.sourceHash)}；独立门禁：${version.acceptance ? checkStatus(version.acceptance.status) : '尚无记录'}`;
       const values = { diff: version.diff, selfCheck: version.selfCheck, http: version.httpChecks ?? version.acceptance?.test,
         browser: version.browserChecks ?? version.acceptance?.browser, review: version.review ?? version.acceptance?.review,
@@ -238,9 +243,11 @@ export function createExecutionPanel({ api, getContext, onError = () => {}, onFa
     if (signature !== profileSignature) { refs.consent.checked = false; profileSignature = signature; }
     const profileId = updateOptions(refs.profiles, profiles.map(item => ({ id: item.id, label: item.title || item.id })), refs.profiles.value, '暂无可执行范围');
     const profile = profiles.find(item => item.id === profileId);
+    refs.sceneName.textContent = profile ? profile.title || profile.id : '等待读取参考场景';
     refs.profileDescription.textContent = profile ? `${profile.description || '服务端尚未提供范围说明。'}（范围版本：${text(profile.contractRevision)}）` : '服务端尚未提供可执行范围。';
     refs.model.textContent = `编码模型：${capabilities.model?.name || '名称未知，以服务端配置为准'}；审查模型：${capabilities.model?.reviewName || capabilities.model?.name || '名称未知，以服务端配置为准'}`;
     refs.budget.textContent = `本轮预算：${budgetText(capabilities.budget)}`;
+    refs.scopeSummary.textContent = capabilities.budget ? budgetText(capabilities.budget) : '预算待核对';
     refs.recheckBudget.hidden = !capabilities.recheckBudget;
     refs.recheckBudget.textContent = capabilities.recheckBudget ? `固定代码重新检查的独立预算：${budgetText(capabilities.recheckBudget)}。保留原提交，全部检查和Review重新执行，旧失败和用量保留。` : '';
     refs.repairBudget.hidden = !capabilities.repairBudget;
@@ -263,11 +270,16 @@ export function createExecutionPanel({ api, getContext, onError = () => {}, onFa
     refs.executions.disabled = busy || !executions.length;
     const execution = currentExecution(); refs.detail.hidden = !execution; refs.empty.hidden = !!execution;
     refs.empty.textContent = loadState === 'unavailable' ? '现有文档产物仍是规划文档，尚无网页代码执行记录。' : '启动后可在这里查看真实执行记录。';
+    refs.stageLabel.textContent = !ready ? loadState === 'unavailable' ? '执行未开放' : '等待执行状态' : execution?.taskAccepted === true ? '已通过验收'
+      : execution ? displayStatus(execution.status) : '尚无执行记录';
+    refs.stageLabel.dataset.tone = ready && execution?.taskAccepted === true ? 'passed'
+      : ready && ['failed', 'timed_out', 'reconciliation_required'].includes(execution?.status) ? 'attention' : 'default';
     if (!execution) return;
     if (contentId !== execution.id) { contentId = execution.id; refs.versions.replaceChildren(); refs.eventList.replaceChildren(); versionNodes = new Map(); eventNodes = new Map(); }
     refs.result.textContent = execution.taskAccepted === true ? '当前固定示例已通过验收' : '本次任务尚未通过验收';
     refs.result.dataset.accepted = String(execution.taskAccepted === true);
     refs.state.textContent = `${displayStatus(execution.status)}${execution.stage ? ` · 当前阶段：${text(execution.stage)}` : ''}`;
+    refs.candidate.textContent = (Array.isArray(execution.versions) && execution.versions.at(-1)?.commit) || '尚未固定';
     refs.failure.textContent = execution.error ? text(execution.error) : ''; refs.failure.hidden = !execution.error;
     refs.identity.textContent = `执行编号：${execution.id}`;
     refs.calls.textContent = `编码调用：${count(execution.calls)} 次；独立审查：${count(execution.reviewCalls)} 次`;

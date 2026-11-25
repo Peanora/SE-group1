@@ -195,6 +195,12 @@ for (const width of [1440, 390]) test(`execution process ${width}px: explicit pa
   await page.evaluate(() => releasePost()); await page.waitForFunction(() => requests.filter(row => row.method === 'POST').length === 1 && !document.querySelector('button').disabled);
   assert.equal(await download(page).count(), 0, 'POST acknowledgement cannot grant an accepted result');
   await setExecution(page, execution({ id: 'new-execution', status: 'reconciliation_required', active: true, candidateCommit: 'c'.repeat(40), accepted: true, actions: { canDownload: true, canPreview: true, canCancel: false } }));
+  const brief = page.locator('.pe-candidate-brief');
+  const settings = page.locator('.pe-settings');
+  await brief.waitFor();
+  assert.match(await brief.innerText(), /状态待核对/u);
+  assert.equal(await settings.evaluate(element => element.open), false);
+  await settings.getByText('开发设置与费用', { exact: true }).click();
   assert.equal(await download(page).count(), 0); assert.equal(await start(page).isDisabled(), true);
   const passed = execution({ id: 'new-execution', status: 'accepted', active: false, accepted: true, candidateCommit: 'd'.repeat(40), actions: { canDownload: true, canPreview: true, canCancel: false } });
   await setExecution(page, passed); assert.equal(await download(page).isVisible(), true, 'The same complete current DTO is eligible once its pending acknowledgement is reconciled');

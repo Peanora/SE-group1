@@ -10,6 +10,9 @@ import '../../public/task-orchestration.css';
 import './workbench.css';
 import './task-schedule.css';
 import './design-review.css';
+import './delivery-station.css';
+import './fixed-reference.css';
+import './local-delivery.css';
 
 const container = document.getElementById('root');
 if (!container) throw new Error('未找到项目工作台入口。');

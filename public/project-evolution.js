@@ -3,7 +3,21 @@ const identifier = value => typeof value === 'string' && ID.test(value);
 const STATES = { stopped: '已停止', starting: '正在启动', running: '运行中', reconciliation_required: '状态待核对', preparing: '正在备份和核对来源', awaiting_review: '等待迁移确认', changes_requested: '需要修订', approved: '迁移已确认', accepted: '新版本已验收', preparing_activation: '正在准备本机版本', activation_ready: '等待切换本机版本', active: '已启用本机版本', failed: '未完成' };
 const node = (tag, text, className) => { const result = document.createElement(tag); if (text !== undefined) result.textContent = text; if (className) result.className = className; return result; };
 const safeUrl = value => { try { const url = new URL(value); return url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname) && url.port && url.pathname === '/' && !url.username && !url.password && !url.search && !url.hash ? url.href : null; } catch { return null; } };
-const STYLE = `.project-evolution{padding:20px;margin-top:20px;border:1px solid #e2e9f3;border-radius:12px;background:#fff;color:#344c6d;font:13px/1.8 "Microsoft YaHei",sans-serif;min-width:0}.project-evolution *{box-sizing:border-box;min-width:0}.project-evolution [hidden]{display:none!important}.project-evolution h2{font-size:18px;margin:0 0 10px}.project-evolution h3{font-size:15px;margin:18px 0 8px}.project-evolution p{overflow-wrap:anywhere}.project-evolution label{display:grid;gap:5px;margin:10px 0}.project-evolution input,.project-evolution select,.project-evolution textarea{max-width:100%;width:100%;padding:8px;border:1px solid #cfd9e6;border-radius:6px;background:#fff;color:inherit;font:inherit}.project-evolution textarea{min-height:80px;resize:vertical}.project-evolution button{padding:8px 12px;margin:4px 8px 4px 0;border:1px solid #cbd7e7;border-radius:6px;background:#f8fafc;color:inherit;font:inherit;cursor:pointer;white-space:normal}.project-evolution :disabled{opacity:.5;cursor:default}.project-evolution :focus-visible{outline:3px solid #9ab0ef;outline-offset:3px}.project-evolution .ev-note{padding:10px;background:#f5f8ff;border-left:3px solid #92ade8}.project-evolution .ev-error{background:#fff2f1;color:#98463e;border-color:#bd635a}.project-evolution .ev-consent{display:flex;align-items:flex-start;gap:8px}.project-evolution .ev-consent input{width:auto;flex:none;margin-top:7px}.project-evolution .ev-row{border-top:1px solid #e2e9f3;padding:10px 0}.project-evolution a{color:#315deb;overflow-wrap:anywhere}@media(max-width:600px){.project-evolution{padding:16px 12px}.project-evolution button{width:100%;margin:5px 0}}`;
+const actionRow = (...buttons) => { const row = node('div', undefined, 'ev-actions'); row.append(...buttons); return row; };
+function fieldGroup(...labels) {
+  const group = node('div', undefined, 'ev-fields');
+  group.append(...labels);
+  return group;
+}
+function section(id, heading) {
+  const result = node('section', undefined, 'ev-surface');
+  const title = node('h3', heading);
+  title.id = `${id}-title`;
+  result.id = id;
+  result.setAttribute('aria-labelledby', title.id);
+  result.append(title);
+  return result;
+}
 
 /** Backend state is authoritative. Draft inputs never trigger model calls. */
 export function createProjectEvolution({ api, getContext, onError = () => {} }) {
@@ -22,22 +36,80 @@ export function createProjectEvolution({ api, getContext, onError = () => {} }) 
     for (const [name, input] of Object.entries(fields)) input.value = draft?.[name] ?? (name === 'migrationType' ? 'none' : name === 'columnType' ? 'INTEGER' : '');
     selections = { ...(draft ?? {}) }; focusToRestore = null; if (refs.consent) refs.consent.checked = false;
   }
-  function label(text, name, type = 'input') { const item = node('label'), title = node('span', text), input = node(type); fields[name] = input; input.dataset.field = name; if (type === 'textarea') input.maxLength = 5000;
+  function label(text, name, type = 'input') { const item = node('label', undefined, 'ev-field'), title = node('span', text), input = node(type); fields[name] = input; input.dataset.field = name; if (type === 'textarea') { input.maxLength = 5000; input.rows = 2; item.classList.add('ev-field-wide'); }
     const changed = () => { selections[name] = input.value; saveDraft(); if (type === 'select') { refs.consent.checked = false; render(); } }; input.addEventListener('input', changed); if (type === 'select') input.addEventListener('change', changed); item.append(title, input); return item; }
   function selectOptions(input, entries, placeholder = '请选择') { const previous = input.value || selections[input.dataset.field] || ''; const signature = JSON.stringify(entries); if (input.dataset.options === signature && entries.some(([id]) => id === input.value)) return;
     input.dataset.options = signature; input.replaceChildren(new Option(placeholder, ''), ...entries.map(([id, text]) => new Option(text, id))); if (entries.some(([id]) => id === previous)) input.value = previous; }
   function action(text, kind) { const button = node('button', text); button.type = 'button'; button.dataset.action = kind; button.addEventListener('click', () => void perform(kind)); refs[kind] = button; return button; }
   function build(host) {
-    root = node('section', undefined, 'project-evolution'); root.setAttribute('aria-label', '本机业务版本与已有数据变更'); root.append(node('style', STYLE), node('h2', '本机业务版本与已有数据变更'), node('p', '启用后的版本保存你在应用中录入的数据。需求修改后，先确认新规划和测试定义，再核对迁移并开发新版本。', 'ev-note'));
-    refs.notice = node('p', '', 'ev-note'); refs.notice.setAttribute('role', 'status'); refs.error = node('p', '', 'ev-note ev-error'); refs.error.setAttribute('role', 'alert'); root.append(refs.notice, refs.error, action('刷新状态', 'refresh'));
-    root.append(node('h3', '本机业务版本')); refs.releases = node('div'); root.append(refs.releases, label('首次启用的已验收源码', 'executionId', 'select'), action('启用本机业务版本', 'activateInitial'));
-    root.append(node('h3', '准备已有数据变更'), label('旧业务版本', 'releaseId', 'select'), label('当前已认可的联合测试定义', 'proposalId', 'select'), label('本次变更说明', 'reason', 'textarea'), action('备份旧数据并准备变更', 'prepare'));
-    root.append(label('变更记录', 'evolutionId', 'select')); fields.evolutionId.addEventListener('change', () => { refs.consent.checked = false; render(); }); refs.summary = node('p', '', 'ev-note'); root.append(refs.summary);
-    root.append(label('数据处理方式', 'migrationType', 'select')); for (const [value, text] of [['none', '不修改数据结构（权限或代码规则变化）'], ['addColumn', '增加一个字段并给旧数据设置默认值'], ['mapValues', '将一个字段的旧值改为新值']]) fields.migrationType.add(new Option(text, value));
-    root.append(label('数据表', 'table', 'select'), label('字段名称', 'column'), label('新字段类型', 'columnType', 'select')); fields.columnType.add(new Option('整数', 'INTEGER')); fields.columnType.add(new Option('文字', 'TEXT'));
-    root.append(label('新字段默认值', 'defaultValue'), label('要替换的旧值', 'oldValue'), label('替换后的新值', 'newValue'), label('其他值映射（每行：旧值 → 新值；不变的值也要列出）', 'mappingLines', 'textarea'), action('保存迁移修订', 'revise'), label('审阅意见', 'feedback', 'textarea'), action('确认这版迁移', 'approve'), action('退回修订', 'reject'));
-    refs.budget = node('p', '', 'ev-note'); const consent = node('label', undefined, 'ev-consent'); refs.consent = node('input'); refs.consent.type = 'checkbox'; refs.consent.addEventListener('change', render); consent.append(refs.consent, node('span', '我同意使用已显示的预算，在旧源码和数据副本上开发新版本。'));
-    root.append(refs.budget, consent, action('开发新版本', 'start'), action('启用已验收的新版本', 'activate')); host.append(root);
+    root = node('section', undefined, 'project-evolution');
+    root.setAttribute('aria-label', '本机业务版本与已有数据变更');
+    const header = node('header', undefined, 'ev-header');
+    header.append(node('h2', '本机交付与数据演进'), action('刷新状态', 'refresh'));
+
+    const workArea = node('div', undefined, 'ev-workspace');
+    const versions = section('local-delivery-versions', '本机版本');
+    refs.releases = node('ul', undefined, 'ev-release-list');
+    refs.emptyReleases = node('p', '', 'ev-hint');
+    refs.initial = node('div', undefined, 'ev-phase');
+    refs.initial.append(node('h4', '首次启用'), label('首次启用的已验收源码', 'executionId', 'select'), actionRow(action('启用本机业务版本', 'activateInitial')));
+    versions.append(refs.releases, refs.emptyReleases, refs.initial);
+
+    const evolution = section('local-delivery-evolution', '需求演进审阅');
+    const prepare = node('div', undefined, 'ev-phase');
+    refs.preparationNote = node('p', '', 'ev-hint');
+    refs.prepareTargets = fieldGroup(label('旧业务版本', 'releaseId', 'select'), label('当前已认可的联合测试定义', 'proposalId', 'select'));
+    refs.prepareReason = label('本次变更说明', 'reason', 'textarea');
+    refs.prepareAction = actionRow(action('备份旧数据并准备变更', 'prepare'));
+    prepare.append(node('h4', '准备变更'), refs.preparationNote, refs.prepareTargets, refs.prepareReason, refs.prepareAction);
+
+    const record = node('div', undefined, 'ev-phase');
+    refs.summary = node('p', '', 'ev-summary');
+    refs.recordSelect = label('变更记录', 'evolutionId', 'select');
+    record.append(node('h4', '迁移记录'), refs.recordSelect, refs.summary);
+
+    refs.revision = node('div', undefined, 'ev-subphase');
+    refs.revision.append(
+      fieldGroup(
+        label('数据处理方式', 'migrationType', 'select'), label('数据表', 'table', 'select'), label('字段名称', 'column'),
+        label('新字段类型', 'columnType', 'select'), label('新字段默认值', 'defaultValue'), label('要替换的旧值', 'oldValue'),
+        label('替换后的新值', 'newValue'), label('其他值映射（每行：旧值 → 新值；不变的值也要列出）', 'mappingLines', 'textarea'),
+      ),
+      actionRow(action('保存迁移修订', 'revise')),
+    );
+    for (const [value, text] of [['none', '不修改数据结构（权限或代码规则变化）'], ['addColumn', '增加一个字段并给旧数据设置默认值'], ['mapValues', '将一个字段的旧值改为新值']]) {
+      fields.migrationType.add(new Option(text, value));
+    }
+    fields.columnType.add(new Option('整数', 'INTEGER'));
+    fields.columnType.add(new Option('文字', 'TEXT'));
+    refs.decision = node('div', undefined, 'ev-subphase');
+    refs.decision.append(label('审阅意见', 'feedback', 'textarea'), actionRow(action('确认这版迁移', 'approve'), action('退回修订', 'reject')));
+    record.append(refs.revision, refs.decision);
+
+    refs.development = node('div', undefined, 'ev-phase');
+    refs.budget = node('p', '', 'ev-hint');
+    refs.consentRow = node('label', undefined, 'ev-consent');
+    refs.consent = node('input');
+    refs.consent.type = 'checkbox';
+    refs.consent.addEventListener('change', render);
+    refs.consentRow.append(refs.consent, node('span', '我同意使用已显示的预算，在旧源码和数据副本上开发新版本。'));
+    refs.development.append(node('h4', '开发与切换'), refs.budget, refs.consentRow, actionRow(action('开发新版本', 'start'), action('启用已验收的新版本', 'activate')));
+    evolution.append(prepare, record, refs.development);
+    workArea.append(versions, evolution);
+
+    const navigation = node('nav', undefined, 'ev-navigation');
+    navigation.setAttribute('aria-label', '本机交付工作区');
+    for (const [id, text] of [[versions.id, '版本记录'], [evolution.id, '需求演进']]) {
+      const link = node('a', text);
+      link.href = `#${id}`;
+      navigation.append(link);
+    }
+    refs.notice = node('p', '', 'ev-note');
+    refs.notice.setAttribute('role', 'status');
+    refs.error = node('p', '', 'ev-note ev-error');
+    refs.error.setAttribute('role', 'alert');
+    root.append(header, navigation, refs.notice, refs.error, workArea);
+    host.append(root);
     for (const name of ['migrationType', 'table', 'proposalId']) fields[name].addEventListener('change', () => { refs.consent.checked = false; render(); }); sync(); render();
   }
   function selected() { return data?.evolutions.find(item => item.id === fields.evolutionId.value) ?? null; }
@@ -54,7 +126,30 @@ export function createProjectEvolution({ api, getContext, onError = () => {} }) 
     refs.revise.disabled = !allowed || !row?.actions.canRevise;
     refs.approve.disabled = refs.reject.disabled = !allowed || !row?.actions.canApprove;
     refs.start.disabled = !allowed || !row?.actions.canStart || !refs.consent.checked || !HASH.test(data?.budget?.contractRevision ?? ''); refs.activate.disabled = !allowed || !row?.actions.canActivate;
-    refs.summary.textContent = row ? `${STATES[row.status] ?? row.status}${row.current ? '' : ' · 历史记录，不能用作当前版本'}。${row.error ?? ''}已保存的迁移：${row.migration?.kind === 'none' ? '不修改数据结构' : (row.migration?.operations ?? []).map(op => op.op === 'addColumn' ? `${op.table} 增加 ${op.column}` : `${op.table}.${op.column} 的值映射`).join('；')}` : '选择一条变更记录，核对和确认迁移。';
+    refs.initial.hidden = !data || data.releases.some(item => item.current);
+    refs.emptyReleases.hidden = !data || data.releases.length > 0;
+    refs.emptyReleases.textContent = '当前项目尚无本机版本。取得验收通过的候选后，可在这里首次启用。';
+    const currentRelease = data?.releases.find(item => item.current);
+    const sourceReady = currentRelease?.state === 'stopped' && !currentRelease.active;
+    const planningReady = context.planningStatus === 'confirmed' && HASH.test(context.sourceRevision);
+    const testReady = fields.proposalId.options.length > 1;
+    refs.prepareTargets.hidden = refs.prepareAction.hidden = !data || !sourceReady || !planningReady || !testReady;
+    // Keep this draft editable even while the current application is running.
+    refs.prepareReason.hidden = !currentRelease && !data?.evolutions.length;
+    refs.preparationNote.textContent = !data ? '等待服务端核对版本。'
+      : !currentRelease ? '先启用已验收的本机版本。'
+        : !sourceReady ? '准备前，先停止当前本机版本并保存数据。'
+          : !planningReady || !testReady ? '先确认新规划与联合测试定义，再准备已有数据变更。'
+            : '已停止的当前本机版本将作为备份和迁移的来源。';
+    refs.recordSelect.hidden = !data?.evolutions.length;
+    refs.revision.hidden = !row?.actions.canRevise;
+    refs.decision.hidden = !row?.actions.canApprove;
+    refs.development.hidden = !row?.actions.canStart && !row?.actions.canActivate;
+    refs.budget.hidden = !row?.actions.canStart;
+    refs.consentRow.hidden = !row?.actions.canStart;
+    refs.start.hidden = !row?.actions.canStart;
+    refs.activate.hidden = !row?.actions.canActivate;
+    refs.summary.textContent = row ? `${STATES[row.status] ?? row.status}${row.current ? '' : ' · 历史记录，不能用作当前版本'}。${row.error ?? ''}已保存的迁移：${row.migration?.kind === 'none' ? '不修改数据结构' : (row.migration?.operations ?? []).map(op => op.op === 'addColumn' ? `${op.table} 增加 ${op.column}` : `${op.table}.${op.column} 的值映射`).join('；')}` : '当前规划运行尚无已有数据的变更记录。';
     const budget = data?.budget?.budget;
     refs.budget.textContent = budget ? `本轮最多 ${budget.maxCalls} 次编码、${budget.maxReviewCalls} 次审查。${budget.unlimited ? '计划累计执行次数不限。' : `剩余 ${budget.remainingModelCalls} 次模型调用。`}金额未配置单价，仍为未知。` : '尚未取得当前开发预算。';
     const mode = fields.migrationType.value; for (const name of ['table', 'column']) fields[name].closest('label').hidden = mode === 'none'; for (const name of ['columnType', 'defaultValue']) fields[name].closest('label').hidden = mode !== 'addColumn'; for (const name of ['oldValue', 'newValue', 'mappingLines']) fields[name].closest('label').hidden = mode !== 'mapValues';
@@ -67,9 +162,41 @@ export function createProjectEvolution({ api, getContext, onError = () => {} }) 
     selectOptions(fields.proposalId, data.proposals.filter(item => item.current && item.approved && item.proposal?.browser && (item.proposal.taskScopes?.length ?? 0) < 2).map(item => [item.id, item.proposal.name || item.id]));
     selectOptions(fields.evolutionId, data.evolutions.map(item => [item.id, `${STATES[item.status] ?? item.status} · ${item.reason ?? ''}`]));
     if (!fields.evolutionId.value && data.evolutions.length) fields.evolutionId.value = data.evolutions[0].id;
-    refs.releases.replaceChildren(...data.releases.map(item => { const row = node('div', undefined, 'ev-row'); row.append(node('p', `${item.current ? '当前本机版本' : '历史备份'} ${(item.candidateCommit ?? '').slice(0, 8)} · ${STATES[item.state] ?? item.state}`));
-      const url = safeUrl(item.url); if (url && item.state === 'running' && item.current) { const link = node('a', '打开业务应用'); link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; row.append(link); }
-      for (const [operation, label, enabled] of [['startRelease', '启动', item.actions?.canStart], ['stopRelease', '停止并保存数据', item.actions?.canStop], ['rollback', '恢复上一个代码和数据版本', item.actions?.canRollback]]) { const button = node('button', label); button.type = 'button'; button.dataset.action = operation; button.dataset.releaseId = item.id; button.dataset.releaseAllowed = String(enabled === true); button.disabled = !fresh || busy || enabled !== true; button.addEventListener('click', () => void perform(operation, item)); row.append(button); } return row; })); render();
+    refs.releases.replaceChildren(...data.releases.map(item => {
+      const row = node('li', undefined, 'ev-row');
+      row.dataset.current = String(item.current === true);
+      const header = node('div', undefined, 'ev-row-header');
+      const status = node('span', STATES[item.state] ?? item.state, 'ev-state');
+      status.dataset.state = item.state;
+      header.append(node('strong', item.current ? '当前本机版本' : '历史备份'), status);
+      const meta = node('p', undefined, 'ev-version-meta');
+      const commit = node('code', (item.candidateCommit ?? '').slice(0, 8) || '提交未知');
+      if (item.candidateCommit) commit.title = item.candidateCommit;
+      meta.append(commit);
+      if (Number.isSafeInteger(item.dataGeneration)) meta.append(node('span', `数据代次 ${item.dataGeneration}`));
+      const controls = actionRow();
+      const url = safeUrl(item.url);
+      if (url && item.state === 'running' && item.current) {
+        const link = node('a', '打开业务应用');
+        link.href = url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        controls.append(link);
+      }
+      for (const [operation, label, enabled] of [['startRelease', '启动', item.actions?.canStart], ['stopRelease', '停止并保存数据', item.actions?.canStop], ['rollback', '恢复上一个代码和数据版本', item.actions?.canRollback]]) {
+        const button = node('button', label);
+        button.type = 'button';
+        button.dataset.action = operation;
+        button.dataset.releaseId = item.id;
+        button.dataset.releaseAllowed = String(enabled === true);
+        button.disabled = !fresh || busy || enabled !== true;
+        button.addEventListener('click', () => void perform(operation, item));
+        controls.append(button);
+      }
+      row.append(header, meta, controls);
+      return row;
+    }));
+    render();
     if (focus?.releaseId && focus.action) [...refs.releases.querySelectorAll('button')].find(button => button.dataset.releaseId === focus.releaseId && button.dataset.action === focus.action)?.focus({ preventScroll: true });
   }
   async function refresh() {

@@ -123,10 +123,13 @@ async function fixture(t, { unknownReceipt = false, invalidDefinition = false, r
   await f.page.getByRole('button', { name: '确认规格并继续', exact: true }).click(); await f.page.getByRole('button', { name: '确认计划并导出', exact: true }).waitFor();
   assert.deepEqual(f.calls, { spec: 1, engineering: 1, verification: 0 });
   await f.page.getByRole('button', { name: '确认计划并导出', exact: true }).click(); await f.page.locator('#download-bundle').waitFor({ state: 'visible' });
-  await f.page.locator('[data-workspace-view="execution"]').click();
-  await f.page.locator('#verification-plans-section > summary').click(); f.panel = f.page.locator('.verification-plans');
+  await openChecklist(f.page); f.panel = f.page.locator('.verification-plans');
   await ready(f.panel.locator('input[type=checkbox]')); assert.equal(await f.panel.getByRole('button', { name: '生成独立测试提案', exact: true }).isDisabled(), true);
   return f;
+}
+async function openChecklist(page) {
+  await page.locator('[data-workspace-view="execution"]').click();
+  await page.getByRole('tab', { name: '验收清单', exact: true }).click();
 }
 async function ready(locator) { await locator.waitFor({ state: 'visible' }); await until(() => locator.isEnabled(), Boolean, '控件许可'); }
 async function generate(f) {
@@ -161,7 +164,7 @@ test('actual model planning to HTTP proposal and definition-only human decisions
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await panel.getByRole('button', { name: '保存提案修订', exact: true }).click(); await until(() => panel.locator('[role=alert]').textContent(), text => /JSON格式无效/u.test(text));
   assert.equal(f.posts.filter(item => item.path.endsWith('/revise')).length, 0); assert.equal(await feedback.inputValue(), '保留本次审阅依据');
-  await page.reload(); await page.locator('#verification-plans-section > summary').click(); await ready(json);
+  await page.reload(); await openChecklist(page); await ready(json);
   assert.equal(await json.inputValue(), '{ invalid JSON'); assert.equal(await feedback.inputValue(), '保留本次审阅依据'); assert.equal(await panel.locator('input[type=checkbox]').isChecked(), false);
   const first = structuredClone(draft.proposal); first.steps[0].request.assertions.push({ id: 'json_root', op: 'jsonExists', path: '$' }); await json.fill(JSON.stringify(first, null, 2));
   const revised = await action(f, '保存提案修订', 'revise'); assert.notEqual(revised.revision, draft.revision); assert.equal(revised.approved, false); assert.equal(revised.proposal.steps[0].request.assertions.length, 2);
@@ -180,7 +183,7 @@ test('actual model planning to HTTP proposal and definition-only human decisions
   assert.ok(zip.includes(Buffer.from('plan.json'))); for (const privateText of [settings.LLM_API_KEY, f.directory, 'verification-planning', approved.id]) assert.equal(zip.includes(Buffer.from(privateText)), false);
   const receipts = await readdir(path.join(f.directory, 'verification-planning', 'receipts')); assert.equal(receipts.length, 1);
   await page.screenshot({ path: path.join(output, 'definition-approved-mobile.png'), fullPage: true }); await page.setViewportSize({ width: 1440, height: 1000 }); await page.screenshot({ path: path.join(output, 'definition-approved-desktop.png'), fullPage: true });
-  await page.reload(); await page.locator('#verification-plans-section > summary').click(); await until(() => panel.innerText(), text => text.includes('已认可定义（尚未运行）'));
+  await page.reload(); await openChecklist(page); await until(() => panel.innerText(), text => text.includes('已认可定义（尚未运行）'));
   assert.deepEqual(f.calls, { spec: 1, engineering: 1, verification: 1 }); assert.equal((await f.state()).proposals[0].approval.id, approved.approval.id); assert.deepEqual(f.errors, []);
   f.completed = true;
 });
@@ -218,7 +221,7 @@ test('failed model definition shows missing requirements and saves a separate co
   ] };
   const edited = JSON.stringify(fixed, null, 2);
   await json.fill(edited);
-  await f.page.reload(); await f.page.locator('#verification-plans-section > summary').click();
+  await f.page.reload(); await openChecklist(f.page);
   await json.waitFor();
   assert.equal(await json.inputValue(), edited, '未保存的修订刷新后仍保留');
   const accepted = f.page.waitForResponse(response => response.url().endsWith(endpoint) && response.request().method() === 'POST');
@@ -307,7 +310,7 @@ test('real three-service checkpoints preserve a pending source during proposal g
   await f.page.getByRole('button', { name: '确认计划并导出', exact: true }).click(); await f.page.locator('#download-bundle').waitFor({ state: 'visible' });
   const newState = await f.request(`/api/projects/${f.project.id}/runs/${next.id}/verification-plans`); assert.equal(newState.capabilities.canPropose, true); assert.deepEqual(newState.proposals, []); assert.equal(newState.capabilities.budget.remainingAttempts, 3);
   await f.page.locator('#run-select').selectOption(f.run.id); await f.page.getByRole('heading', { name: '历史需求输入：确认记录只读', exact: true }).waitFor();
-  await f.page.locator('[data-workspace-view="execution"]').click(); await refresh(f);
+  await openChecklist(f.page); await refresh(f);
   assert.equal(await f.panel.getByRole('button', { name: '生成独立测试提案', exact: true }).isDisabled(), true); assert.equal(await f.page.locator('[data-review-action]').count(), 0); assert.deepEqual(f.errors, []);
   assert.equal(old.proposals.find(row => row.id === approved.id).approval.id, approved.approval.id); assert.equal(old.proposals.find(row => row.id === approved.id).revision, approved.revision); assert.equal(first.id, approved.id);
   f.completed = true;
@@ -341,7 +344,7 @@ test('new static UI keeps an older or disabled server usable without polling una
     await route.fulfill({ response, json: health });
   });
   await f.page.reload();
-  await f.page.locator('[data-workspace-view="execution"]').click();
+  await openChecklist(f.page);
   await f.page.locator('#verification-plans-unavailable').waitFor();
   await f.page.waitForTimeout(3300);
   assert.equal(reads, 0);
@@ -349,7 +352,7 @@ test('new static UI keeps an older or disabled server usable without polling una
   assert.equal(await f.page.locator('#error-banner').isVisible(), false);
   assert.equal(await f.page.locator('#workflow-details').getAttribute('open'), '');
   await f.page.unroute('**/api/health');
-  await f.page.reload(); await f.page.locator('#verification-plans-section').waitFor();
+  await f.page.reload(); await openChecklist(f.page); await f.page.locator('#verification-plans-section').waitFor();
   await until(() => reads, value => value > 0, '服务声明支持后才读取提案');
   assert.deepEqual(f.calls, { spec: 1, engineering: 1, verification: 0 });
   assert.deepEqual(f.errors, []); f.completed = true;

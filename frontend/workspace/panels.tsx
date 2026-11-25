@@ -1,3 +1,5 @@
+import { DeliveryStationTabs } from './delivery-station';
+
 export function PlanningPanel() {
   return (
     <>
@@ -279,45 +281,38 @@ export function RequirementsPanel() {
 
 export function DeliveryPanel() {
   return (
-    <>
-      <section
-        id="workspace-execution"
-        className="workspace-panel"
-        data-workspace-panel="execution"
-        role="tabpanel"
-        aria-labelledby="workspace-tab-execution"
-        tabIndex={-1}
-        hidden
-      >
-        <header className="workspace-section-heading">
-          <h2>代码与验收</h2>
-        </header>
+    <section id="workspace-execution" className="workspace-panel delivery-station"
+      data-workspace-panel="execution" role="tabpanel" aria-labelledby="workspace-tab-execution"
+      tabIndex={-1} hidden>
+      <DeliveryStationTabs />
+      <div id="delivery-pane-overview" data-delivery-pane="overview" role="tabpanel" aria-labelledby="delivery-tab-overview">
+        <div id="delivery-overview-host" />
         <nav className="execution-workspace-flow" aria-label="从验收清单到交付">
-          <ol id="execution-workspace-steps"></ol>
-          <p id="execution-next-hint">先准备验收清单，再开始开发。</p>
+          <ol id="execution-workspace-steps" />
+          <p id="execution-next-hint" hidden />
         </nav>
-        <details
-          id="verification-plans-section"
-          className="workspace-secondary"
-          hidden
-        >
+      </div>
+      <div id="delivery-pane-checklist" data-delivery-pane="checklist" role="tabpanel" aria-labelledby="delivery-tab-checklist" hidden>
+        <details id="verification-plans-section" className="workspace-secondary" hidden>
           <summary>准备验收清单</summary>
-          <div id="verification-plans-host"></div>
+          <div id="verification-plans-host" />
         </details>
-        <section id="planned-execution-section" hidden>
-          <div id="planned-execution-host"></div>
-        </section>
+        <p id="verification-plans-unavailable" className="delivery-empty" hidden>当前服务未开放验收清单。</p>
+      </div>
+      <div id="delivery-pane-candidates" data-delivery-pane="candidates" role="tabpanel" aria-labelledby="delivery-tab-candidates" hidden>
+        <section id="planned-execution-section" hidden><div id="planned-execution-host" /></section>
+        <p id="planned-execution-unavailable" className="delivery-empty" hidden>当前服务未开放研发执行记录。</p>
+      </div>
+      <div id="delivery-pane-releases" data-delivery-pane="releases" role="tabpanel" aria-labelledby="delivery-tab-releases" hidden>
+        <section id="project-evolution-section" hidden><div id="project-evolution-host" /></section>
+        <p id="local-delivery-unavailable" className="delivery-empty" hidden>当前服务未开放本机版本与需求演进。</p>
+      </div>
+      <div id="delivery-pane-reference" data-delivery-pane="reference" role="tabpanel" aria-labelledby="delivery-tab-reference" hidden>
         <details id="execution-tools" className="workspace-secondary">
-          <summary>其他工具与参考项目</summary>
-          <section id="project-evolution-section" hidden>
-            <div id="project-evolution-host"></div>
-          </section>
-          <div id="execution-panel-host"></div>
+          <summary>固定参考执行</summary>
+          <div id="execution-panel-host" />
         </details>
-        <p id="verification-plans-unavailable" hidden>
-          当前服务未开放验收清单。
-        </p>
-      </section>
-    </>
+      </div>
+    </section>
   );
 }

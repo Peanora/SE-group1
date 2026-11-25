@@ -82,10 +82,10 @@ export function Workspace() {
         <ProjectHeading />
         <ProjectLaunch />
         <div className="workstation">
-          <RunRail />
           <div className="workstation-core">
             <WorkAreas />
           </div>
+          <RunRail />
         </div>
         <details className="workspace-scope">
           <summary>平台范围</summary>

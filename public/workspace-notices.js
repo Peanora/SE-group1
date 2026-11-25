@@ -1,6 +1,6 @@
 const SOURCE_LABELS = {
   planning: '规划过程', review: '规格与计划', tasks: '开发任务',
-  simulation: '模拟编排', source: '需求变更', execution: '代码执行', planned: '按规划开发', verification: '测试提案', connection: '连接状态',
+  simulation: '模拟编排', source: '需求变更', execution: '代码执行', planned: '按规划开发', release: '本机版本', verification: '测试提案', connection: '连接状态',
 };
 const contextKey = context => JSON.stringify([context?.projectId || '', context?.runId || '']);
 const messageOf = value => {

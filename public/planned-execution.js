@@ -33,7 +33,28 @@ const STYLE = `
 .planned-execution .pe-role-list button{margin-top:4px;color:#344c6d}
 .planned-execution .pe-role-list button[aria-disabled=true]{color:#526782;background:#f7f9fc;cursor:default}
 @media(max-width:600px){.planned-execution .pe-head,.planned-execution .pe-body{padding:15px 12px}.planned-execution .pe-head{gap:8px}.planned-execution .pe-head button{flex:none;padding:6px 8px}.planned-execution .pe-actions>*{flex:1 1 150px}.planned-execution .pe-primary{width:100%}.planned-execution pre{font-size:11px}.planned-execution .pe-role-list{grid-template-columns:1fr}}
+.planned-execution .pe-candidate-brief{margin:9px 0 14px;padding:11px 13px;border:1px solid #d5ddf0;border-radius:8px;background:#fff}
+.planned-execution .pe-brief-head{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px 14px}
+.planned-execution .pe-brief-head h3,.planned-execution .pe-brief-head p,.planned-execution .pe-brief-head label{margin:0}
+.planned-execution .pe-brief-head h3{font-size:15px;color:#182342}.planned-execution .pe-brief-head label{flex:1 1 170px;max-width:280px;font-size:11px;color:#526180}
+.planned-execution .pe-brief-head select{min-height:32px;padding:4px 7px}.planned-execution .pe-brief-result{font-size:12px;color:#526180}
+.planned-execution .pe-brief-commit{display:flex;flex-wrap:wrap;gap:4px 8px;padding:6px 0;color:#526180;font-size:12px}.planned-execution .pe-brief-commit code{color:#182342;overflow-wrap:anywhere}
+.planned-execution .pe-brief-checks{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin:0 0 7px;padding:0}.planned-execution .pe-brief-checks>div{padding:6px 8px;border:1px solid #dce4f5;border-radius:5px;background:#f8faff;overflow-wrap:anywhere;font-size:12px}
+.planned-execution .pe-brief-checks dt{color:#526180}.planned-execution .pe-brief-checks dd{margin:0;color:#182342;font-weight:620}.planned-execution .pe-brief-checks dd[data-state=done]{color:#175a44}.planned-execution .pe-brief-checks dd[data-state=failed]{color:#932d41}
+.planned-execution .pe-candidate-brief .pe-actions{margin:7px 0 0}.planned-execution .pe-candidate-brief .pe-actions>*{min-height:33px}.planned-execution .pe-candidate-brief .pe-download{border-color:#2e3ebd;background:#3846ce;color:#fff}
+.planned-execution .pe-settings>div{padding-top:2px}.planned-execution .pe-settings>summary{margin:0;color:#182342}.planned-execution .pe-settings .pe-note{margin-block:7px}
+@media(max-width:660px){
+  .planned-execution .pe-brief-checks{grid-template-columns:repeat(2,minmax(0,1fr))}
+  section.planned-execution .pe-version-evidence .pe-version-matrix{display:block;min-width:0}
+  .planned-execution .pe-version-evidence .pe-version-matrix thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+  .planned-execution .pe-version-evidence .pe-version-matrix tbody{display:grid;gap:6px}
+  .planned-execution .pe-version-evidence .pe-version-matrix tbody tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 8px;padding:5px;border:1px solid #dce4f5;border-radius:5px}
+  section.planned-execution .pe-version-evidence .pe-version-matrix :is(th,td){min-width:0;max-width:none;padding:3px 5px;border:0;overflow-wrap:anywhere}
+  .planned-execution .pe-version-evidence .pe-version-matrix tbody :is(th,td:last-child){grid-column:1/-1}
+  .planned-execution .pe-version-evidence .pe-version-matrix td::before{display:block;content:attr(data-label);color:#526180;font:11px/1.5 system-ui,sans-serif}
+}
 `;
+const VERSION_COLUMNS = ['任务 / 尝试', '候选提交', '自检', 'HTTP', 'Edge', 'Review', '版本归属'];
 const contextOf = raw => Object.fromEntries(['projectId', 'runId', 'specRevision', 'planRevision', 'planningStatus'].map(key => [key, typeof raw?.[key] === 'string' ? raw[key] : '']));
 const keyOf = value => JSON.stringify(value);
 const count = value => Number.isSafeInteger(value) && value >= 0 ? String(value) : '未知';
@@ -163,6 +184,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
   let root, refs, destroyed = false, mounted = false, timer, epoch = 0, readSerial = 0, action = null, pending = null;
   let context = contextOf(null), key = '', data = null, proposals = null, fresh = false, loading = false, error = '', notice = '', consentKey = '';
   let selectedId = '', proposalId = '', selectionEdits = 0, previewRead = null, graphRecord = '', selectedTask = '', repairNoteKey = '', selectedVersion = '', focusChain = true, graphOrder = [], resizeObserver, graphRenderer;
+  let settingsRecord = '';
   const savedSelections = new Map(), processSelections = new Map(), notified = new Set(), eventNodes = new Map(), taskNodes = new Map(), graphNodes = new Map(), versionNodes = new Map();
   const node = (tag, value, cls) => { const element = document.createElement(tag); if (value != null) element.textContent = value; if (cls) element.className = cls; return element; };
   const setText = (element, value) => { const text = printable(value); if (element.textContent !== text) element.textContent = text; };
@@ -330,18 +352,20 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     select.value = items.some(item => item.id === chosen) ? chosen : items[0].id; return select.value;
   }
   function build(host) {
-    root = node('section', null, 'planned-execution'); root.append(node('style', STYLE)); const head = node('div', null, 'pe-head'), intro = node('div'); intro.append(node('h2', '按当前规划开发'));
+    root = node('section', null, 'planned-execution'); root.append(node('style', STYLE)); const head = node('div', null, 'pe-head'), intro = node('div'); intro.append(node('h2', '候选工作区'));
     const refreshButton = button('刷新开发状态', () => { void refresh(); }); head.append(intro, refreshButton); root.append(head);
     const body = node('div', null, 'pe-body'), state = node('p', null, 'pe-note'), errorBox = node('p', null, 'pe-note pe-error'), noticeBox = node('p', null, 'pe-note pe-notice'); errorBox.setAttribute('role', 'alert'); noticeBox.setAttribute('role', 'status');
     const prepare = button('去准备验收清单', () => openVerification?.(), 'pe-primary');
-    body.append(state, prepare, errorBox, noticeBox);
-    const setup = node('div'); body.append(setup);
+    const setup = node(openVerification ? 'details' : 'div', null, 'pe-settings');
+    const setupContent = openVerification ? node('div') : setup;
+    if (openVerification) setup.append(node('summary', '开发设置与费用'), setupContent);
     const cost = node('p', null, 'pe-note'), definitionSelect = node('select'), consent = node('input'); consent.type = 'checkbox'; const label = node('label', null, 'pe-consent'); label.append(consent, node('span', '我已核对当前规格、联合验收定义、所选执行、模型和冻结预算，同意本次开发或保留代码修复产生模型用量。'));
-    const start = button('按当前规划开始开发', () => { void perform('start'); }, 'pe-primary'); setup.append(cost, field('已认可的联合验收定义', definitionSelect), label, start);
-    const monetary = node('p', '费用估算：未知。实际调用和token用量单独记录。', 'pe-note'); setup.append(monetary);
-    const scope = section('规格、来源和预算', setup), executionSelect = node('select');
-    const recordSelect = field('开发执行记录', executionSelect); body.append(recordSelect);
-    const empty = node('p', '尚无开发执行记录。'), detail = node('div'), result = node('p', null, 'pe-result'), status = node('p'), failure = node('p', null, 'pe-note pe-error'), facts = node('p'), actions = node('div', null, 'pe-actions');
+    const start = button('按当前规划开始开发', () => { void perform('start'); }, 'pe-primary');
+    const monetary = node('p', '费用估算：未知。实际调用和token用量单独记录。', 'pe-note');
+    setupContent.append(cost, monetary, field('已认可的联合验收定义', definitionSelect), label, start);
+    const scope = section('规格、来源和预算', setupContent), executionSelect = node('select');
+    const recordSelect = field('开发执行记录', executionSelect);
+    const empty = node('p', '尚无开发执行记录。'), detail = node('div'), result = node('p', null, 'pe-result'), status = node('h3', null, 'pe-status'), failure = node('p', null, 'pe-note pe-error'), facts = node('p'), actions = node('div', null, 'pe-actions');
     const roleMonitor = createRoleMonitor();
     const process = node('section', null, 'pe-process'), processHead = node('div', null, 'pe-process-head'), processTitle = node('h3', '真实开发进程'), processScope = node('p', null, 'pe-process-scope');
     process.setAttribute('aria-label', '真实开发进程'); processTitle.tabIndex = -1;
@@ -365,8 +389,10 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     processGrid.append(processMap, inspector); process.append(processHead, processGrid);
     const matrixSection = node('section', null, 'pe-version-evidence'), matrixHeading = node('h3', '候选版本与验收证据'), matrixNote = node('p', '每行只对应已记录的候选；历史结果不继承到新代码。', 'pe-matrix-note'), matrixScroll = node('div', null, 'pe-matrix-scroll'), matrixTable = node('table', null, 'pe-version-matrix'), matrixBody = node('tbody'), matrixHead = node('tr');
     matrixTable.setAttribute('aria-label', '候选版本的同版验收结果');
-    for (const label of ['任务 / 尝试', '候选提交', '自检', 'HTTP', 'Edge', 'Review', '版本归属']) { const th = node('th', label); th.scope = 'col'; matrixHead.append(th); }
-    const matrixThead = node('thead'); matrixThead.append(matrixHead); matrixTable.append(matrixThead, matrixBody); matrixScroll.append(matrixTable); matrixSection.append(matrixHeading, matrixNote, matrixScroll);
+    matrixHeading.tabIndex = -1;
+    matrixTable.setAttribute('role', 'table'); matrixHead.setAttribute('role', 'row'); matrixBody.setAttribute('role', 'rowgroup');
+    for (const label of VERSION_COLUMNS) { const th = node('th', label); th.scope = 'col'; th.setAttribute('role', 'columnheader'); matrixHead.append(th); }
+    const matrixThead = node('thead'); matrixThead.setAttribute('role', 'rowgroup'); matrixThead.append(matrixHead); matrixTable.append(matrixThead, matrixBody); matrixScroll.append(matrixTable); matrixSection.append(matrixHeading, matrixNote, matrixScroll);
     const failureHelpBox = node('div', null, 'pe-note pe-error'), failureTitle = node('strong'), failureDetail = node('p'), failureNext = node('p');
     const prepareRevision = button('准备清单修订', () => { const item = row(); if (mayReviseChecklist(item)) void reviseChecklist(item.id); }, 'pe-primary');
     const technicalFailure = button('展开技术检查', () => {
@@ -379,13 +405,29 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     const repairNote = node('textarea'), repairNoteField = field('修复说明（选填）', repairNote);
     repairNote.maxLength = 2000; repairNote.placeholder = '写明已观察到的症状或代码位置。说明会随修复请求发送给编码模型，请避免填写凭据。';
     const repairInfo = node('p', '修复会复用所选执行的源码。新代码会重新跑测试与审查。', 'pe-note');
-    const executionSummary = node('div', null, 'pe-execution-summary'); executionSummary.append(result, status, process); body.insertBefore(recordSelect, setup); body.insertBefore(executionSummary, setup);
-    const repair = button('保留代码并修复', () => { void perform('repair'); }), cancel = button('请求停止本次开发', () => { void perform('cancel'); }), download = node('a', '下载当前已验收源码', 'pe-download'); download.rel = 'noreferrer'; actions.append(repair, cancel, download); detail.append(roleMonitor.element, failureHelpBox, failure, facts, repairInfo, repairNoteField, actions);
+    const brief = node('section', null, 'pe-candidate-brief'), briefHead = node('div', null, 'pe-brief-head'), briefState = node('div', null, 'pe-brief-result');
+    briefState.append(status, result); briefHead.append(briefState, recordSelect);
+    const commit = node('code'), commitLine = node('p', null, 'pe-brief-commit'); commitLine.append(node('span', '候选提交'), commit);
+    const evidenceList = node('dl', null, 'pe-brief-checks');
+    const checkValues = ['编码自检', 'HTTP 接口', 'Edge 浏览器', '独立审查'].map(label => {
+      const group = node('div'), value = node('dd'); group.append(node('dt', label), value); evidenceList.append(group); return value;
+    });
+    const seeEvidence = button('查看同版检查', () => {
+      if (matrixSection.hidden) { focusEvidence(refs.checks.closest('details')); return; }
+      matrixHeading.focus({ preventScroll: true }); matrixHeading.scrollIntoView({ block: 'nearest' });
+    });
+    const repairSettings = button('核对修复费用与范围', () => focusEvidence(setup), 'pe-primary');
+    brief.append(briefHead, commitLine, evidenceList, failureHelpBox, failure, actions);
+    const executionSummary = node('div', null, 'pe-execution-summary'); executionSummary.append(brief);
+    const repair = button('保留代码并修复', () => { void perform('repair'); }), cancel = button('请求停止本次开发', () => { void perform('cancel'); }), download = node('a', '下载当前已验收源码', 'pe-download'); download.rel = 'noreferrer';
+    actions.append(repairSettings, seeEvidence, cancel, download); detail.append(roleMonitor.element, facts);
+    if (openVerification) setupContent.append(repairInfo, repairNoteField, repair);
+    else { actions.prepend(repair); detail.append(repairInfo, repairNoteField); }
     const pause = button('暂停派发新任务', () => { void perform('pause'); }), resume = button('继续任务开发', () => { void perform('resume'); }), recover = button('从安全暂停点恢复', () => { void perform('recover'); }); actions.append(pause, resume, recover);
     const recoveryNote = node('p', '恢复会保留已完成任务和原有用量，只继续未完成任务；仍使用本次剩余额度和原时限。尚未确认停止的执行不能据此重新启动。', 'pe-note'); detail.append(recoveryNote);
     const previewBox = node('div', null, 'pe-preview'), previewStatus = node('p', null, 'pe-preview-status'), previewInfo = node('p', null, 'pe-note'), previewActions = node('div', null, 'pe-actions');
     const previewStart = button('启动已验收软件预览', () => { void perform('preview'); }), previewStop = button('停止软件预览', () => { void perform('stop-preview'); }), previewAnchor = node('a', '打开软件预览', 'pe-preview-link');
-    previewAnchor.target = '_blank'; previewAnchor.rel = 'noopener noreferrer'; previewActions.append(previewStart, previewStop, previewAnchor); previewBox.append(node('h3', '软件预览'), previewStatus, previewInfo, previewActions); detail.append(previewBox);
+    previewAnchor.target = '_blank'; previewAnchor.rel = 'noopener noreferrer'; previewActions.append(previewStart, previewStop, previewAnchor); previewBox.append(node('h3', '软件预览'), previewStatus, previewInfo, previewActions); executionSummary.append(previewBox, process);
     const taskSection = node('details'), taskList = node('div'), graphNote = node('p', null, 'pe-note'), graphScroll = node('div', null, 'pe-graph-scroll'), graphCanvas = node('div', null, 'pe-graph-canvas'); graphScroll.tabIndex = 0; graphScroll.setAttribute('role', 'region'); graphScroll.setAttribute('aria-label', '真实任务依赖图'); graphScroll.append(graphCanvas);
     processMap.append(graphNote, graphScroll, wholeFlow);
     taskSection.open = true; taskSection.append(node('summary', '真实任务、依赖与验收证据'), taskList); detail.append(matrixSection, taskSection);
@@ -394,8 +436,10 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     for (const title of ['记录 / 任务', '阶段 / 工具', '开始时间', '用时', '退出码', '停止确认', '状态']) { const th = node('th', title); th.scope = 'col'; commandHead.append(th); }
     const thead = node('thead'); thead.append(commandHead); commandTable.append(thead, commandBody); commandScroll.append(commandTable); commands.append(node('summary', '真实工具执行结果'), commandScroll); detail.append(commands);
     const binding = section('本次冻结预算与代码版本', detail), diff = section('本次代码差异', detail), checks = section('自检、HTTP与浏览器实际检查', detail), review = section('Review与阻塞问题', detail), calls = section('模型请求与实际用量', detail);
-    const events = node('details'), list = node('ol'); events.open = !openVerification; events.append(node('summary', '真实执行日志'), list); detail.append(events); body.append(empty, detail); root.append(body); host.append(root);
+    const events = node('details'), list = node('ol'); events.open = !openVerification; events.append(node('summary', '真实执行日志'), list); detail.append(events);
+    body.append(errorBox, noticeBox, executionSummary, state, prepare, setup, empty, detail); root.append(body); host.append(root);
     refs = { refreshButton, state, errorBox, noticeBox, prepare, setup, recordSelect, executionSummary, cost, monetary, definitionSelect, consent, start, scope, executionSelect, empty, detail, result, status, roleMonitor, failure, failureHelp: failureHelpBox, failureTitle, failureDetail, failureNext, prepareRevision, facts, repair, repairInfo, repairNote, repairNoteField, cancel, pause, resume, recover, recoveryNote, download, previewBox, previewStatus, previewInfo, previewStart, previewStop, previewAnchor, process, processTitle, processScope, processMap, focusButton, wholeFlow, inspector, inspectorContext, inspectorTitle, inspectorState, inspectorCause, inspectorCommit, inspectorDependencies, inspectorFacts, inspectorFailures, inspectorFailureList, inspectorFailureMore, inspectorRoles, inspectorRoleDetails, inspectorEvidence, inspectorRaw, matrixSection, matrixBody, matrixNote, taskSection, taskList, graphNote, graphScroll, graphCanvas, commands, commandBody, binding, diff, checks, review, calls, list };
+    Object.assign(refs, { commit, checkValues, repairSettings });
     if (typeof ResizeObserver === 'function') { resizeObserver = new ResizeObserver(() => { if (row() && !destroyed) renderGraph(row()); }); resizeObserver.observe(graphScroll); }
     graphCanvas.addEventListener('click', event => {
       const control = event.target.closest('.pe-task-node');
@@ -538,7 +582,10 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
         const tr = node('tr'), taskCell = node('th'), pick = button('', () => {
           selectedVersion = version.key; if ((row()?.tasks ?? []).some(task => task.id === version.taskId)) selectedTask = version.taskId;
           renderProcess(row());
-        }); taskCell.scope = 'row'; taskCell.append(pick); const cells = Array.from({ length: 6 }, () => node('td')); tr.append(taskCell, ...cells); refs.matrixBody.append(tr);
+        });
+        tr.setAttribute('role', 'row'); taskCell.scope = 'row'; taskCell.setAttribute('role', 'rowheader'); taskCell.append(pick);
+        const cells = VERSION_COLUMNS.slice(1).map(label => { const cell = node('td'); cell.setAttribute('role', 'cell'); cell.dataset.label = label; return cell; });
+        tr.append(taskCell, ...cells); refs.matrixBody.append(tr);
         view = { tr, pick, cells }; versionNodes.set(version.key, view);
       }
       const current = version.current && fresh && currentRow(item);
@@ -666,18 +713,33 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     setText(refs.monetary, priceLabel(cap?.modelPrices));
     setText(refs.scope, { specRevision: context.specRevision, planRevision: context.planRevision, definition: selectedDefinition() ? { id: proposalId, revision: selectedDefinition().revision, binding: selectedDefinition().binding } : null, budget });
     const item = row();
+    const settingsTarget = keyOf([key, item?.id]);
+    if (openVerification && settingsRecord !== settingsTarget) {
+      settingsRecord = settingsTarget;
+      refs.setup.open = !item || refs.setup.contains(document.activeElement);
+    }
     const noteTarget = keyOf([key, item?.id, item?.candidateCommit, item?.revision, item?.binding?.sourceRevision, item?.binding?.sourceGeneration, proposalId, cap?.contractRevision]);
     if (noteTarget !== repairNoteKey) { repairNoteKey = noteTarget; refs.repairNote.value = ''; }
     refs.repairNoteField.hidden = checklistBlocked || !(currentRow(item) && ['failed', 'stopped', 'timed_out'].includes(item.status) && item.actions?.canRepair === true
       && selectedDefinition()?.id === item.proposalId && selectedDefinition()?.revision === item.revision);
     refs.repairNote.disabled = !!action || !!pending || refs.repairNoteField.hidden;
     refs.repairInfo.hidden = refs.repairNoteField.hidden;
+    refs.repairSettings.hidden = !openVerification || refs.setup.hidden || refs.repairNoteField.hidden;
     refs.empty.hidden = !!item; refs.detail.hidden = !item; refs.executionSummary.hidden = !item;
     if (!item) { if (refs.graphCanvas.childNodes.length) clearGraph(); return; }
     refs.roleMonitor.element.hidden = item.executionMode === 'task_dag';
     const roleProgress = refs.roleMonitor.element.hidden ? null : renderRoleMonitor(refs.roleMonitor, item);
     const passed = accepted(item); refs.result.dataset.accepted = String(passed); setText(refs.result, passed ? item.checkpoint?.restored === true ? '同版本历史验收已核对，交付资格已恢复；未重新运行测试。' : '当前规格的软件已通过本次验收' : item.status === 'accepted' ? '历史通过记录仅供查看；当前验收许可尚未确认。' : item.status === 'diagnostic_passed' ? '诊断检查通过，不代表当前软件通过验收。' : '当前软件尚未获得完整验收结论。');
-    setText(refs.status, item.checkpoint?.restored === true ? '同版本历史交付已恢复' : STATES[item.status] || '未知执行状态，请刷新核对');
+    const status = item.checkpoint?.restored === true ? '同版本历史交付已恢复' : STATES[item.status] || '未知执行状态，请刷新核对';
+    setText(refs.status, fresh ? status : `状态待核对 · ${status}`);
+    const writingIntegration = item.executionMode === 'task_dag' && item.active && item.workflow?.stage === 'coding';
+    const candidate = (roleProgress ?? executionRoleProgress(item)).commit;
+    const commit = !writingIntegration && candidate === item.candidateCommit ? candidate : null;
+    const boundChecks = commit ? item.checks : null;
+    const boundReview = commit ? (item.reviewHistory ?? []).findLast(entry => entry.candidateCommit === commit && (item.executionMode !== 'task_dag' || !entry.taskId)) : null;
+    setText(refs.commit, commit || '本轮尚未固定');
+    const briefEvidence = [checkEvidence(boundChecks?.self), checkEvidence(boundChecks?.http), checkEvidence(boundChecks?.browser), reviewEvidence({ checks: boundChecks, review: boundReview })];
+    briefEvidence.forEach(({ state, label }, index) => { refs.checkValues[index].dataset.state = state; setText(refs.checkValues[index], label); });
     const help = failureHelp(item);
     refs.failure.hidden = !!help || (!item.error && (!item.checkpoint?.message || item.checkpoint.restored === true)); setText(refs.failure, item.error || item.checkpoint?.message);
     refs.failureHelp.hidden = !help;

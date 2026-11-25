@@ -74,7 +74,7 @@ const resume = page => page.getByRole('button', { name: '继续任务开发', ex
 const recover = page => page.getByRole('button', { name: '从安全暂停点恢复', exact: true });
 const taskArea = page => page.locator('details').filter({ has: page.locator('summary', { hasText: /^真实任务、依赖与验收证据$/u }) }).first();
 const taskCards = page => taskArea(page).locator(':scope > div > details');
-const statusText = page => page.locator('.pe-result + p');
+const statusText = page => page.locator('.pe-status');
 const taskBudget = () => ({ maxCalls: 3, maxReviewCalls: 3, taskLimit: 4, attemptModelCalls: 24, maxConcurrency: 2,
   timeoutMs: 1200000, maxAttempts: 3, totalModelCalls: 72, remainingModelCalls: 72, remainingAttempts: 3 });
 function taskRow(extra = {}) {
@@ -99,7 +99,7 @@ for (const width of [1440, 390]) test(`new task panel ${width}px shows separate 
   row.reviewHistory = [{ taskId: task.id, attemptId: task.attemptId, candidateCommit, status: 'not_started' }];
   await page.evaluate(() => { window.states.a.dev.capabilities.costEstimate = { known: false, amount: null, currency: null, reason: '未配置模型单价' }; });
   await setupTasks(page, [row]);
-  assert.match(await page.locator('.pe-note').first().innerText(), /后端/u);
+  assert.equal(await page.getByText('只有后端当前版本验收通过后才开放源码下载。', { exact: true }).isVisible(), true);
   const cost = page.getByText(/最多4项真实任务，每项编码最多3次/u);
   assert.equal(await cost.isVisible(), true);
   assert.match(await cost.innerText(), /本次最多24次模型调用，并发最多2项.*1200秒/u);
