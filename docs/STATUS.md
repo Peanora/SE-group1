@@ -1,5 +1,9 @@
 # 当前实现与开发交接
 
+## 王浩蒙的软件预览和源码交付模块
+
+2026-11-24，第 5 人模块在 `codex/planned-delivery` 分支补齐了预览 DTO 的 `candidateCommit` / `sourceHash` 同提交透出与工作台展示、交付归档 `delivery/evolution.json` 兼容与只读验收摘要解析、`scripts/verify-planned-delivery.mjs --inspect` 零费用核对模式，以及预约场景端到端预览与源码交付演示（`scripts/deliver-reservations.mjs`）和回归测试（`tests/reservation-delivery-demo.test.mjs`）。语法检查 259/259 通过，第 5 板块测试套件 35 项中 33 通过、0 失败、2 项 Windows MXC/Edge 真机测试按预期跳过。详见[软件预览与源码交付交接](tasks/planned-delivery.md)。
+
 ## 李文宇的代码审查模块
 
 2026-11-20，第 4 人模块已补齐重复意见校验、逐提交完整历史阻塞复核、未完成审查门禁与逐版本历史读取。已关闭问题在后续提交再次出现时会被拦住，格式重试成功后仍可查看原拒绝原因。预约独立演示展示真实 Git 双提交、源码行证据和同一问题编号的复核关闭。分支基线为 `codex/automatic-login-checklist` 的 `2a9d791`，与 main 的合入顺序需要在 PR 中注明。
