@@ -83,17 +83,19 @@ function ProviderFields({ editor, busy, saving, error, onDirty, onError, onClose
             <input id="provider-url" name="baseUrl" type="url" defaultValue={provider?.baseUrl} maxLength={2000} autoComplete="off" spellCheck={false} placeholder="https://your-service.example/v1" aria-describedby="provider-url-note" required />
             <small id="provider-url-note">填写服务的基础地址，留出 /chat/completions 路径由工作台补齐。</small>
           </div>
-          <div className="settings-field">
-            <label htmlFor="provider-model">模型名称</label>
-            <input id="provider-model" name="model" defaultValue={provider?.model} maxLength={200} autoComplete="off" spellCheck={false} placeholder="服务实际支持的模型名称" required />
-          </div>
-          <div className="settings-field">
-            <label htmlFor="provider-key">API 密钥</label>
-            <input id="provider-key" name="apiKey" type="password" maxLength={4096} autoComplete="new-password" spellCheck={false} placeholder={provider?.hasKey ? '已设置，留空保留' : '本机服务可留空'} aria-describedby="provider-key-note" />
-            <small id="provider-key-note">{provider?.hasKey ? '留空保留已有密钥。填写新密钥可替换。' : '密钥保存在本机服务端。本机模型服务可留空。'}</small>
-            {provider?.hasKey && <label id="provider-clear-label" className="settings-checkbox" htmlFor="provider-clear">
-              <input id="provider-clear" name="clearKey" type="checkbox" />清除已有密钥
-            </label>}
+          <div className="settings-credentials">
+            <div className="settings-field">
+              <label htmlFor="provider-model">模型名称</label>
+              <input id="provider-model" name="model" defaultValue={provider?.model} maxLength={200} autoComplete="off" spellCheck={false} placeholder="服务实际支持的模型名称" required />
+            </div>
+            <div className="settings-field">
+              <label htmlFor="provider-key">API 密钥</label>
+              <input id="provider-key" name="apiKey" type="password" maxLength={4096} autoComplete="new-password" spellCheck={false} placeholder={provider?.hasKey ? '已设置，留空保留' : '本机服务可留空'} aria-describedby="provider-key-note" />
+              <small id="provider-key-note">{provider?.hasKey ? '留空保留已有密钥。填写新密钥可替换。' : '密钥保存在本机服务端。本机模型服务可留空。'}</small>
+              {provider?.hasKey && <label id="provider-clear-label" className="settings-checkbox" htmlFor="provider-clear">
+                <input id="provider-clear" name="clearKey" type="checkbox" />清除已有密钥
+              </label>}
+            </div>
           </div>
           <details className="settings-advanced">
             <summary>接口参数</summary>

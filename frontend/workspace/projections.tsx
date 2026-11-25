@@ -83,3 +83,23 @@ export function showExecutionTimeline(container: Element, steps: Phase[], curren
     </li>
   )));
 }
+interface HistoryRow {
+  id: string;
+  status: string;
+  time: string;
+  dateTime: string;
+  order: number;
+  revision: string;
+}
+
+export function showRunHistory(container: Element, rows: HistoryRow[], activeId: string | undefined) {
+  render(container, rows.map(row => (
+    <li key={row.id}>
+      <button type="button" data-run-history-id={row.id} aria-current={row.id === activeId ? 'true' : undefined}>
+        <strong>运行 {String(row.order).padStart(2, '0')}</strong>
+        <time dateTime={row.dateTime}>{row.time}</time>
+        <small>{row.status}{row.revision ? ' · ' + row.revision : ''}</small>
+      </button>
+    </li>
+  )));
+}

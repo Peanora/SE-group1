@@ -41,11 +41,58 @@
   pointer-events: auto;
 }
 
-section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node {
+section.planned-execution .pe-process .pe-graph-canvas[data-renderer="react-flow"] {
+  --execution-canvas-accent: #3846ce;
+  --execution-canvas-ink: #182342;
+  background: radial-gradient(#cfd8ee 1px, transparent 1.15px) 0 0 / 18px 18px #f8faff;
+}
+
+section.planned-execution .pe-process .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node {
   position: relative;
   inline-size: 100%;
   block-size: 100%;
+  border-color: #bdcae8;
+  border-inline-start-width: 1px;
+  border-radius: 9px;
+  background: #fff;
+  color: var(--execution-canvas-ink);
+  box-shadow: 0 3px 7px #18234216;
   pointer-events: auto;
+}
+
+section.planned-execution .pe-process .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node[aria-pressed="true"] {
+  border-color: var(--execution-canvas-accent);
+  background: #e8ecff;
+  box-shadow: 0 0 0 2px #3846ce3d;
+}
+
+section.planned-execution .pe-process .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node:focus-visible {
+  outline: 2px solid var(--execution-canvas-accent);
+  outline-offset: 3px;
+}
+
+section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node .pe-task-status {
+  max-inline-size: 100%;
+  padding-inline: 6px;
+  border-radius: 4px;
+  background: #eef2fa;
+  color: #435275;
+  font-weight: 650;
+}
+
+section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node[data-status="completed"] .pe-task-status {
+  background: #d8f2e7;
+  color: #135c45;
+}
+
+section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node[data-status="failed"] .pe-task-status {
+  background: #fbe4e6;
+  color: #8f2537;
+}
+
+section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node:is([data-status="running"],[data-status="blocked"]) .pe-task-status {
+  background: #fbe7b8;
+  color: #674016;
 }
 
 section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .react-flow__handle {
@@ -53,13 +100,17 @@ section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .react-fl
   block-size: 8px;
   min-inline-size: 0;
   min-block-size: 0;
-  border: 1px solid var(--pe-paper, #fcfbf7);
+  border: 1px solid #fff;
   border-radius: 50%;
-  background: var(--pe-control, #869b94);
+  background: #7e8eae;
   pointer-events: none;
 }
 
-section.planned-execution .pe-process .pe-graph-canvas .pe-flow-edge {
+section.planned-execution .pe-process .pe-graph-canvas[data-renderer="react-flow"] .pe-flow-edge {
   fill: none;
-  stroke: var(--pe-accent, #08624e);
+  stroke: var(--execution-canvas-accent);
+}
+
+section.planned-execution .pe-process .pe-graph-canvas[data-renderer="react-flow"] .pe-flow-edge[data-focus="false"] {
+  stroke: #aab5cf;
 }

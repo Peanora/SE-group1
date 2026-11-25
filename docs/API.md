@@ -40,6 +40,10 @@
 
 仍在当前版本且止于验收清单的自动运行，可返回 `retryVerification:{maxAttempts:3}`。保存适用清单后返回 `retryVerification:{maxAttempts:0}`，表示直接核对该清单并继续开发。`POST /api/projects/:projectId/runs/:runId/automatic-delivery/retry-verification` 接收 `{modelUsageConfirmed:true,planRevision,updatedAt}`，绑定当前已确认计划与失败快照。每个运行最多一次清单模型追加授权，最多再生成 3 份清单，历史与累计用量继续保留。从已保存清单继续时还固定该清单的 ID 和修订。上次开发已失败、当前计划确已修订并确认后，可在新版计划和清单上继续一次，旧执行记录保留。当前计划已有尝试时拒绝从清单重复派发。
 
+**停止自动推进。** 本机负责人可以在规格、规划或验收清单阶段请求 `POST /api/projects/:projectId/runs/:runId/automatic-delivery/stop`，正文为 `{}`，返回 202 和自动交付状态。GET 的 `canRequestStop` 指示当前账户与阶段是否可用。已有研发派发意图或执行记录时，此接口返回 409，研发记录的取消接口负责实际开发进程。
+
+请求持久化 `stopRequestedAt`，状态为 `stop_requested`。在原阶段安全收尾前保持停止待处理，禁止派发新的自动步骤。`stopped` 表示自动推进结束，原规格、清单、历史和用量保留。`usageUncertain:true` 表示先前的请求、回执或用量仍待核对。重复请求返回当前快照。重启恢复已保存的停止请求时不会重新派发收费操作。
+
 浏览器 DSL 的 `goto` 可提供同源相对路径 `expectedPath`。目标与请求路径不同时，验收同时确认真实同源 HTTP 3xx 跳转链、最终响应与地址栏目标。没有声明目标时，按原规则要求最终 URL 等于请求 URL。
 
 规划预览保持最长三分钟的本机运行时限。工作台启动时会核对已记录输出超限、进程终止且源码完整的预览停止结果，恢复活动槽并保留原停止证据。停止未知的记录仍待协调。Web 运行器将经过完整协议校验的业务响应计入独立 4 MiB 上限，单响应仍限 256 KiB；日志和控制输出沿用其各入口的预算。验收结果继续绑定实际执行策略和提交。

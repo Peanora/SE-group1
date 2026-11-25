@@ -1,5 +1,5 @@
-.tf-workbench .evidence-flow-edges .flow-edge { stroke: #b1c4b8; }
-.tf-workbench .evidence-flow-edges .flow-edge.running { stroke: #08624e; }
+.tf-workbench .evidence-flow-edges .flow-edge { stroke: #a4b4da; }
+.tf-workbench .evidence-flow-edges .flow-edge.running { stroke: #3846ce; }
 .tf-workbench .evidence-flow-edges .flow-edge.succeeded { stroke: #6d9b85; }
 .tf-workbench .evidence-flow-edges .flow-edge:is(.failed, .blocked) { stroke: #b46d62; }
 
@@ -33,8 +33,8 @@
   min-height: 21px;
   padding-inline: 5px;
   border-radius: 4px;
-  background: #e9eeea;
-  color: #4a6258;
+  background: #e9eef9;
+  color: #4d5f88;
   font-size: 11px;
   line-height: 1.15;
 }

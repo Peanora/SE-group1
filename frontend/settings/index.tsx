@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent, MouseEvent } from 'react';
 import { createRoot } from 'react-dom/client';
+import { Plus, RefreshCw } from 'lucide-react';
 import { providerFields, requestSettings } from './api';
 import type { Provider, ProviderInput, Snapshot } from './api';
 import { ProviderDrawer } from './ProviderDrawer';
 import type { Editor } from './ProviderDrawer';
-import { RolesPanel, ServicesPanel, SettingsNavigation } from './SettingsPanels';
+import { RolesPanel, ServicesPanel, SettingsNavigation, SettingsOverview } from './SettingsPanels';
 import type { SettingsView } from './SettingsPanels';
 import './settings.css';
 
@@ -196,33 +197,33 @@ function Settings({ view }: { view: SettingsView }) {
     <div className="settings-layout" onClickCapture={confirmNavigation}>
       <a className="settings-skip" href="#agent-settings-main">跳到 {title}</a>
       <SettingsNavigation view={view} />
-      <div className="settings-shell">
-        <header className="settings-topbar"><span>设置</span><span aria-hidden="true">/</span><strong>{title}</strong></header>
-        <main id="agent-settings-main" className="settings-main" tabIndex={-1}>
-          <header className="settings-heading">
-            <div>
-              <h1>{title}</h1>
-              <p>{isServicePage ? '管理模型服务地址、名称和访问密钥。' : '为各研发角色选择模型。多个角色可使用同一服务。'}</p>
-            </div>
+      <main id="agent-settings-main" className="settings-main" tabIndex={-1}>
+        <header className="settings-heading">
+          <div>
+            <h1>{title}</h1>
+            <p>{isServicePage ? '管理模型地址、访问密钥与单价。' : '查看当前分工，为各研发角色调整模型服务。'}</p>
+          </div>
+          <div className="settings-heading-actions">
+            <button id="reload-agent-settings" type="button" className="settings-button settings-reload" onClick={reload} disabled={busy}>
+              <RefreshCw size={15} aria-hidden="true" />重新载入配置
+            </button>
             {isServicePage && <button ref={addProviderRef} id="add-agent-provider" type="button" className="settings-button settings-primary" disabled={busy || !snapshot} onClick={event => openProvider(undefined, event.currentTarget)}>
-              <span aria-hidden="true">＋</span> 添加服务
+              <Plus size={16} aria-hidden="true" />添加服务
             </button>}
-          </header>
-          <p ref={errorRef} id="agent-settings-error" className="settings-message settings-error" role="alert" hidden={!error}>{error}</p>
-          <p id="agent-settings-notice" className="settings-message" role="status" hidden={!notice}>{notice}</p>
-          {snapshot && (isServicePage
+          </div>
+        </header>
+        <p ref={errorRef} id="agent-settings-error" className="settings-message settings-error" role="alert" hidden={!error}>{error}</p>
+        <p id="agent-settings-notice" className="settings-message" role="status" hidden={!notice}>{notice}</p>
+        {snapshot && <div className="settings-content">
+          {isServicePage
             ? <ServicesPanel snapshot={snapshot} busy={busy} rowErrors={rowErrors} onEdit={openProvider} onDelete={deleteProvider} />
             : <RolesPanel snapshot={snapshot} roles={roles} dirty={rolesDirty} busy={busy} saving={saving} onChange={(role, value) => {
-              setRoles(current => ({ ...current, [role]: value }));
-              setNotice('');
-            }} onSave={saveRoles} />)}
-          <div className="settings-page-note">
-            {isServicePage && <p>保存配置仅更新本机设置。远程服务需要密钥，localhost 和 127.0.0.1 服务可留空。</p>}
-            <button id="reload-agent-settings" type="button" className="settings-text-button" onClick={reload} disabled={busy}>重新载入配置</button>
-            {hasDraft && <span>重新载入将替换本页草稿</span>}
-          </div>
-        </main>
-      </div>
+                setRoles(current => ({ ...current, [role]: value }));
+                setNotice('');
+              }} onSave={saveRoles} />}
+          <SettingsOverview snapshot={snapshot} view={view} />
+        </div>}
+      </main>
       {isServicePage && <ProviderDrawer
         editor={editor}
         dialogRef={dialogRef}

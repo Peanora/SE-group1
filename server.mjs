@@ -385,8 +385,9 @@ export async function createApp(options = {}) {
         if (!['GET', 'HEAD'].includes(method) && automaticDelivery.ownsProject(projectId)) {
           const savingInput = segments[3] === 'changes' && (segments.length === 4 || segments.length === 5 && segments[4] === 'parse');
           const stoppingExecution = segments[3] === 'runs' && segments[5] === 'development-executions' && segments.length === 8 && segments[7] === 'cancel';
+          const stoppingAutomatic = segments[3] === 'runs' && segments[5] === 'automatic-delivery' && segments.length === 7 && segments[6] === 'stop' && method === 'POST';
           const planningAction = segments[3] === 'runs' && segments.length === 6 && segments[5] === 'action' && method === 'POST';
-          if (!savingInput && !stoppingExecution && !planningAction) throw new HttpError(409, '当前项目正在自动交付，操作将在本次运行结束后开放。');
+          if (!savingInput && !stoppingExecution && !stoppingAutomatic && !planningAction) throw new HttpError(409, '当前项目正在自动交付，操作将在本次运行结束后开放。');
         }
         if (segments[3] === 'local-releases') {
           requireLocalExecutionRequest(request, server); store.get(projectId);
@@ -471,7 +472,14 @@ export async function createApp(options = {}) {
         if (segments.length === 5 && method === 'GET') return respond(response, 200, { run: await orchestrator.describeRun(project, run) });
         if (segments.length === 6 && segments[5] === 'automatic-delivery' && method === 'GET') {
           requireLocalExecutionRequest(request, server);
-          return respond(response, 200, await automaticDelivery.status(project, run));
+          const mayStop = !teamAccess || teamAccess.identity(request.headers.cookie)?.role === 'owner';
+          return respond(response, 200, await automaticDelivery.status(project, run, { mayStop }));
+        }
+        if (segments.length === 7 && segments[5] === 'automatic-delivery' && segments[6] === 'stop' && method === 'POST') {
+          requireLocalExecutionRequest(request, server);
+          dataFields(await readJson(request), []);
+          const subject = teamAccess ? teamAccess.executionSubject(request.headers.cookie) : createLocalExecutionSubject();
+          return respond(response, 202, await automaticDelivery.requestStop(projectId, runId, subject));
         }
         if (segments.length === 7 && segments[5] === 'automatic-delivery' && segments[6] === 'retry-verification' && method === 'POST') {
           requireLocalExecutionRequest(request, server);

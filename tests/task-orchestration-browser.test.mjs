@@ -172,3 +172,42 @@ test('真实 Edge：评审者可从任务图确认计划，开发入口仍由负
   await root.getByText('计划已确认', { exact: true }).waitFor();
   assert.equal(await root.getByRole('button', { name: '准备验收与开发', exact: true }).isVisible(), false);
 });
+
+for (const width of [1440, 390]) test(`真实 Edge ${width}px：项目回程链接、运行历史与计划清单读取同一记录`, { timeout: 60000 }, async t => {
+  const { app, project, run, page, origin } = await fixture(t, { width });
+  await app.orchestrator.action(project.id, run.id, { action: 'approve_plan', revision: run.planRevision, specRevision: run.specRevision });
+  await until(() => run.status === 'succeeded' && !app.orchestrator.state(run).driving, '旧计划已导出');
+  const next = await app.orchestrator.createRun(project.id, { mode: 'local' });
+  await until(() => next.status === 'awaiting_spec' && !app.orchestrator.state(next).driving, '新规格待确认');
+  const other = await app.store.create({ name: '另一个项目', source: { filename: 'other.md', content: '这个项目仅用于核对回程不会选错。' } });
+  await page.addInitScript(({ id }) => sessionStorage.setItem('taskflow-selection', JSON.stringify({ projectId: id })), { id: other.id });
+  const writes = [];
+  page.on('request', request => {
+    if (request.url().startsWith(origin + '/api/') && request.method() !== 'GET') writes.push(request.url());
+  });
+
+  await page.goto(origin + '/?' + new URLSearchParams({ project: project.id, run: next.id }));
+  await page.getByRole('heading', { name: project.name, exact: true, level: 1 }).waitFor();
+  await page.waitForFunction(id => document.querySelector('#run-select').value === id, next.id);
+  await page.locator('#run-history > summary').click();
+  const history = page.locator('#run-history-list');
+  const oldRecord = history.locator('[data-run-history-id="' + run.id + '"]');
+  assert.match(await oldRecord.innerText(), new RegExp(run.planRevision.slice(0, 8)));
+  await oldRecord.click();
+  await page.waitForFunction(id => document.querySelector('#run-select').value === id, run.id);
+  assert.equal(new URL(page.url()).searchParams.get('run'), run.id);
+  assert.equal(await oldRecord.getAttribute('aria-current'), 'true');
+
+  await page.getByRole('tab', { name: /开发任务/ }).click();
+  await page.getByRole('tab', { name: '计划清单' }).click();
+  const schedule = page.getByRole('table', { name: '开发计划清单' });
+  assert.equal(await schedule.getByText('已纳入计划', { exact: true }).count(), 5);
+  const selected = schedule.locator('[data-task-schedule][data-task=C]');
+  await selected.click();
+  const details = page.getByRole('complementary', { name: '所选任务详情' });
+  assert.equal(await details.getByRole('heading', { name: '分支C' }).isVisible(), true);
+  await selected.press('End');
+  assert.equal(await details.getByRole('heading', { name: '后续任务', level: 3 }).isVisible(), true);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  assert.deepEqual(writes, []);
+});

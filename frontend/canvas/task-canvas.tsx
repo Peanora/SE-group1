@@ -48,9 +48,9 @@ type TaskNode = Node<PlanNode | ExecutionNode, 'task'>;
 type DependencyEdge = Edge<DependencyData, 'dependency'>;
 
 const markerColors: Record<Relation, string> = {
-  muted: '#869b94',
-  upstream: '#4e618b',
-  downstream: '#08624e',
+  muted: '#7e8eae',
+  upstream: '#4169a2',
+  downstream: '#3846ce',
 };
 
 const TaskCard = memo(function TaskCard({ data, sourcePosition, targetPosition }: NodeProps<TaskNode>) {
@@ -66,7 +66,7 @@ const TaskCard = memo(function TaskCard({ data, sourcePosition, targetPosition }
 function PlanCard({ data }: { data: PlanNode }) {
   return (
     <button type="button" className={`dev-task ${data.className}`} data-task={data.id}
-      data-focus-key={`task-${data.id}`} aria-pressed={data.selected}>
+      data-focus-key={`task-${data.id}`} aria-pressed={data.selected} title={data.title}>
       <span className="dev-task-top"><span>{data.id}</span><span>{data.label}</span></span>
       <span className="dev-task-title">{data.title}</span>
     </button>
@@ -81,7 +81,7 @@ function ExecutionCard({ data }: { data: ExecutionNode }) {
       title={title} aria-label={`${data.id}：${title}；${data.statusLabel}`}>
       <small>{data.id}</small>
       <span className="pe-graph-title">{data.title}</span>
-      <small>{data.statusLabel}</small>
+      <small className="pe-task-status">{data.statusLabel}</small>
       <small className="pe-graph-dependencies">依赖：{data.dependencies}</small>
     </button>
   );
@@ -126,7 +126,7 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
   const flowEdges = useMemo<DependencyEdge[]>(() => edges.map(edge => {
     const { source, target } = edge;
     const data = 'relation' in edge ? { relation: edge.relation } : { focused: edge.focused, vertical };
-    const color = 'relation' in edge ? markerColors[edge.relation] : edge.focused ? markerColors.downstream : '#b5c4bc';
+    const color = 'relation' in edge ? markerColors[edge.relation] : edge.focused ? markerColors.downstream : '#aab5cf';
     return {
       id: JSON.stringify([source, target]),
       type: 'dependency',

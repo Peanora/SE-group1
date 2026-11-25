@@ -1,0 +1,223 @@
+.task-schedule {
+  overflow: clip;
+  min-inline-size: 0;
+  border: 1px solid var(--task-line, #d5ddf0);
+  border-radius: 8px;
+  background: #fff;
+  color: #182342;
+}
+
+.task-schedule-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 14px;
+  min-block-size: 52px;
+  padding: 10px 12px;
+  border-block-end: 1px solid #d5ddf0;
+  background: #fff;
+  color: #182342;
+}
+
+.task-schedule-head h3 {
+  margin: 0;
+  color: inherit;
+  font-size: 14px;
+}
+
+.task-schedule-head span {
+  color: #526180;
+  font-size: 11px;
+}
+
+.task-schedule-scroll {
+  max-block-size: 520px;
+  overflow: auto;
+}
+
+.task-schedule table {
+  inline-size: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  text-align: start;
+  color: #182342;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.task-schedule th,
+.task-schedule td {
+  padding: 9px 12px;
+  border-block-end: 1px solid #e4e9f5;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+
+.task-schedule thead th {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  background: #f2f5fc;
+  color: #526180;
+  font-weight: 650;
+}
+
+.task-schedule th:first-child {
+  inline-size: 42%;
+}
+
+.task-schedule :is(th,td):last-child {
+  min-inline-size: 94px;
+}
+
+.task-schedule tbody tr[data-current="true"] {
+  background: #eef1ff;
+}
+
+.task-schedule tbody tr[data-current="true"] th {
+  box-shadow: inset 3px 0 #3846ce;
+}
+
+.task-schedule-pick {
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+  inline-size: 100%;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  text-align: start;
+  color: #182342;
+  overflow-wrap: anywhere;
+}
+
+.task-schedule-pick span {
+  color: #4558a0;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.task-schedule-pick strong {
+  color: inherit;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.task-schedule-pick:is(:hover, :focus-visible) {
+  border-color: #93a2e4;
+  outline: 2px solid #3846ce;
+  outline-offset: -2px;
+  color: #2d3bb5;
+}
+
+.task-schedule-label {
+  display: none;
+}
+
+.task-schedule-identifiers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.task-schedule-identifiers span {
+  max-inline-size: 100%;
+  padding: 2px 5px;
+  border: 1px solid #d5ddf0;
+  border-radius: 4px;
+  color: #41537a;
+  font-size: 11px;
+}
+
+.task-schedule-none {
+  color: #526180;
+}
+
+.task-schedule-status {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: #eef2fa;
+  color: #435275;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.task-schedule-status:is([data-state="changed"],[data-state="sim-running"],[data-state="sim-ready"]) {
+  background: #e8ecff;
+  color: #283898;
+}
+
+.task-schedule-status:is([data-state="affected"],[data-state="sim-awaiting_confirmation"],[data-state="sim-blocked"]) {
+  background: #fbe7b8;
+  color: #674016;
+}
+
+.task-schedule-status[data-state="sim-completed"] {
+  background: #d8f2e7;
+  color: #135c45;
+}
+
+.task-schedule-status[data-state="sim-failed"] {
+  background: #fbe4e6;
+  color: #8f2537;
+}
+
+@media (max-width: 600px) {
+  .task-schedule-scroll {
+    max-block-size: 385px;
+  }
+
+  .task-schedule :is(table,tbody) {
+    display: block;
+  }
+
+  .task-schedule thead {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .task-schedule tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0,1fr)) minmax(72px,1fr);
+    gap: 0 6px;
+    padding: 7px 9px;
+    border-block-end: 1px solid #e4e9f5;
+  }
+
+  .task-schedule tbody tr[data-current="true"] {
+    box-shadow: inset 3px 0 #3846ce;
+  }
+
+  .task-schedule tbody th:first-child {
+    grid-column: 1 / -1;
+    inline-size: auto;
+    padding: 0 0 4px;
+    box-shadow: none;
+  }
+
+  .task-schedule tbody td {
+    min-inline-size: 0;
+    padding: 2px 4px 4px;
+  }
+
+  .task-schedule tbody td:last-child {
+    min-inline-size: 0;
+  }
+
+  .task-schedule tbody tr > :is(th,td) {
+    border: 0;
+  }
+
+  .task-schedule-label {
+    display: block;
+    margin-block-end: 3px;
+    color: #526180;
+    font-size: 10px;
+  }
+}

@@ -242,3 +242,56 @@ test('首次读取失败可重试，未保存角色导航可取消，长列表�
   assert.equal(writes, 0, '取消删除及绑定拒绝均不提交配置');
   assert.equal((await settings()).providers.length, 20);
 });
+
+test('设置明确区分已保存角色映射与自动交付预检，保存后重新核对旧字段和阻塞原因', { timeout: 45000 }, async t => {
+  const { browser, base, settings } = await fixture(t);
+  const initial = await settings();
+  const provider = { id: 'local-fixture', name: '本机模型', baseUrl: 'http://127.0.0.1:5101/v1', model: 'configured-model', jsonMode: true, thinking: '' };
+  const seeded = await fetch(`${base}/api/agent-settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ revision: initial.revision, providers: [provider], roles: initial.roles }) });
+  assert.equal(seeded.status, 200);
+
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const reason = '本机执行环境尚未可用 <img src=x>';
+  let automaticDelivery = { available: true, ready: false, reason };
+  let healthReads = 0;
+  const mutations = [];
+  page.on('request', request => {
+    if (request.method() !== 'GET') mutations.push([request.method(), new URL(request.url()).pathname]);
+  });
+  await page.route('**/api/health', route => {
+    healthReads++;
+    return route.fulfill({ json: { ok: true, automaticDelivery } });
+  });
+  await ready(page, base, 'agents');
+
+  const readiness = page.locator('#settings-startup-status');
+  const role = page.locator('.settings-role').filter({ has: page.locator('[data-agent-role="review"]') });
+  const applied = role.locator('.settings-role-applied');
+  await readiness.filter({ hasText: '启动受阻' }).waitFor();
+  assert.match(await readiness.textContent(), /本机执行环境尚未可用 <img src=x>/u);
+  assert.equal(await readiness.locator('img').count(), 0);
+  assert.match(await applied.textContent(), /环境默认.*尚未配置环境模型/su);
+
+  await role.locator('[data-agent-role="review"]').selectOption(provider.id);
+  assert.match(await applied.textContent(), /尚未配置环境模型/u, '未保存的选择不会替代后端已应用映射');
+  assert.equal(healthReads, 1);
+  assert.deepEqual(mutations, []);
+
+  automaticDelivery = { available: true, ready: true };
+  await saveRoles(page);
+  await readiness.filter({ hasText: '启动前置已满足' }).waitFor();
+  assert.match(await applied.textContent(), /本机模型.*configured-model/su);
+  assert.equal((await settings()).roles.review, provider.id);
+  assert.equal(healthReads, 2, '保存后重新读取真实就绪接口');
+
+  automaticDelivery = { available: true };
+  await page.getByRole('button', { name: '重新载入配置', exact: true }).click();
+  await readiness.filter({ hasText: '状态未核对' }).waitFor();
+  automaticDelivery = { available: false, ready: false, reason: '当前工作台未开放自动交付。' };
+  await page.getByRole('button', { name: '重新载入配置', exact: true }).click();
+  await readiness.filter({ hasText: '当前未开放' }).waitFor();
+  assert.match(await readiness.textContent(), /当前工作台未开放自动交付/u);
+  assert.equal(healthReads, 4);
+  assert.deepEqual(mutations, [['PUT', '/api/agent-settings']]);
+});

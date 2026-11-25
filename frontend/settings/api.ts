@@ -34,6 +34,26 @@ interface SettingsUpdate {
   roles: Snapshot['roles'];
 }
 
+export type StartupReadiness =
+  | { kind: 'ready' }
+  | { kind: 'blocked' | 'unavailable'; reason?: string }
+  | { kind: 'unknown' };
+
+export async function requestStartupReadiness(signal: AbortSignal): Promise<StartupReadiness> {
+  try {
+    const response = await fetch('/api/health', { cache: 'no-store', signal });
+    if (!response.ok) return { kind: 'unknown' };
+    const config = (await response.json())?.automaticDelivery;
+    const reason = typeof config?.reason === 'string' && config.reason.trim() ? config.reason.trim() : undefined;
+    if (config?.available === false) return { kind: 'unavailable', reason };
+    if (config?.available === true && config.ready === false) return { kind: 'blocked', reason };
+    if (config?.available === true && config.ready === true) return { kind: 'ready' };
+  } catch {
+    return { kind: 'unknown' };
+  }
+  return { kind: 'unknown' };
+}
+
 export function providerFields({ id, name, baseUrl, model, jsonMode, thinking, pricing }: Provider): ProviderInput {
   return { id, name, baseUrl, model, jsonMode, thinking, pricing };
 }

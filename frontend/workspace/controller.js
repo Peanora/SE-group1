@@ -1,5 +1,6 @@
+import { renderTaskSchedule, wireTaskSchedule } from './task-schedule.js';
 import { clearEventEvidence, renderEventEvidence, renderStageEvidence, renderWorkflowEvidence } from './run-evidence.tsx';
-import { showExecutionTimeline, showProjects, showRunTimeline } from './projections.tsx';
+import { showExecutionTimeline, showProjects, showRunHistory, showRunTimeline } from './projections.tsx';
 import { canEditPlanTasks, createPlanningReview } from '../../public/planning-review.js';
 import { createSpecRepair } from '../../public/spec-repair.js';
 import { createPlanningIssue } from '../../public/planning-issue.js';
@@ -20,6 +21,7 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const escape = (value = '') => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const taskOrchestration = createTaskOrchestration($('#records-body'), { escape, onLayoutChange: () => { if (state.tab === 'tasks') renderRecords(); } });
 const state = { health: null, projects: [], project: null, run: null, automatic: null, stageId: 'spec', taskId: null, artifactName: 'task.md', tab: 'events', raw: false, busy: false, epoch: 0, selectionPending: false, pollTimer: null, feedback: '', importFile: null, filename: 'requirements.md' };
+wireTaskSchedule($('#records-body'));
 let sourceReadyProject = '';
 let expandedAutomaticRun = '';
 let automaticRetryConsent = null;
@@ -54,7 +56,7 @@ function automaticStatus() {
   };
 }
 function automaticOwnsRun() {
-  return ['queued', 'running', 'needs_clarification'].includes(automaticStatus()?.status);
+  return ['queued', 'running', 'needs_clarification', 'stop_requested'].includes(automaticStatus()?.status);
 }
 function automaticClarifying() { return automaticStatus()?.status === 'needs_clarification'; }
 function verificationRetryContext() {
@@ -290,7 +292,7 @@ function issueCoversSpecQuestions(run = state.run) {
 }
 function runStatusLabel(run = state.run) {
   if (!run) return '';
-  const automatic = { queued: '自动交付准备中', running: '自动交付中', needs_clarification: '等待补充需求', completed: '已通过验收', failed: '自动交付失败', interrupted: '自动交付已中断' }[run.automaticDelivery?.status];
+  const automatic = { queued: '自动交付准备中', running: '自动交付中', needs_clarification: '等待补充需求', stop_requested: '等待停止自动推进', stopped: '已停止自动推进', completed: '已通过验收', failed: '自动交付失败', interrupted: '自动交付已中断' }[run.automaticDelivery?.status];
   return automatic || (specClarificationPending(run) ? '等待补充需求' : STATUS[run.status] || run.status);
 }
 function workflowSteps() {
@@ -333,6 +335,12 @@ function renderExecutionFlow(steps) {
 function renderWorkspaceContext(steps = workflowSteps()) {
   const run = state.run, historical = historicalRun(), context = $('#workspace-context');
   const automatic = automaticStatus(), download = $('#automatic-download');
+  const stop = $('#stop-automatic');
+  const mayStop = !state.health?.teamAccess?.enabled || state.actorRole === 'owner';
+  const stopping = automatic?.status === 'stop_requested';
+  stop.hidden = !mayStop || (automatic?.canRequestStop !== true && !stopping);
+  stop.disabled = state.busy || stopping || automatic?.canRequestStop !== true;
+  stop.textContent = stopping ? '等待停止自动推进' : '停止自动推进';
   const downloadReady = automatic?.status === 'completed' && automatic.downloadAvailable === true && Boolean(automatic.executionId);
   download.hidden = !downloadReady;
   if (downloadReady) download.href = `${basePath()}/development-executions/${encodeURIComponent(automatic.executionId)}/download`;
@@ -391,6 +399,8 @@ function renderWorkspaceContext(steps = workflowSteps()) {
       needs_clarification: ['等待补充需求', '需要回答', 'awaiting_spec', '查看问题'],
       failed: ['自动交付未通过', '未通过', 'failed', '查看失败阶段'],
       interrupted: ['自动交付已中断', '已中断', 'failed', '查看中断阶段'],
+      stop_requested: ['正在等待安全停止', '停止已请求', 'paused', '查看当前阶段'],
+      stopped: ['已停止自动推进', '已停止', 'paused', '查看已保存结果'],
       completed: [downloadReady ? '已通过验收，可下载源码' : '自动验收已通过', '已验收', 'succeeded', '查看交付'],
     }[automatic.status];
     if (presentation) {
@@ -568,7 +578,10 @@ function renderProjects() {
 function renderHeader() {
   $('#project-title').textContent = state.project?.name || '需求编排工作台';
   $('#breadcrumb-project').textContent = state.project?.name || '新项目';
-  $('#project-description').textContent = state.project ? `${state.project.source?.filename || '需求文档'}　${state.project.source?.content?.length?.toLocaleString('zh-CN') || 0} 字` : '从需求规划到开发验收。';
+  const source = selectedSource();
+  $('#project-description').textContent = source
+    ? (source.filename || '需求文档') + '　' + (source.content?.length?.toLocaleString('zh-CN') || 0) + ' 字'
+    : '从需求规划到开发验收。';
   $('#source-button').disabled = !state.project;
   const factoryLink = $('#factory-workbench-link');
   factoryLink.hidden = !state.project || state.health?.factoryWorkbench?.available !== true;
@@ -581,7 +594,13 @@ function renderHeader() {
   const runs = sortedRuns();
   const select = $('#run-select');
   select.innerHTML = runs.length ? runs.map((run, i) => `<option value="${escape(run.id)}" ${run.id === state.run?.id ? 'selected' : ''}>运行 ${String(runs.length - i).padStart(2, '0')}　${escape(formatTime(run.createdAt, true))}　${escape(runStatusLabel(run))}${run.workflowVersion === 2 ? '' : '（旧版记录）'}</option>`).join('') : '<option>尚无运行记录</option>';
-  select.disabled = !runs.length || state.busy;
+  select.disabled = !runs.length || state.busy || state.selectionPending;
+  $('#run-history').hidden = !runs.length;
+  showRunHistory($('#run-history-list'), runs.map((run, index) => ({
+    id: run.id, status: runStatusLabel(run) + (historicalRun(run) ? ' / 历史需求' : ''),
+    time: formatTime(run.createdAt, true), dateTime: run.createdAt, order: runs.length - index,
+    revision: run.planRevision ? '计划 ' + run.planRevision.slice(0, 8) : '',
+  })), state.run?.id);
 }
 function renderControls() {
   const run = state.run;
@@ -625,7 +644,7 @@ function renderControls() {
   const mayOwn = !state.health?.teamAccess?.enabled || state.actorRole === 'owner';
   const knownAutoBudget = ['specificationMaxCalls', 'engineeringMaxCalls', 'verificationMaxAttempts'].every(key => Number.isSafeInteger(autoConfig?.[key]) && autoConfig[key] > 0);
   autoStart.hidden = !autoConfig || !mayOwn;
-  const autoReady = autoConfig?.available === true && autoConfig.ready !== false && knownAutoBudget;
+  const autoReady = autoConfig?.available === true && autoConfig.ready === true && knownAutoBudget;
   autoStart.disabled = !state.project || changing || active || planningPending || !autoReady;
   const autoUnavailable = $('#automatic-unavailable');
   autoUnavailable.hidden = autoStart.hidden || autoReady;
@@ -639,7 +658,7 @@ function renderControls() {
   $('#pause-button').textContent = run?.status === 'paused' ? '恢复执行' : '暂停';
   $('#pause-button').disabled = changing;
   $('#refresh-button').disabled = state.busy;
-  $('#run-select').disabled = !state.project?.runs?.length || state.busy;
+  $('#run-select').disabled = !state.project?.runs?.length || state.busy || state.selectionPending;
   $('#download-bundle').hidden = run?.status !== 'succeeded';
   if (run?.status === 'succeeded') $('#download-bundle').href = `${basePath()}/download`;
   const status = run?.status || 'idle';
@@ -688,25 +707,33 @@ function renderTaskWorkspace(simulation, preview, owner) {
   const version = simulation?.planRevision ?? run.planRevision;
   const key = JSON.stringify([run.id, version, simulation?.id]);
   const graph = taskOrchestration.render({ key, tasks, selected, simulation, preview, statusNames: SIM_STATUS });
+  const planConfirmed = Boolean(run.planRevision && run.approvals?.plan?.revision === run.planRevision
+    && run.approvals.plan.specRevision === run.specRevision);
+  const taskView = state.tab === 'schedule'
+    ? renderTaskSchedule({ key, tasks, selected, simulation, preview, statusNames: SIM_STATUS, planConfirmed, escape })
+    : graph.html;
+  const detailGroup = (label, contents) => '<section class="task-detail-section"><h4>' + label + '</h4>' + contents + '</section>';
   const taskNames = new Map(tasks.map(task => [task.id, task.title]));
   const taskLinks = (ids, empty) => ids.length ? ids.map(id => `<button type="button" class="pill" data-task="${escape(id)}" title="${escape(taskNames.get(id) || id)}">${escape(id)}</button>`).join('') : `<span class="pill">${empty}</span>`;
   const sources = (selected.requirementIds || []).map((id) => (simulation ? simulation.spec : run.spec)?.requirements?.find((requirement) => requirement.id === id)).filter(Boolean);
   const boundary = [['计划修改范围', selected.writePaths], ['输入资料', selected.inputs?.length ? selected.inputs : ['当前计划未明确输入资料，请结合前置任务与规格来源核对。']], ['预期产出', selected.outputs?.length ? selected.outputs : ['当前计划未明确输出，请结合目标与验收条件核对。']]]
-    .filter(([, values]) => Array.isArray(values) && values.length).map(([label, values]) => `<h4>${label}</h4><ul>${values.map(value => `<li>${escape(value)}</li>`).join('')}</ul>`).join('');
+    .filter(([, values]) => Array.isArray(values) && values.length).map(([label, values]) => detailGroup(label, `<ul>${values.map(value => `<li>${escape(value)}</li>`).join('')}</ul>`)).join('');
   const files = (selected.suggestedFiles || []).map(file => `<span class="pill">${escape(file)}</span>`).join('');
   const sourceDetails = sources.map(source => `<div class="task-source-quote"><strong>${escape(source.id)} ${escape(source.title)}</strong><br>${escape(source.sourceQuote || source.description)}</div>`).join('');
   return `${renderTaskHandoff(run, simulation, preview, owner)}
     <div class="task-workspace">
-      ${graph.html}
+      ${taskView}
       <aside class="task-detail" aria-label="所选任务详情">
-        <p class="task-detail-id">${escape(selected.id)} / ${escape(selected.category || '开发任务')}</p>
-        <h3>${escape(selected.title)}</h3><p>${escape(selected.description)}</p>
-        ${simulatedTasks.detail(selected.id)}
-        <h4>前置任务</h4><div>${taskLinks(selected.dependsOn || [], '无前置任务')}</div>
-        <h4>后续任务</h4><div>${taskLinks(graph.nextIds, '无后续任务')}</div>
-        <h4>验收条件</h4><ul>${(selected.acceptance || []).map(item => `<li>${escape(item)}</li>`).join('')}</ul>
-        ${files ? `<h4>建议文件</h4><div>${files}</div>` : ''}${boundary}
-        <h4>需求来源</h4>${sourceDetails || '<p>基础工程或集成验证任务</p>'}
+        <div class="task-detail-summary">
+          <p class="task-detail-id">${escape(selected.id)} / ${escape(selected.category || '开发任务')}</p>
+          <h3>${escape(selected.title)}</h3><p>${escape(selected.description)}</p>
+          ${simulatedTasks.detail(selected.id)}
+        </div>
+        ${detailGroup('前置任务', '<div>' + taskLinks(selected.dependsOn || [], '无前置任务') + '</div>')}
+        ${detailGroup('后续任务', '<div>' + taskLinks(graph.nextIds, '无后续任务') + '</div>')}
+        ${detailGroup('验收条件', '<ul>' + (selected.acceptance || []).map(item => '<li>' + escape(item) + '</li>').join('') + '</ul>')}
+        ${files ? detailGroup('建议文件', '<div>' + files + '</div>') : ''}${boundary}
+        ${detailGroup('需求来源', sourceDetails || '<p>基础工程或集成验证任务</p>')}
       </aside>
     </div>`;
 }
@@ -791,7 +818,7 @@ function renderArtifacts() {
 function renderRecords() {
   for (const button of $$('[data-tab]')) button.setAttribute('aria-selected', String(button.dataset.tab === state.tab));
   $('#records-body').setAttribute('aria-labelledby', state.tab === 'tasks' ? 'records-tab-tasks' : `tab-${state.tab}`);
-  $('#records-hint').textContent = ({ events: '执行状态与操作记录', tasks: '待实施计划与独立模拟运行（非真实验收）', artifacts: '可阅读、可交接的项目产物' })[state.tab];
+  $('#records-hint').textContent = ({ events: '执行状态与操作记录', tasks: '任务依赖与详情', schedule: '任务、前置依赖与规格来源', artifacts: '可阅读、可交接的项目产物' })[state.tab];
   const records = $('#records-body');
   if (state.tab === 'events') {
     renderEventEvidence(records, { events: state.run?.events, stageTitle, formatTime });
@@ -800,11 +827,11 @@ function renderRecords() {
   }
   clearEventEvidence(records);
   const savedScroll = {};
-  for (const name of ['task-graph-scroll', 'task-detail', 'artifact-content', 'artifact-list']) {
+  for (const name of ['task-graph-scroll', 'task-schedule-scroll', 'task-detail', 'artifact-content', 'artifact-list']) {
     const element = $('.' + name);
     if (element) savedScroll[name] = { x: element.scrollLeft, y: element.scrollTop, context: element.dataset.graphContext };
   }
-  replacePreservingFocus(records, state.tab === 'tasks' ? renderTasks() : renderArtifacts());
+  replacePreservingFocus(records, state.tab === 'artifacts' ? renderArtifacts() : renderTasks());
   taskOrchestration.sync();
   for (const [name, pos] of Object.entries(savedScroll)) {
     const element = $('.' + name);
@@ -819,6 +846,13 @@ function renderAll() { renderProjects(); renderHeader(); renderRun(); }
 
 function setBusy(value) { state.busy = value; renderControls(); workspaceLayout.sync(); renderWorkspaceContext(); $('#create-project-button').disabled = value; $('#create-project-button').textContent = value ? '正在创建…' : '创建项目'; $$('[data-close-dialog]', $('#project-dialog')).forEach((button) => { button.disabled = value; }); }
 function rememberSelection() {
+  const address = new URL(window.location.href);
+  if (address.searchParams.has('project') && state.project?.id) {
+    address.searchParams.set('project', state.project.id);
+    if (state.run) address.searchParams.set('run', state.run.id);
+    else address.searchParams.delete('run');
+    if (address.href !== window.location.href) history.replaceState(null, '', address);
+  }
   try { sessionStorage.setItem('taskflow-selection', JSON.stringify({ projectId: state.project?.id, runId: state.run?.id, taskId: state.taskId })); } catch { /* The current view remains usable without session storage. */ }
 }
 function selectedSource() { return state.run?.sourceSnapshot ?? state.project?.source; }
@@ -1035,6 +1069,27 @@ function showAutomaticConsent(retry = null) {
   $('#automatic-consent').focus();
 }
 $('#start-automatic').addEventListener('click', () => showAutomaticConsent());
+$('#stop-automatic').addEventListener('click', async () => {
+  if (state.busy || state.selectionPending || automaticStatus()?.canRequestStop !== true) return;
+  if (!window.confirm('停止自动交付的后续步骤？正在处理的请求和对应费用仍按实际回执保留。')) return;
+  const epoch = state.epoch;
+  const runId = state.run.id;
+  clearTimeout(state.pollTimer);
+  setBusy(true);
+  try {
+    const status = await api(basePath() + '/automatic-delivery/stop', { method: 'POST', body: '{}' });
+    if (epoch === state.epoch && state.run?.id === runId && status?.enabled === true) {
+      state.automatic = { runId, result: status };
+    }
+  } catch (error) {
+    if (epoch === state.epoch) showError(error);
+  } finally {
+    if (epoch === state.epoch) {
+      setBusy(false);
+      void pollRun();
+    }
+  }
+});
 $('#automatic-consent').addEventListener('change', event => { $('#confirm-automatic').disabled = !event.target.checked; });
 $('#automatic-delivery-form').addEventListener('submit', event => {
   event.preventDefault();
@@ -1065,6 +1120,12 @@ $('#execution-workspace-steps').addEventListener('click', event => {
 $('#task-edit-dialog').addEventListener('close', () => { if (!$('#task-edit-dialog').open) planningReview.render(); });
 $('#pause-button').addEventListener('click', () => runAction(state.run?.status === 'paused' ? 'resume' : 'pause'));
 $('#run-select').addEventListener('change', (event) => selectRun(event.target.value));
+$('#run-history-list').addEventListener('click', event => {
+  const button = event.target.closest('[data-run-history-id]');
+  if (!button || !state.project || state.busy || state.selectionPending) return;
+  const id = button.dataset.runHistoryId;
+  if (id !== state.run?.id && state.project.runs.some(run => run.id === id)) void selectRun(id);
+});
 $('#help-button').addEventListener('click', () => $('#help-dialog').showModal());
 $('#source-button').addEventListener('click', () => { if (!state.project) return; $('#source-title').textContent = selectedSource().filename; $('#source-content').textContent = selectedSource().content; $('#source-dialog').showModal(); });
 $('#revise-source').addEventListener('click', () => { $('#source-dialog').close(); openSourceEditor(); });
@@ -1085,7 +1146,7 @@ document.addEventListener('click', (event) => {
   const task = event.target.closest('[data-task]');
   if (task) {
     state.taskId = task.dataset.task; renderRecords(); rememberSelection();
-    if (!task.classList.contains('dev-task')) taskOrchestration.revealSelected();
+    if (!task.classList.contains('dev-task') && !task.hasAttribute('data-task-schedule')) taskOrchestration.revealSelected();
   }
   const artifact = event.target.closest('[data-artifact]'); if (artifact) showArtifact(artifact.dataset.artifact);
   const tab = event.target.closest('[data-tab]'); if (tab) { state.tab = tab.dataset.tab; renderRecords(); }
@@ -1106,15 +1167,30 @@ $('#drop-zone').addEventListener('dragleave', () => $('#drop-zone').classList.re
 $('#drop-zone').addEventListener('drop', (event) => { event.preventDefault(); $('#drop-zone').classList.remove('drag-over'); importFile(event.dataTransfer.files[0]); });
 for (const type of ['dragover', 'drop']) window.addEventListener(type, (event) => { if ([...(event.dataTransfer?.types || [])].includes('Files')) event.preventDefault(); });
 
+function addressedRun() {
+  const params = new URLSearchParams(window.location.search);
+  const safeId = value => /^[\w-]{1,128}$/u.test(value || '') ? value : null;
+  const view = params.get('view');
+  return { projectId: safeId(params.get('project')), runId: safeId(params.get('run')),
+    view: ['source', 'plan', 'tasks', 'execution'].includes(view) ? view : null };
+}
+
 async function initialize() {
   if (state.busy) return;
+  const destination = addressedRun();
   clearError();
   renderAll();
   try {
     const { model, ...health } = await api('/api/health'); state.health = { ...health, model };
     if (health.teamAccess?.enabled) {
       const session = await api('/api/team/session');
-      if (!session.user) { window.location.replace('/team.html'); return; }
+      if (!session.user) {
+        const query = new URLSearchParams();
+        if (destination.projectId) query.set('project', destination.projectId);
+        if (destination.projectId && destination.runId) query.set('run', destination.runId);
+        window.location.replace(query.size ? '/team.html?' + query : '/team.html');
+        return;
+      }
       state.actorRole = session.user.role;
       $('#team-link').hidden = false; $('#team-link').textContent = `${session.user.name}（${({ owner: '负责人', reviewer: '评审者', observer: '观察者' })[session.user.role] || '账号'}）`;
       $('#team-link').title = $('#team-link').textContent;
@@ -1127,9 +1203,14 @@ async function initialize() {
     if (projects.length && !state.project) {
       let selection;
       try { selection = JSON.parse(sessionStorage.getItem('taskflow-selection')); } catch { /* Start with the most recently updated project. */ }
-      const project = projects.find(item => item.id === selection?.projectId) || projects[0];
-      await selectProject(project.id, { runId: selection?.runId });
-      if (state.project?.id === selection?.projectId && state.run?.id === selection?.runId && state.run?.tasks?.some(task => task.id === selection?.taskId)) { state.taskId = selection.taskId; renderRecords(); rememberSelection(); }
+      const addressed = projects.find(item => item.id === destination.projectId);
+      const project = addressed || projects.find(item => item.id === selection?.projectId) || projects[0];
+      await selectProject(project.id, { runId: addressed ? destination.runId : selection?.runId });
+      if (destination.view && (!destination.projectId || addressed) && state.project?.id === project.id) workspaceLayout.show(destination.view);
+      if (!addressed && state.project?.id === selection?.projectId && state.run?.id === selection?.runId && state.run?.tasks?.some(task => task.id === selection?.taskId)) { state.taskId = selection.taskId; renderRecords(); rememberSelection(); }
+      if (destination.projectId && (!addressed || destination.runId && state.run?.id !== destination.runId)) {
+        showError(new Error('链接指定的项目或运行当前不可用，已显示可访问的记录。'));
+      }
     }
     else if (state.project) {
       const selectedRun = state.run?.id;

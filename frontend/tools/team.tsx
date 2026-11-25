@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { ToolMessages, ToolShell } from './shell';
+import { ToolMessages, ToolShell, workbenchUrl } from './shell';
 
 const roles = { owner: '负责人', reviewer: '评审者', observer: '观察者' };
 type Role = keyof typeof roles;
@@ -17,6 +17,8 @@ const actions: Record<string, string> = {
   'team.logout': '退出账号', 'team.member_created': '添加成员', 'team.member_updated': '更新成员权限',
   'request.finished': '操作结果', 'request.denied': '拒绝越权操作',
 };
+const query = new URLSearchParams(location.search);
+const returnHref = workbenchUrl(query.get('project'), query.get('run'));
 
 async function teamRequest<T>(route: string, method = 'GET', body?: object): Promise<T> {
   const response = await fetch(`/api/team/${route}`, {
@@ -39,7 +41,7 @@ function MemberRow({ member, disabled, onSave }: {
   const [active, setActive] = useState(member.active);
   return (
     <div className="team-member" data-member-id={member.id}>
-      <strong>{member.name}</strong>
+      <strong className="team-member-identity">{member.name}</strong>
       <label className="tools-field">
         <span>角色</span>
         <select aria-label={`${member.name}的角色`} value={role} onChange={event => setRole(event.target.value as Role)}>
@@ -145,7 +147,7 @@ export function TeamPage() {
       const next = await readSession();
       if (next.user?.name !== name.normalize('NFC')) throw new Error('登录状态尚未核对，请刷新后查看。');
       if (loginPassword.current) loginPassword.current.value = '';
-      window.location.assign('/');
+      window.location.assign(returnHref);
     });
   }
 
@@ -195,19 +197,26 @@ export function TeamPage() {
   const description = !session ? '正在核对登录状态…' : !session.enabled
     ? '本地单人模式正在使用。需要团队登录时，请在本地配置中开启团队模式并重启服务。'
     : session.setupRequired ? '首次开启团队模式，请先设置负责人账号。负责人可以添加其他成员。'
-      : user ? '查看当前账号及其团队权限。' : '登录后可查看团队项目并按账号权限操作。';
+      : user?.role === 'owner' ? '管理成员访问权限并核对变更记录。'
+        : user?.role === 'reviewer' ? '查看账号权限及项目操作记录。'
+          : user ? '' : '登录后可查看团队项目并按账号权限操作。';
 
   return (
-    <ToolShell id="team-main" skipLabel="跳到账号操作" returnLabel="返回工作台">
+    <ToolShell id="team-main" skipLabel="跳到账号操作" returnLabel="返回工作台" returnHref={returnHref}>
       <div className={`team-layout${showLogin ? ' team-layout-login' : ''}`}>
-        <div className="tools-heading team-heading">
+        <header className="team-heading">
           <h1>团队账号</h1>
-          <p id="team-description">{description}</p>
+          <p id="team-description" hidden={!description}>{description}</p>
+          <dl className="team-role-guide" hidden={!showLogin}>
+            <div><dt>负责人</dt><dd>管理成员并推进开发</dd></div>
+            <div><dt>评审者</dt><dd>核对规格、计划和测试定义</dd></div>
+            <div><dt>观察者</dt><dd>查看项目、报告和交付</dd></div>
+          </dl>
           <ToolMessages prefix="team" error={error} notice={notice} />
-        </div>
-        <section id="team-login" className="tools-panel team-auth" aria-labelledby="login-title" hidden={!showLogin}>
-          <h2 id="login-title">{session?.setupRequired ? '设置负责人账号' : '登录工作台'}</h2>
+        </header>
+        <section id="team-login" className="team-auth" aria-labelledby="login-title" hidden={!showLogin}>
           <form id="login-form" onSubmit={login}>
+            <h2 id="login-title">{session?.setupRequired ? '设置负责人账号' : '登录工作台'}</h2>
             <label className="tools-field" htmlFor="login-name">
               <span>账号</span>
               <input id="login-name" ref={loginName} name="username" autoComplete="username" maxLength={48} required />
@@ -225,20 +234,19 @@ export function TeamPage() {
           </form>
         </section>
       </div>
-      <section id="team-account" hidden={!user}>
-        <div className="tools-panel tools-account team-account-line">
-          <div>
-            <h2 id="account-name">{user && `${user.name} · ${roles[user.role] ?? '未知角色'}`}</h2>
-            <p id="account-permission">{user && (permissions[user.role] ?? '账号权限待核对。')}</p>
-          </div>
-          <button id="logout" className="tools-button" disabled={busy} onClick={logout}>退出当前账号</button>
-        </div>
-        <section id="member-admin" className="tools-panel team-admin" hidden={user?.role !== 'owner'}>
-          <h2>成员与权限</h2>
-          <p>负责人管理开发和需求，评审者处理确认与驳回，观察者可以查看。修改角色或停用账号会撤销该成员的现有会话。</p>
-          <div id="members" className="team-members">
-            {members.map(member => <MemberRow key={`${member.id}:${member.role}:${member.active}`} member={member} disabled={busy} onSave={saveMember} />)}
-          </div>
+      <section id="team-account" className={user?.role === 'owner' ? 'team-organization' : 'team-organization team-organization-self'} hidden={!user}>
+        <section id="member-admin" className="team-admin" hidden={user?.role !== 'owner'}>
+          <header className="team-section-heading">
+            <h2>成员与权限</h2>
+            <div className="team-member-tools">
+              <span>{members.length} 位成员</span>
+              <button id="member-refresh" type="button" className="tools-text-button" disabled={busy} onClick={() => void perform(async () => {
+                setMembers(await readMembers());
+                setNotice('已刷新成员列表。');
+              })}>刷新成员</button>
+            </div>
+          </header>
+          <p className="team-member-warning">修改角色或停用账号会撤销该成员的现有会话。</p>
           <details className="team-add">
             <summary>添加团队成员</summary>
             <form id="member-form" className="team-member-form" ref={memberForm} onSubmit={addMember}>
@@ -259,30 +267,47 @@ export function TeamPage() {
               <button className="tools-button tools-primary" type="submit" disabled={busy}>添加成员</button>
             </form>
           </details>
-        </section>
-        <section id="team-audit" className="tools-panel team-audit" hidden={!showAudit}>
-          <div className="team-account-line">
-            <h2>操作记录</h2>
-            <button id="audit-refresh" className="tools-button" disabled={busy} onClick={() => void perform(() => readAudit(true))}>刷新记录</button>
+          <div className="team-member-columns" aria-hidden="true">
+            <span>账号</span><span>角色</span><span>状态</span><span>操作</span>
           </div>
-          <p>按时间查看账号、评审和开发操作，以及每次请求的核对结果。</p>
-          <ol id="audit-list">
-            {events.map(event => {
-              const label = actions[event.action] || (event.action.startsWith('request.') ? '提交操作请求' : '账号操作');
-              const result = event.status === 0 ? '已受理，结果待核对' : event.status < 400 ? '已完成' : `未通过（${event.status}）`;
-              return (
-                <li key={event.seq}>
-                  <time>{new Date(event.at).toLocaleString('zh-CN')}</time>
-                  <span>{event.actor_role ? roles[event.actor_role] : '访客'}：{label} · {result}</span>
-                  {(event.target || event.request_id) && (
-                    <details><summary>关联记录</summary><code>{[event.target, event.request_id].filter(Boolean).join('\n')}</code></details>
-                  )}
-                </li>
-              );
-            })}
-          </ol>
-          <button id="audit-more" className="tools-button" hidden={!moreAudit} disabled={busy} onClick={() => void perform(() => readAudit())}>加载后续记录</button>
+          <div id="members" className="team-members">
+            {members.map(member => <MemberRow key={`${member.id}:${member.role}:${member.active}`} member={member} disabled={busy} onSave={saveMember} />)}
+          </div>
         </section>
+        <aside className="team-actions" aria-label="当前账号与操作">
+          <section className="tools-account">
+            <h2 id="account-name">{user && <>{user.name} <span>{roles[user.role] ?? '未知角色'}</span></>}</h2>
+            <p id="account-permission">{user && (permissions[user.role] ?? '账号权限待核对。')}</p>
+            <button id="logout" className="tools-button" disabled={busy} onClick={logout}>退出当前账号</button>
+          </section>
+          <section id="team-audit" className="team-audit" hidden={!showAudit}>
+            <div className="team-section-heading">
+              <h2>操作记录</h2>
+              <button id="audit-refresh" className="tools-text-button" disabled={busy} onClick={() => void perform(() => readAudit(true))}>刷新记录</button>
+            </div>
+            <ol id="audit-list">
+              {events.map(event => {
+                const label = actions[event.action] || (event.action.startsWith('request.') ? '提交操作请求' : '账号操作');
+                const outcome = event.status === 0 ? 'pending' : event.status < 400 ? 'passed' : 'failed';
+                const result = outcome === 'pending' ? '已受理，结果待核对' : outcome === 'passed' ? '已完成' : `未通过（${event.status}）`;
+                const time = new Date(event.at);
+                return (
+                  <li key={event.seq} data-outcome={outcome}>
+                    <div className="team-audit-event">
+                      <strong>{label}</strong>
+                      <time dateTime={Number.isFinite(time.getTime()) ? time.toISOString() : undefined}>{time.toLocaleString('zh-CN')}</time>
+                    </div>
+                    <span>{event.actor_role ? roles[event.actor_role] : '访客'} <b>{result}</b></span>
+                    {(event.target || event.request_id) && (
+                      <details><summary>关联记录</summary><code>{[event.target, event.request_id].filter(Boolean).join('\n')}</code></details>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+            <button id="audit-more" className="tools-button" hidden={!moreAudit} disabled={busy} onClick={() => void perform(() => readAudit())}>加载后续记录</button>
+          </section>
+        </aside>
       </section>
     </ToolShell>
   );

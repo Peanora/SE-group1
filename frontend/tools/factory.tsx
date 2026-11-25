@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { ToolMessages, ToolShell } from './shell';
+import { ToolMessages, ToolShell, workbenchUrl } from './shell';
 
 type FactoryStatus = { available?: boolean; state?: string; version?: string; url?: string; message?: string };
 type Handoff = { available?: boolean; specRevision?: string; runId?: string; title?: string };
-type FactoryContext = { factory?: FactoryStatus; handoff?: Handoff; project?: { name: string }; run?: { id: string | number } };
+type FactoryContext = { factory?: FactoryStatus; handoff?: Handoff; project?: { id: string; name: string }; run?: { id: string | number } };
 type Action = 'start' | 'stop' | 'plan';
 
 const params = new URLSearchParams(location.search);
@@ -52,11 +52,16 @@ export function FactoryPage() {
 
   const { factory, handoff, project } = context;
   const url = localDashboard(factory?.url);
-  const state = url ? 'running' : factory?.available === false ? 'unavailable' : factory?.state ?? (factory ? 'stopped' : 'loading');
+  const lifecycle = factory?.state;
+  const missingBinary = factory?.available === false;
+  const transitioning = lifecycle === 'starting' || lifecycle === 'stopping';
+  const state = url ? 'running' : (transitioning || lifecycle === 'failed') ? lifecycle
+    : missingBinary ? 'unavailable' : lifecycle ?? (factory ? 'stopped' : 'loading');
   const runId = selectedRun || handoff?.runId;
+  const returnHref = project?.id === projectId ? workbenchUrl(projectId, runId) : '/';
   const revision = handoff?.available && runId ? handoff.specRevision : undefined;
-  const canStart = Boolean(factory?.available && !url && !['starting', 'stopping'].includes(state));
-  const canStop = Boolean(url || state === 'failed');
+  const canStart = Boolean(factory?.available && !url && !transitioning);
+  const canStop = Boolean(url || lifecycle === 'failed');
   const graph = url ? `${url}#/network` : undefined;
 
   function receive(result: FactoryContext) {
@@ -155,33 +160,47 @@ export function FactoryPage() {
 
   const runtimeMessage = factory?.url && !url ? 'Factory 返回了无效的本地地址，请刷新或重新启动。' :
     factory?.message || (url ? '原生工作台负责管理 CLI、执行记录和交互会话。'
-      : factory?.available === false ? '尚未找到 Factory v1.0.5。请在 Taskflow 项目目录运行 npm run factory:install，然后刷新状态。'
+      : missingBinary ? `尚未找到 Factory v${factory?.version ?? '1.0.5'}。`
         : 'Factory 使用本机配置的编码 CLI 来规划任务、执行命令和审阅变更。');
   const handoffMessage = !revision ? '项目规格在 Taskflow 确认后，即可交给 Factory 规划。'
     : url ? 'Factory 将按以下规格版本规划。' : '启动本地 Factory 后即可提交这版规格。';
 
   return (
-    <ToolShell id="factory-main" skipLabel="跳到 Factory 工作流" returnLabel="返回项目工作台">
-      <div className="tools-heading factory-heading">
-        <div>
+    <ToolShell id="factory-main" skipLabel="跳到 Factory 工作流" returnLabel="返回项目工作台" returnHref={returnHref}>
+      <header className="factory-heading">
+        <div className="factory-context">
           <h1>Factory 工作流</h1>
           <p id="factory-project">{project?.name || (projectId ? 'Taskflow 项目' : '请先在项目工作台选择一个项目。')}</p>
         </div>
-        <div className="factory-status" id="factory-status" data-state={state}>
-          <span className="factory-status-dot" aria-hidden="true" />
-          <span id="factory-state">{states[state] ?? '当前不可用'}</span>
-          <span id="factory-version" hidden={!factory?.version}>{factory?.version}</span>
+        <div className="factory-session">
+          <div className="factory-status" id="factory-status" data-state={state}>
+            <span className="factory-status-dot" aria-hidden="true" />
+            <span id="factory-state">{states[state] ?? '当前不可用'}</span>
+            <span id="factory-version" hidden={!factory?.version}>{factory?.version}</span>
+          </div>
+          <button id="factory-refresh" type="button" className="tools-text-button" disabled={!endpoint || reading || acting} onClick={() => void refresh()}>刷新状态</button>
+          <button id="factory-stop" type="button" className="tools-button tools-danger" hidden={!canStop} disabled={!canStop || acting} onClick={stop}>停止本地 Factory</button>
         </div>
-      </div>
+      </header>
       <ToolMessages prefix="factory" error={error} notice={notice} />
       <div className={`factory-layout${url ? ' factory-layout-running' : ''}`}>
-        <div className="factory-controls">
-          <section className="tools-panel" aria-labelledby="factory-runtime-heading">
-            <div className="factory-section-heading">
-              <h2 id="factory-runtime-heading">本地运行环境</h2>
-              <button id="factory-refresh" type="button" className="tools-text-button" disabled={!endpoint || reading || acting} onClick={() => void refresh()}>刷新状态</button>
-            </div>
+        <section id="factory-dashboard" className="factory-dashboard" aria-labelledby="factory-dashboard-heading" hidden={!url}>
+          <div className="factory-dashboard-header">
+            <h2 id="factory-dashboard-heading">Factory 原生工作台</h2>
+            <nav aria-label="Factory 原生工作台入口">
+              <a href={graph} id="factory-open-graph" target="factory-dashboard-frame">Agent 图</a>
+              <a href={url ? `${url}#/settings` : undefined} id="factory-open-settings" target="factory-dashboard-frame">配置与角色</a>
+              <a href={url ? `${url}#/performance` : undefined} id="factory-open-performance" target="factory-dashboard-frame">运行表现</a>
+              <a href={graph} id="factory-open-dashboard" target="_blank" rel="noopener noreferrer">在新标签页打开 <span aria-hidden="true">↗</span></a>
+            </nav>
+          </div>
+          {url && <iframe src={graph} id="factory-dashboard-frame" name="factory-dashboard-frame" title="Agentic Software Factory 原生工作台" referrerPolicy="no-referrer" />}
+        </section>
+        <aside className="factory-controls" aria-label="Factory 会话与规格">
+          <section className="factory-runtime" aria-labelledby="factory-runtime-heading">
+            <h2 id="factory-runtime-heading">本地运行环境</h2>
             <p id="factory-runtime-message">{runtimeMessage}</p>
+            {missingBinary && <p className="factory-install-note">在 Taskflow 项目目录运行 <code>npm run factory:install</code>，然后刷新状态。</p>}
             <form id="factory-start-form" hidden={Boolean(url)} onSubmit={start}>
               <label className="tools-field" htmlFor="factory-repository">
                 <span>Git 仓库绝对路径 <small>选填</small></span>
@@ -194,9 +213,8 @@ export function FactoryPage() {
               </label>
               <button id="factory-start" className="tools-button tools-primary" disabled={!canStart || acting || !execConfirmed}>启动本地 Factory</button>
             </form>
-            <button id="factory-stop" type="button" className="tools-button tools-danger" hidden={!canStop} disabled={!canStop || acting} onClick={stop}>停止本地 Factory</button>
           </section>
-          <section className="tools-panel" aria-labelledby="factory-handoff-heading">
+          <section className="factory-handoff" aria-labelledby="factory-handoff-heading">
             <h2 id="factory-handoff-heading">已确认规格</h2>
             <p id="factory-handoff-message">{handoffMessage}</p>
             <dl id="factory-handoff-version" className="factory-spec" hidden={!revision}>
@@ -215,19 +233,7 @@ export function FactoryPage() {
               {createdRun && `打开 Factory 运行 #${createdRun}`}
             </a>
           </section>
-        </div>
-        <section id="factory-dashboard" className="factory-dashboard" aria-labelledby="factory-dashboard-heading" hidden={!url}>
-          <div className="factory-section-heading factory-dashboard-header">
-            <h2 id="factory-dashboard-heading">Factory 原生工作台</h2>
-            <nav aria-label="Factory 原生工作台入口">
-              <a href={graph} id="factory-open-graph" target="factory-dashboard-frame">Agent 图</a>
-              <a href={url ? `${url}#/settings` : undefined} id="factory-open-settings" target="factory-dashboard-frame">配置与角色</a>
-              <a href={url ? `${url}#/performance` : undefined} id="factory-open-performance" target="factory-dashboard-frame">运行表现</a>
-              <a href={graph} id="factory-open-dashboard" target="_blank" rel="noopener noreferrer">在新标签页打开</a>
-            </nav>
-          </div>
-          {url && <iframe src={graph} id="factory-dashboard-frame" name="factory-dashboard-frame" title="Agentic Software Factory 原生工作台" referrerPolicy="no-referrer" />}
-        </section>
+        </aside>
       </div>
     </ToolShell>
   );

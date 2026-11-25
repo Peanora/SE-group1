@@ -65,6 +65,98 @@ async function until(read, message, ms = 40000) {
   assert.fail(message);
 }
 
+test('Edge can stop automatic advancement while a specification request is still settling', { timeout: 30000 }, async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'tf-automatic-stop-browser-'));
+  let app, browser, releaseSpecification;
+  const requests = [], modelErrors = [], pageErrors = [];
+  const specificationGate = new Promise(resolve => { releaseSpecification = resolve; });
+  const model = createServer(async (request, response) => {
+    try {
+      for await (const _part of request) { /* Consume the fixture request before holding the reply. */ }
+      assert.equal(request.method, 'POST');
+      assert.equal(request.url, '/v1/chat/completions');
+      requests.push(request.url);
+      await specificationGate;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(spec) } }],
+        usage: { prompt_tokens: 3, completion_tokens: 2 } }));
+    } catch (error) {
+      modelErrors.push(error.message);
+      response.writeHead(500).end();
+    }
+  });
+  await listen(model);
+  t.after(async () => {
+    releaseSpecification();
+    await browser?.close();
+    try { await app?.close(); }
+    finally {
+      model.closeAllConnections();
+      await new Promise(resolve => model.close(resolve));
+      const root = await realpath(os.tmpdir()), target = await realpath(directory);
+      assert.equal(path.dirname(target), root);
+      assert.ok(path.basename(target).startsWith('tf-automatic-stop-browser-'));
+      await rm(target, { recursive: true, force: true });
+    }
+  });
+
+  const unexpected = () => assert.fail('停止演示不得派发后续验收或开发');
+  app = await createApp({ dataDir: directory, teamEnabled: false, stepDelayMs: 0,
+    agentEnvironment: { LLM_BASE_URL: endpoint(model) + '/v1', LLM_MODEL: 'automatic-stop-fixture' },
+    plannedExecutionService: { start: unexpected, list: async () => ({ executions: [], capabilities: { canStart: false } }),
+      withProjectCheckpoint: async (_id, work) => work(), shutdown: async () => {} },
+  });
+  await listen(app.server);
+  const origin = endpoint(app.server);
+  const created = await fetch(origin + '/api/projects', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: '自动停止浏览器验证', filename: 'notice.md', content: requirement }) });
+  assert.equal(created.status, 201);
+  const { project } = await created.json();
+  const projectUrl = `${origin}/api/projects/${project.id}`;
+
+  browser = await chromium.launch({ channel: 'msedge', headless: true });
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  page.on('pageerror', error => pageErrors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') pageErrors.push(`${message.location().url}: ${message.text()}`); });
+  await page.goto(origin);
+  await page.locator('#start-automatic').click();
+  await page.locator('#automatic-consent').check();
+  await page.locator('#confirm-automatic').click();
+  await until(() => requests.length === 1, '未发送规格请求');
+  const stop = page.locator('#stop-automatic');
+  await stop.waitFor();
+  page.once('dialog', async dialog => {
+    assert.match(dialog.message(), /后续步骤/u);
+    await dialog.accept();
+  });
+  const stopResponse = page.waitForResponse(response => response.url().endsWith('/automatic-delivery/stop'));
+  await stop.click();
+  const response = await stopResponse;
+  assert.equal(response.status(), 202);
+  const requested = await response.json();
+  assert.equal(requested.status, 'stop_requested');
+  assert.equal(requested.usageByStage.specification.totalModelCalls, null);
+  await stop.filter({ hasText: /^等待停止自动推进$/u }).waitFor();
+  assert.equal(await stop.isDisabled(), true);
+  assert.equal(await page.locator('#automatic-download').isVisible(), false);
+
+  releaseSpecification();
+  await page.locator('#workspace-context-title').filter({ hasText: /^已停止自动推进$/u }).waitFor();
+  const { project: loadedProject } = await (await fetch(projectUrl)).json();
+  const [run] = loadedProject.runs;
+  const saved = await (await fetch(`${projectUrl}/runs/${run.id}/automatic-delivery`)).json();
+  assert.equal(saved.status, 'stopped');
+  assert.equal(saved.stopRequestedAt, requested.stopRequestedAt);
+  assert.equal(saved.usageByStage.specification.totalModelCalls, 1);
+  assert.equal(saved.usageByStage.specification.usage.outputTokens, 2);
+  assert.equal(saved.downloadAvailable, false);
+  assert.equal(run.approvals.spec, null);
+  assert.deepEqual(requests, ['/v1/chat/completions']);
+  assert.deepEqual(modelErrors, []);
+  assert.deepEqual(pageErrors, []);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+});
+
 test('automatic delivery in Edge pauses only for the missing business answer and delivers the repaired candidate', { timeout: 180000, skip: !native }, async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'tf-automatic-delivery-'));
   const calls = [], modelErrors = [], pageErrors = [];

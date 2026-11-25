@@ -350,6 +350,8 @@ for (const width of [1440, 390]) test(`统一工作台 ${width}px：四工作面
 
 for (const width of [1440, 390]) test(`统一工作台 ${width}px：底部操作时后台失败与网络失败始终可见`, { timeout: 90000 }, async t => {
   const { app, project, page, rejectModel, modelCalls } = await fixture(t, width, { delayedModel: true });
+  // Use a short desktop viewport so the source editor still exercises real page scrolling.
+  if (width > 760) await page.setViewportSize({ width, height: 600 });
   await page.locator('#mode-select').selectOption('model');
   await page.locator('#start-run').click();
   await until(() => modelCalls() === 1, '受控规格请求进入');

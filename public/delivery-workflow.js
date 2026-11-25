@@ -107,6 +107,9 @@ export function deliverySteps({ project, run, historical, verification, developm
     if (position === index) {
       if (running) return step(item.id, item.title, 'working', item.state === 'working' ? item.text : activeText[item.id], item.state === 'working' ? item.detail : '');
       if (automatic.status === 'needs_clarification') return step(item.id, item.title, 'waiting', '等待补充需求', item.detail);
+      if (automatic.status === 'stop_requested' || automatic.status === 'stopped') {
+        return step(item.id, item.title, 'waiting', automatic.status === 'stop_requested' ? '等待停止自动推进' : '已停止自动推进', item.detail);
+      }
       if (automatic.status === 'failed' || automatic.status === 'interrupted') {
         return step(item.id, item.title, 'failed', automatic.status === 'interrupted' ? '运行已中断' : '执行未通过', item.detail);
       }

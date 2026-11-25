@@ -2,13 +2,14 @@ import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { installTaskCanvas } from '../canvas/task-canvas';
 import { Workspace } from './workspace';
-import '../../public/styles.css';
+import './foundation.css';
 import '../../public/workspace.css';
-import '../../public/workbench-theme.css';
 import '../../public/source-process.css';
 import '../../public/execution-process.css';
 import '../../public/task-orchestration.css';
 import './workbench.css';
+import './task-schedule.css';
+import './design-review.css';
 
 const container = document.getElementById('root');
 if (!container) throw new Error('未找到项目工作台入口。');

@@ -46,7 +46,8 @@ async function waitFor(read, matches, label) {
   assert.fail(`等待${label}超时：${JSON.stringify(result)}`);
 }
 
-async function fixture(t, { clarify = false, verificationDefinition = definition, allowDevelopment = true, teamEnabled = false, slowPlanningIntent, specFixture = spec, engineeringFixture = engineeringDraft, firstVerificationAllowance } = {}) {
+async function fixture(t, { clarify = false, verificationDefinition = definition, allowDevelopment = true, teamEnabled = false, slowPlanningIntent,
+  specFixture = spec, engineeringFixture = engineeringDraft, firstVerificationAllowance, specificationGate, verificationGate } = {}) {
   const temporaryRoot = await realpath(os.tmpdir());
   const directory = await mkdtemp(path.join(temporaryRoot, 'automatic-delivery-http-'));
   let store;
@@ -69,6 +70,7 @@ async function fixture(t, { clarify = false, verificationDefinition = definition
     dependencies: { createModel: () => async input => {
       calls.verification++;
       assert.equal(input.binding.specRevision.length, 64);
+      if (verificationGate) await verificationGate;
       const proposal = typeof verificationDefinition === 'function' ? verificationDefinition(calls.verification, input) : verificationDefinition;
       await input.onReceipt({ model: config.model, finishReason: 'stop', usage, content: JSON.stringify(proposal) });
       return { proposal, model: config.model, usage, policyHash: verificationModelPolicy.hash, coverage: 'structural_only' };
@@ -112,6 +114,7 @@ async function fixture(t, { clarify = false, verificationDefinition = definition
     store.save = project => {
       const run = project.runs.at(-1), state = run?.automaticDelivery;
       for (const key of [state?.pendingDispatch?.kind, state?.status === 'needs_clarification' ? 'clarification' : null,
+        state?.status === 'stop_requested' ? 'stop-requested' : null,
         run?.stages.find(item => item.id === 'spec')?.status === 'running' ? `spec-${run.specificationHistory?.at(-1)?.requestState ?? 'starting'}` : null]) {
         if (key && !checkpoints.has(key)) checkpoints.set(key, structuredClone(project));
       }
@@ -135,7 +138,10 @@ async function fixture(t, { clarify = false, verificationDefinition = definition
         calls.spec++;
         const draft = clarify && calls.spec === 1 ? { ...spec, requirements: [], questions: [question], clarificationRequired: true } : specFixture;
         if (clarify && calls.spec === 2) assert.ok(text.includes(answer));
-        return planner.analyzeWithModel(text, name, { ...options, config, fetchImpl: async () => modelResponse(draft) });
+        return planner.analyzeWithModel(text, name, { ...options, config, fetchImpl: async () => {
+          if (specificationGate) await specificationGate;
+          return modelResponse(draft);
+        } });
       },
       createEngineeringModel: () => createEngineeringModel({ config, fetchImpl: async () => {
         calls.engineering++;
@@ -188,6 +194,121 @@ async function fixture(t, { clarify = false, verificationDefinition = definition
     } };
   } };
 }
+
+test('stopping at clarification is idempotent and survives reopening without spending additional model calls', async t => {
+  const f = await fixture(t, { clarify: true });
+  const delivery = await f.start();
+  const awaiting = await waitFor(delivery.status, state => state.status === 'needs_clarification', '等待业务澄清');
+  assert.equal(awaiting.canRequestStop, true);
+  const stopRoute = `${delivery.route}/automatic-delivery/stop`;
+  assert.equal((await f.request(stopRoute, { runId: delivery.id })).status, 400);
+  assert.equal((await f.request(stopRoute, {}, { origin: 'https://outside.invalid' })).status, 403);
+  const [requested, duplicate] = await Promise.all([f.request(stopRoute, {}), f.request(stopRoute, {})]);
+  assert.equal(requested.status, 202);
+  assert.equal(duplicate.status, 202);
+  assert.ok(['stop_requested', 'stopped'].includes(requested.body.status));
+  assert.equal(requested.body.stopRequestedAt, duplicate.body.stopRequestedAt);
+  const stopped = await waitFor(delivery.status, state => state.status === 'stopped', '自动推进结束');
+  assert.equal(stopped.canRequestStop, false);
+  assert.equal(stopped.downloadAvailable, false);
+  assert.equal(stopped.usageByStage.specification.totalModelCalls, 1);
+  const { body: { run } } = await f.request(delivery.route);
+  assert.equal(run.status, 'awaiting_spec');
+  assert.deepEqual(run.approvals, { spec: null, plan: null });
+  assert.deepEqual(f.calls, { spec: 1, engineering: 0, verification: 0, start: 0 });
+
+  await f.restart({ checkpoint: 'stop-requested' });
+  const restored = await waitFor(delivery.status, state => state.status === 'stopped', '重启恢复停止申请');
+  assert.equal(restored.stopRequestedAt, requested.body.stopRequestedAt);
+  const repeated = await f.request(stopRoute, {});
+  assert.equal(repeated.status, 202);
+  assert.equal(repeated.body.stopRequestedAt, restored.stopRequestedAt);
+  assert.deepEqual(f.calls, { spec: 1, engineering: 0, verification: 0, start: 0 });
+});
+
+test('stopping during specification lets its receipt settle and prevents the next engineering request', async t => {
+  let releaseSpecification;
+  const specificationGate = new Promise(resolve => { releaseSpecification = resolve; });
+  const f = await fixture(t, { specificationGate });
+  try {
+    const delivery = await f.start();
+    await waitFor(delivery.status, state => state.stage === 'spec' && f.calls.spec === 1, '规格模型请求');
+    const stop = await f.request(`${delivery.route}/automatic-delivery/stop`, {});
+    assert.equal(stop.status, 202);
+    assert.equal(stop.body.status, 'stop_requested');
+    assert.equal(stop.body.usageByStage.specification.totalModelCalls, null);
+
+    releaseSpecification();
+    const stopped = await waitFor(delivery.status, state => state.status === 'stopped', '规格请求收尾后的停止');
+    assert.equal(stopped.usageByStage.specification.totalModelCalls, 1);
+    assert.equal(stopped.usageByStage.specification.usage.outputTokens, usage.outputTokens);
+    const { body: { run } } = await f.request(delivery.route);
+    assert.equal(run.status, 'awaiting_spec');
+    assert.equal(run.approvals.spec, null);
+    assert.deepEqual(f.calls, { spec: 1, engineering: 0, verification: 0, start: 0 });
+  } finally {
+    releaseSpecification();
+  }
+});
+
+test('stopping while a verification model runs keeps that proposal and usage, and never launches development', async t => {
+  let releaseVerification;
+  const verificationGate = new Promise(resolve => { releaseVerification = resolve; });
+  const f = await fixture(t, { verificationGate });
+  try {
+    const delivery = await f.start();
+    const underway = await waitFor(delivery.status, state => state.stage === 'verification' && state.proposalId && f.calls.verification === 1, '已派发清单');
+    assert.equal(underway.canRequestStop, true);
+    const stop = await f.request(`${delivery.route}/automatic-delivery/stop`, {});
+    assert.equal(stop.status, 202);
+    assert.equal(stop.body.status, 'stop_requested');
+    assert.equal(stop.body.proposalId, underway.proposalId);
+    assert.equal(stop.body.usageByStage.verification.totalModelCalls, null);
+    assert.equal((await delivery.status()).status, 'stop_requested');
+
+    releaseVerification();
+    const stopped = await waitFor(delivery.status, state => state.status === 'stopped', '收尾清单后的停止');
+    assert.equal(stopped.proposalId, underway.proposalId);
+    assert.equal(stopped.usageByStage.verification.totalModelCalls, 1);
+    assert.equal(stopped.usageByStage.verification.usage.inputTokens, usage.inputTokens);
+    const saved = await f.request(`${delivery.route}/verification-plans`);
+    const proposal = saved.body.proposals.find(row => row.id === underway.proposalId);
+    assert.ok(proposal);
+    assert.equal(proposal.approved, false);
+    assert.deepEqual(f.calls, { spec: 1, engineering: 1, verification: 1, start: 0 });
+  } finally {
+    releaseVerification();
+  }
+});
+
+test('automatic stop never controls an admitted development worker', async t => {
+  const f = await fixture(t);
+  const delivery = await f.start();
+  const working = await waitFor(delivery.status, state => state.executionId, '开发已启动');
+  assert.equal(working.canRequestStop, false);
+  const stop = await f.request(`${delivery.route}/automatic-delivery/stop`, {});
+  assert.equal(stop.status, 409);
+  const latest = await delivery.status();
+  assert.equal(latest.executionId, working.executionId);
+  assert.equal(latest.stopRequestedAt, undefined);
+  assert.equal(f.executions.get(delivery.id).status, 'generating');
+});
+
+test('project reviewers cannot stop automatic delivery or receive the stop capability', async t => {
+  const f = await fixture(t, { clarify: true, teamEnabled: true });
+  const delivery = await f.start();
+  await waitFor(delivery.status, state => state.status === 'needs_clarification', '团队等待澄清');
+  const credentials = { name: 'reviewer', password: 'fixture-reviewer-password' };
+  assert.equal((await f.request('/api/team/members', { ...credentials, role: 'reviewer' })).status, 201);
+  const session = await f.request('/api/team/login', credentials);
+  assert.equal(session.status, 200);
+  const headers = { cookie: session.cookie };
+  const automaticRoute = `${delivery.route}/automatic-delivery`;
+  assert.equal((await f.request(automaticRoute, undefined, headers)).body.canRequestStop, false);
+  assert.equal((await f.request(`${automaticRoute}/stop`, {}, headers)).status, 403);
+  assert.equal((await delivery.status()).status, 'needs_clarification');
+  assert.equal((await f.request(`${automaticRoute}/stop`, {})).status, 202);
+});
 
 for (const stage of ['specification', 'engineering']) {
   test(`${stage} timeout while dispatch intent is saving remains a known unsent request`, async t => {
