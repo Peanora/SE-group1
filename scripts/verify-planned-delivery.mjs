@@ -5,8 +5,8 @@ import { loadEnv } from '../server.mjs';
 import { revalidatePlannedArchive } from '../lib/planned-archive.mjs';
 
 const [, , flag, filename, mode, extra] = process.argv;
-if (flag !== '--archive' || !filename || extra || mode !== undefined && !['--cold-start', '--inspect'].includes(mode)) {
-  console.error('使用 --archive ZIP路径 [--cold-start 或 --inspect] 进行免费交付复核。结果仅作当次诊断。'); process.exitCode = 2;
+if (flag !== '--archive' || !filename || extra || (mode !== undefined && !['--cold-start', '--inspect'].includes(mode))) {
+  console.error('使用 --archive ZIP路径 [--inspect | --cold-start] 进行免费交付核对或复验。不继承历史Review或软件通过。'); process.exitCode = 2;
 } else {
   if (mode !== '--inspect') await loadEnv();
   const controller = new AbortController(), stop = () => controller.abort(); process.once('SIGINT', stop); process.once('SIGTERM', stop);
@@ -23,6 +23,8 @@ if (flag !== '--archive' || !filename || extra || mode !== undefined && !['--col
       const archive = await inspect();
       console.log(JSON.stringify({ status: 'integrity_verified', taskAccepted: false, historicalAcceptanceVerified: false, totalModelCalls: 0,
         archiveHash: archive.archiveHash, candidateCommit: archive.binding.candidateCommit,
+        startGuidePresent: archive.startGuidePresent, binding: archive.binding, sourceFiles: archive.files.map(file => file.path),
+        verificationReport: archive.verificationReport,
         ...(archive.evolution ? { evolution: archive.evolution, executorPolicyCurrent: archive.executorPolicyCurrent } : {}), notice: archive.notice }, null, 2));
     } else if (mode === '--cold-start') {
       const { runPlannedColdStart } = await import('../lib/planned-cold-start.mjs');

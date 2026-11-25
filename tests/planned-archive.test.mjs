@@ -77,6 +77,8 @@ test('evolution ZIP verifies source and metadata without accepting old policy, d
   assert.equal(archive.executorPolicyCurrent, false);
   assert.equal(archive.taskAccepted, false);
   assert.equal(archive.historicalAcceptanceVerified, false);
+  assert.equal(archive.verificationReport.status, 'accepted');
+  assert.deepEqual(archive.verificationReport.http, { total: 1, passed: 1 });
   assert.deepEqual(archive.evolution, { version: 1, historicalRecordOnly: true, databaseIncluded: false, existingDataVerified: false,
     migrationKind: 'bounded_operations', originGeneration: 0, targetGeneration: 1 });
   assert.equal(archive.files.some(entry => entry.path.startsWith('delivery/')), false);
@@ -92,6 +94,7 @@ test('evolution ZIP verifies source and metadata without accepting old policy, d
   assert.equal(dry.status, 0, dry.stderr);
   assert.equal(normal.status, 1, normal.stderr);
   assert.deepEqual([JSON.parse(dry.stdout).status, JSON.parse(normal.stdout).status], ['integrity_verified', 'evolution_dataset_required']);
+  assert.deepEqual(JSON.parse(dry.stdout).verificationReport, archive.verificationReport);
   for (const stdout of [dry.stdout, normal.stdout]) {
     const output = JSON.parse(stdout);
     assert.deepEqual([output.taskAccepted, output.historicalAcceptanceVerified, output.evolution.existingDataVerified, output.totalModelCalls], [false, false, false, 0]);

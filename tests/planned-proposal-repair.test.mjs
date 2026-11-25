@@ -29,7 +29,9 @@ if (!process.env.TASKFLOW_PROPOSAL_REPAIR_CHILD) {
   mock.module(new URL('../lib/windows-sandbox.mjs', import.meta.url).href, { namedExports: { createWindowsSandbox: () => ({ preflight: async () => ({ kind: 'inert-repair-infrastructure' }) }) } });
   mock.module(new URL('../lib/http-scenarios.mjs', import.meta.url).href, { namedExports: { runHttpScenarios: async input => {
     const ready = !(active.mode === 'self-failure' && ++active.http === 1);
-    return { status: ready ? 'passed' : 'failed', binding: structuredClone(input.binding), manifestHash: input.manifest.manifestHash, policyHash: input.manifest.policyHash, sourceHash: hash(validateProjectFiles(input.files)), terminationConfirmed: true, processes: [{ ...stopped, pid: 1 }], checks: input.manifest.checks.map(rule => ({ ...rule, passed: ready })) };
+    return { status: ready ? 'passed' : 'failed', binding: structuredClone(input.binding), manifestHash: input.manifest.manifestHash, policyHash: input.manifest.policyHash, sourceHash: hash(validateProjectFiles(input.files)), terminationConfirmed: true, processes: [{ ...stopped, pid: 1 }], checks: input.manifest.checks.map(rule => ({ ...rule,
+      passed: ready || rule.id !== 'ok', actual: !ready && rule.id === 'ok' ? 'HTTP 503' : rule.name,
+    })) };
   } } });
   mock.module(new URL('../lib/browser-scenarios.mjs', import.meta.url).href, { namedExports: { runBrowserScenarios: async input => ({ status: 'passed', binding: structuredClone(input.binding), manifestHash: input.manifest.manifestHash, browserPolicyHash: browserScenarioPolicyHash, sourceHash: hash(validateProjectFiles(input.files)), terminationConfirmed: true, browser: { closed: true, version: 'inert-repair-edge' }, processes: [{ ...stopped, kind: 'runtime', pid: 2 }, { ...stopped, kind: 'runtime', pid: 3 }, { ...stopped, kind: 'browser', pid: 4 }], checks: browserScenarioChecks(input.manifest.browser).map(rule => ({ ...rule, passed: true })) }) } });
   const { createProjectCodeModel } = await import('../lib/project-code-model.mjs');
