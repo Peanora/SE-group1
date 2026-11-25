@@ -586,6 +586,13 @@ function renderHeader() {
   $('#breadcrumb-project').textContent = state.project?.name || '新项目';
   $('#project-description').textContent = state.project ? `${state.project.source?.filename || '需求文档'}　${state.project.source?.content?.length?.toLocaleString('zh-CN') || 0} 字` : '从需求规划到开发验收。';
   $('#source-button').disabled = !state.project;
+  const factoryLink = $('#factory-workbench-link');
+  factoryLink.hidden = !state.project || state.health?.factoryWorkbench?.available !== true;
+  if (state.project) {
+    const query = new URLSearchParams({ project: state.project.id });
+    if (state.run) query.set('run', state.run.id);
+    factoryLink.href = '/factory.html?' + query;
+  }
   $('#onboarding').hidden = !!state.project;
   const runs = sortedRuns();
   const select = $('#run-select');

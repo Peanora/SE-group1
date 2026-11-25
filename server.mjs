@@ -16,6 +16,9 @@ import { AGENT_ROLES, createAgentSettings } from './lib/agent-settings.mjs';
 import { createAgentPlanner } from './lib/agent-planner.mjs';
 import { AUTOMATIC_BUDGET, createAutomaticDelivery } from './lib/automatic-delivery.mjs';
 import { repeatedCounterSteps } from './public/verification-draft.js';
+import { contentRevision } from './lib/planning-review.mjs';
+import { createFactoryWorkbench } from './lib/factory-workbench.mjs';
+import { FACTORY_VERSION, factoryBinaryPath } from './lib/factory-release.mjs';
 
 import { DEFAULT_STACK, PLATFORM_DEFAULTS } from './lib/platform-defaults.mjs';
 
@@ -232,6 +235,17 @@ export async function createApp(options = {}) {
     }
     return services.reduceRight((next, service) => () => service.withProjectCheckpoint(projectId, next), work)();
   };
+  const factoryWorkbench = options.factoryWorkbench ?? createFactoryWorkbench({
+    dataDir: store.directory, binary: process.env.TASKFLOW_FACTORY_BINARY || factoryBinaryPath(ROOT),
+  });
+  const factoryDeletionLocks = new Set();
+  function factoryHandoff(project, run) {
+    if (!run || run.workflowVersion !== 2 || orchestrator.sourceSuperseded(project, run) || !run.spec || !run.specRevision
+      || run.approvals?.spec?.revision !== run.specRevision || contentRevision(run.spec) !== run.specRevision) return { available: false };
+    const persisted = store.getPersistedRun(project.id, run.id).run;
+    if (persisted.specRevision !== run.specRevision || persisted.approvals?.spec?.revision !== run.specRevision) return { available: false };
+    return { available: true, runId: run.id, specRevision: run.specRevision, title: run.spec.title || project.name };
+  }
   let closing;
   const publicDir = path.resolve(options.publicDir ?? path.join(ROOT, 'public'));
   function beginTeamAudit(request, response, actor, target) {
@@ -293,6 +307,7 @@ export async function createApp(options = {}) {
             modelPlanning: { engineeringMaxCalls: orchestrator.engineeringMaxCalls, engineeringCallLimit: orchestrator.engineeringMaxCalls !== null, engineeringTimeoutMs: orchestrator.engineeringTimeoutMs,
               engineeringTotalTimeoutMs: orchestrator.engineeringTotalTimeoutMs,
               specificationMaxCalls: orchestrator.specificationMaxCalls, specificationCallLimit: orchestrator.specificationMaxCalls !== null, specificationTimeoutMs: orchestrator.specificationTimeoutMs },
+            factoryWorkbench: { available: !teamAccess, version: FACTORY_VERSION },
             supportedFormats: ['.md', '.txt', '.docx'] });
         }
         if (teamAccess) {
@@ -325,6 +340,48 @@ export async function createApp(options = {}) {
           throw new HttpError(405, '该接口不支持此请求方法。');
         }
         const projectId = segments[2];
+        if (segments[3] === 'factory') {
+          requireLocalExecutionRequest(request, server);
+          if (teamAccess) throw new HttpError(403, 'Factory 原生工作台仅支持当前 Windows 或系统用户的本机单人模式。');
+          const project = store.get(projectId);
+          if (segments.length === 4 && method === 'GET') {
+            const runId = url.searchParams.get('run');
+            const run = runId ? store.getRun(projectId, runId).run : project.runs.at(-1);
+            return respond(response, 200, { project: { id: project.id, name: project.name },
+              factory: factoryWorkbench.status(projectId), handoff: factoryHandoff(project, run) });
+          }
+          if (segments.length !== 5 || method !== 'POST') throw new HttpError(404, '未找到该 Factory 操作。');
+          const body = await readJson(request);
+          if (segments[4] === 'start') {
+            dataFields(body, Object.hasOwn(body, 'repositoryPath') ? ['confirmedLocalExecution', 'repositoryPath'] : ['confirmedLocalExecution']);
+            if (body.confirmedLocalExecution !== true || Object.hasOwn(body, 'repositoryPath')
+              && (typeof body.repositoryPath !== 'string' || !path.isAbsolute(body.repositoryPath) || body.repositoryPath.length > 4096 || body.repositoryPath.includes('\0'))) {
+              throw new HttpError(400, '请确认本机 CLI 权限，并填写有效的 Git 仓库绝对路径或留空。');
+            }
+            if (closing) throw new HttpError(503, '工作台正在停止，请稍后重新连接。');
+            if (factoryDeletionLocks.has(projectId)) throw new HttpError(409, '项目正在删除，无法启动 Factory。');
+            store.get(projectId);
+            return respond(response, 200, { factory: await factoryWorkbench.start(projectId, { repositoryPath: body.repositoryPath }) });
+          }
+          if (segments[4] === 'stop') {
+            dataFields(body, []);
+            return respond(response, 200, { factory: await factoryWorkbench.stop(projectId) });
+          }
+          if (segments[4] === 'plan') {
+            dataFields(body, ['runId', 'specRevision', 'modelUsageConfirmed']);
+            if (typeof body.runId !== 'string' || typeof body.specRevision !== 'string' || body.modelUsageConfirmed !== true) {
+              throw new HttpError(400, '请确认 Factory 会使用配置的 Planner，并提交当前规格版本。');
+            }
+            const { run } = store.getRun(projectId, body.runId);
+            const handoff = factoryHandoff(project, run);
+            if (!handoff.available || handoff.specRevision !== body.specRevision) throw new HttpError(409, '该设计规格未确认或已失效，请刷新当前版本。');
+            if (closing) throw new HttpError(503, '工作台正在停止，请稍后重新连接。');
+            const objective = '根据以下已确认设计规格生成开发任务、依赖、角色和验收条件。\n\n'
+              + 'Taskflow 运行 ' + run.id + ' / 规格版本 ' + handoff.specRevision + '\n\n' + orchestrator.renderSpec(run.spec);
+            return respond(response, 202, { run: await factoryWorkbench.plan(projectId, { objective }), handoff });
+          }
+          throw new HttpError(404, '未找到该 Factory 操作。');
+        }
         if (!['GET', 'HEAD'].includes(method) && automaticDelivery.ownsProject(projectId)) {
           const savingInput = segments[3] === 'changes' && (segments.length === 4 || segments.length === 5 && segments[4] === 'parse');
           const stoppingExecution = segments[3] === 'runs' && segments[5] === 'development-executions' && segments.length === 8 && segments[7] === 'cancel';
@@ -352,22 +409,29 @@ export async function createApp(options = {}) {
         if (segments.length === 3 && method === 'DELETE') {
           requireLocalExecutionRequest(request, server);
           const body = exactFields(await readJson(request), ['confirmationName']);
-          const result = await orchestrator.withProjectCheckpoint(projectId, async () => {
-            if (store.get(projectId).runs.some(run => run.status === 'running')) throw new HttpError(409, '项目仍在运行，请等待阶段结束后再删除。');
-            const remove = () => {
-              const publish = () => {
-                if (typeof plannedExecutionService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '无法核对研发执行状态，暂不能删除项目。');
-                return plannedExecutionService.withProjectCheckpoint(projectId, () => store.remove(projectId, body.confirmationName));
+          if (factoryDeletionLocks.has(projectId)) throw new HttpError(409, '项目正在删除。');
+          factoryDeletionLocks.add(projectId);
+          try {
+            const result = await orchestrator.withProjectCheckpoint(projectId, async () => {
+              if (store.get(projectId).runs.some(run => run.status === 'running')) throw new HttpError(409, '项目仍在运行，请等待阶段结束后再删除。');
+              const remove = () => {
+                const publish = () => {
+                  if (typeof plannedExecutionService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '无法核对研发执行状态，暂不能删除项目。');
+                  return plannedExecutionService.withProjectCheckpoint(projectId, () => {
+                    if (factoryWorkbench.hasActivity(projectId)) throw new HttpError(409, '请先停止该项目的 Factory 工作台再删除。');
+                    return store.remove(projectId, body.confirmationName);
+                  });
+                };
+                if (verificationPlanningService === null) return publish();
+                if (typeof verificationPlanningService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '无法确认测试提案状态，暂不能删除项目。');
+                return verificationPlanningService.withProjectCheckpoint(projectId, publish);
               };
-              if (verificationPlanningService === null) return publish();
-              if (typeof verificationPlanningService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '无法确认测试提案状态，暂不能删除项目。');
-              return verificationPlanningService.withProjectCheckpoint(projectId, publish);
-            };
-            if (executionService === null) return remove();
-            if (typeof executionService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '无法确认代码执行和预览状态，暂不能删除项目。');
-            return executionService.withProjectCheckpoint(projectId, remove);
-          });
-          return respond(response, 200, result);
+              if (executionService === null) return remove();
+              if (typeof executionService?.withProjectCheckpoint !== 'function') throw new HttpError(409, '无法确认代码执行和预览状态，暂不能删除项目。');
+              return executionService.withProjectCheckpoint(projectId, remove);
+            });
+            return respond(response, 200, result);
+          } finally { factoryDeletionLocks.delete(projectId); }
         }
         if (segments.length === 3 && method === 'GET') return respond(response, 200, { project: { ...store.get(projectId), runs: await Promise.all(store.get(projectId).runs.map(run => orchestrator.describeRun(store.get(projectId), run))) } });
         if (segments[3] === 'changes') {
@@ -701,6 +765,9 @@ export async function createApp(options = {}) {
       try { info = await stat(file); } catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) throw new HttpError(404, '未找到该页面。'); throw error; }
       if (!info.isFile()) throw new HttpError(404, '未找到该页面。');
       const body = await readFile(file);
+      if (relative === 'factory.html' && !teamAccess) {
+        response.setHeader('Content-Security-Policy', response.getHeader('Content-Security-Policy') + "; frame-src http://127.0.0.1:*");
+      }
       if (method === 'HEAD') { response.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Content-Length': body.length }); return response.end(); }
       respond(response, 200, body, MIME[path.extname(file)] ?? 'application/octet-stream');
     } catch (error) {
@@ -715,7 +782,7 @@ export async function createApp(options = {}) {
   const close = () => {
     if (!closing) closing = (async () => {
       await automaticDelivery.shutdown();
-      const lifecycle = await Promise.allSettled([evolutionService?.shutdown(), localReleasesService?.shutdown(), plannedDatasetService?.close()]);
+      const lifecycle = await Promise.allSettled([evolutionService?.shutdown(), localReleasesService?.shutdown(), plannedDatasetService?.close(), factoryWorkbench.close()]);
       const results = [...lifecycle, ...await Promise.allSettled([simulationService.shutdown(), orchestrator.shutdown(), executionService?.shutdown(), sourceChangeService?.shutdown(), verificationPlanningService?.shutdown(), plannedExecutionService?.shutdown()])];
       if (server.listening) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       teamAccess?.close();

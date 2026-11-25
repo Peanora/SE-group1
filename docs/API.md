@@ -1,5 +1,18 @@
 # 本地原型接口约定
 
+## Factory 本机工作流
+
+`GET /api/health` 提供 `factoryWorkbench:{available,version}`，`available` 表示当前单人模式开放入口。项目路由提供可执行文件可用性与运行状态。仅允许回环 Host 和本机请求，团队模式返回 403。
+
+| 接口 | 结果 |
+| --- | --- |
+| `GET /api/projects/:projectId/factory?run=<runId>` | `{project,factory,handoff}`。省略运行编号时取最后一次规划。 |
+| `POST /api/projects/:projectId/factory/start` | 接受 `{confirmedLocalExecution:true,repositoryPath?}`。可选绝对路径必须是获授权的 Git 顶层目录，默认创建同项目的专用工作区。成功返回 `{factory}`。 |
+| `POST /api/projects/:projectId/factory/stop` | 接受空对象，成功返回 `{factory}`。无法确认停止时保持占用，需要核对进程。 |
+| `POST /api/projects/:projectId/factory/plan` | 接受 `{runId,specRevision,modelUsageConfirmed:true}`。通过当前已保存规格版本校验后交给 Factory Planner，返回 202 `{run,handoff}`。 |
+
+`factory` 提供 `available`、`state`、`url`、`version` 及可选的 `message`。就绪 URL 由健康检查后的原生服务提供。许可边界及依赖见 [Factory 工作流](FACTORY_WORKBENCH.md)。
+
 ## 多 Agent 规格评审
 
 `GET /api/health` 增加 `specificationMeeting:{available:true,version:2,adapter:"offline_fixture"}`。不调用模型，不改变真实交付门禁。

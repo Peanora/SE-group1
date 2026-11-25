@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node scripts/start-local.mjs",
     "dev": "node --watch server.mjs",
+    "factory:install": "node scripts/install-factory.mjs",
     "model:check": "node scripts/check-model.mjs",
     "test": "node --test --test-concurrency=4 tests/*.test.mjs",
     "simulation:demo": "node scripts/create-simulation-demo.mjs",

@@ -1,5 +1,7 @@
 # Taskflow 需求编排台
 
+「Factory 全流程」接入固定版本 Agentic Software Factory 的原生图、配置和执行。首次运行 `npm run factory:install`，在 Taskflow 项目内打开入口，选择专用 Git 工作区或授权仓库。可交接当前已确认的设计规格。[使用方式和功能对照](docs/FACTORY_WORKBENCH.md)。
+
 在「开发任务」可查看已确认规格与开发计划的版本、放大或拖动画布、突出前置和后续路径，并点开任务核对输入、产出、验收条件和来源。「去确认计划」返回原审阅入口，确认后可进入验收准备。运行 `npm start -- --demo` 可用本地分叉汇合示例体验。
 
 新增**多 Agent 规格评审 v0.2 首版**：手动规格确认停点可启用六节点评审，专业提案、关联异议、人工裁决、新版本重审与规格/阶段清单联合确认已接入页面及持久化。当前使用明确标注的离线角色夹具，不调用真实模型；通过只放行规划，不代表软件验收。运行 `npm run spec-review:demo` 创建独立演示数据，`npm run spec-review:test` 执行相关免费回归。[流程与演示](docs/SPECIFICATION_MEETING.md)。
