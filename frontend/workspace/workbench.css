@@ -1,0 +1,321 @@
+.tf-workbench {
+  --tf-canvas: #eff2ec;
+  --tf-paper: #fcfdf9;
+  --tf-ink: #172e29;
+  --tf-muted: #526762;
+  --tf-line: #d6dfd6;
+  --tf-accent: #08624e;
+  --tf-accent-hover: #064d3e;
+  --tf-accent-soft: #e2efe6;
+  --tf-rail: #f7f9f3;
+  --tf-sidebar-width: 232px;
+  --green: #176c54;
+  --green-tint: #e1f0e6;
+  --amber: #895616;
+  --amber-tint: #faeed9;
+  --red: #a33c2f;
+  --red-tint: #f8e7e1;
+  --focus: #247d66;
+  font-family: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  font-size: 14px;
+}
+
+.tf-workbench :is(a, button, input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.tf-workbench .sidebar {
+  padding: 23px 14px 17px;
+  color: #edf6ed;
+  background: #132b27;
+  border-color: #26423a;
+}
+
+.tf-workbench .brand { padding: 0 9px 21px; gap: 11px; }
+.tf-workbench .brand-mark { flex: none; border-radius: 9px; }
+.tf-workbench .brand strong { letter-spacing: -.03em; font-size: 23px; }
+.tf-workbench .brand small { color: #afc3b6; letter-spacing: 0; }
+
+.tf-workbench .new-project-button {
+  justify-content: flex-start;
+  gap: 7px;
+  min-height: 40px;
+  padding: 0 10px;
+  color: #f1faf4;
+  background: #235045;
+  border-color: #3c685b;
+  text-decoration: none;
+}
+
+.tf-workbench .new-project-button:hover { color: #fff; background: #306859; }
+.tf-workbench .sidebar :is(button, a):focus-visible { outline-color: #9cdec5; }
+.tf-workbench .sidebar :is(.sidebar-section-title, .sidebar-section-title > span, .empty-projects, .project-meta) { color: #aec2b6; }
+.tf-workbench #project-count {
+  border: 1px solid #416256;
+  border-radius: 99px;
+  padding: 0 6px;
+  line-height: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tf-workbench .sidebar-section-title { padding: 22px 9px 8px; }
+.tf-workbench .project-list { scrollbar-color: #507368 transparent; }
+.tf-workbench .project-row { margin-bottom: 2px; gap: 2px; }
+.tf-workbench .project-item { color: #e4f0e7; padding: 9px 7px; border: 1px solid transparent; border-radius: 7px; }
+.tf-workbench .project-item:hover { background: #244039; }
+.tf-workbench .project-item.active { color: #eff9f2; background: #294d43; border-color: #4a7064; }
+.tf-workbench .project-item.active .project-meta { color: #c3d8cb; }
+.tf-workbench .project-icon { color: #a7d5bf; }
+.tf-workbench .project-delete { color: #adc5b8; }
+.tf-workbench .project-delete:hover { color: #ffe2d8; background: #673e37; border-color: #83574d; }
+.tf-workbench .tf-sidebar-bottom { border-color: #345047; }
+.tf-workbench .sidebar-help {
+  justify-content: flex-start;
+  gap: 9px;
+  color: #c6d7cc;
+  background: transparent;
+}
+.tf-workbench .sidebar-help svg { flex: 0 0 16px; inline-size: 16px; block-size: 16px; color: #a5c9b6; }
+.tf-workbench .sidebar-help:hover { color: #f5fbf6; background-color: #294a40; }
+
+.tf-workbench .topbar {
+  height: 54px;
+  min-height: 54px;
+  padding-inline: clamp(16px, 3.1vw, 48px);
+  background: #f8faf5;
+  border-color: var(--tf-line);
+}
+.tf-workbench .breadcrumb { font-size: 13px; }
+.tf-workbench .topbar .icon-button { border-color: var(--tf-line); color: var(--tf-accent); }
+.tf-workbench .topbar .icon-button:hover { background: var(--tf-accent-soft); }
+.tf-workbench .connection-status { border-color: var(--tf-line); color: var(--tf-muted); }
+.tf-workbench .connection-status.connected > span { background: #228965; }
+.tf-workbench .connection-status.disconnected { color: var(--red); }
+
+.tf-workbench .workspace {
+  padding: 30px clamp(17px, 3.1vw, 48px) calc(30px + var(--workspace-notice-space));
+}
+.tf-workbench .workspace-heading { margin-block-end: 18px; }
+.tf-workbench .workspace-heading h1 {
+  max-width: 24ch;
+  font-size: clamp(29px, 3.05vw, 44px);
+  font-weight: 700;
+  line-height: 1.18;
+  letter-spacing: -.035em;
+  overflow-wrap: anywhere;
+}
+.tf-workbench .workspace-heading .page-description { line-height: 1.45; overflow-wrap: anywhere; }
+.tf-workbench .heading-actions { align-items: center; gap: 7px; }
+.tf-workbench .heading-actions select { max-width: min(320px, 100%); }
+.tf-workbench .button { border-radius: 7px; font-weight: 620; }
+.tf-workbench .tf-button svg { width: 16px; height: 16px; margin: 0; }
+.tf-workbench .button-outline { background: var(--tf-paper); }
+.tf-workbench .button-outline:hover { border-color: #b5ccb9; }
+.tf-workbench :is(select, input:not([type="checkbox"], [type="radio"], [type="file"]), textarea) {
+  accent-color: var(--tf-accent);
+  border-color: #c6d5c8;
+}
+.tf-workbench :is(input[type="checkbox"], input[type="radio"]) { accent-color: var(--tf-accent); }
+.tf-workbench .text-button:hover { color: var(--tf-accent-hover); }
+
+.tf-workbench .onboarding {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(170px, .8fr);
+  min-height: 233px;
+  margin-bottom: 18px;
+  padding: clamp(20px, 4vw, 50px);
+  overflow: hidden;
+  background: #173932;
+  border: 1px solid #234e43;
+  border-radius: 15px;
+  box-shadow: none;
+}
+.tf-workbench .onboarding h2 {
+  color: #f7faf3;
+  font-size: clamp(26px, 3.3vw, 42px);
+  line-height: 1.19;
+}
+.tf-workbench .onboarding p { max-width: 55ch; color: #d2e1d7; }
+.tf-workbench .onboarding-actions { gap: 9px 16px; }
+.tf-workbench .onboarding-actions .button-primary {
+  color: #174939;
+  background: #e4f4e8;
+  border-color: #e4f4e8;
+}
+.tf-workbench .onboarding-actions .text-button { color: #d8f1e2; text-underline-offset: 3px; text-decoration: underline; }
+.tf-workbench .onboarding :is(a, button):focus-visible { outline-color: #a2e4c6; }
+.onboarding-graphic {
+  position: relative;
+  align-self: stretch;
+  min-height: 144px;
+  border: 1px solid #4c7465;
+  border-radius: 11px;
+  background-color: #1d4238;
+  background-image: radial-gradient(circle, #7292827d 1px, transparent 1.5px);
+  background-size: 13px 13px;
+}
+.graphic-path { position: absolute; inset: 22% 15% 22% 20%; }
+.graphic-path::before {
+  content: "";
+  position: absolute;
+  inset: 50% 0 auto;
+  border-top: 1px solid #a5c7b7;
+}
+.graphic-path::after {
+  content: "";
+  position: absolute;
+  inset: 2% 0 2% 55%;
+  border: 1px solid #a5c7b7;
+  border-right: 0;
+  border-radius: 12px 0 0 12px;
+}
+.graphic-path i {
+  position: absolute;
+  z-index: 1;
+  inline-size: 11px;
+  block-size: 11px;
+  margin: -5px;
+  border-radius: 100%;
+  color: #bbdeca;
+  background: currentColor;
+  box-shadow: 0 0 0 4px #274e43;
+}
+.graphic-path i:first-child { top: 50%; left: 0; color: #f1b875; }
+.graphic-path i:nth-child(2) { top: 2%; right: 0; }
+.graphic-path i:nth-child(3) { top: 50%; right: 0; }
+.graphic-path i:last-child { bottom: 2%; right: 0; }
+.graphic-branch { position: absolute; inset: auto auto 10px 10px; color: #a8c9ba; }
+.graphic-branch svg { width: 15px; height: 15px; }
+
+.tf-workbench .workspace-context,
+.tf-workbench .workspace:has(:is(#workspace-source,#workspace-execution):not([hidden])) .workspace-context {
+  padding: 15px 19px 15px 17px;
+  color: var(--tf-ink);
+  background: #f6fbf4;
+  border: 1px solid #cbdacc;
+  border-inline-start: 4px solid #45846b;
+  border-radius: 9px;
+  box-shadow: none;
+}
+.tf-workbench .workspace-context[data-status="failed"] { border-inline-start-color: var(--red); background: #fff8f4; }
+.tf-workbench .workspace-context[data-status="waiting_review"] { border-inline-start-color: #b37a34; }
+.tf-workbench .workspace-context .status-idle { color: var(--tf-muted); background: #e5ede3; }
+.tf-workbench .workspace-context h2 { margin: 6px 0 3px; color: var(--tf-ink); font-size: clamp(18px, 1.9vw, 24px); }
+.tf-workbench .workspace-context :is(p, #run-progress) { color: var(--tf-muted); }
+.tf-workbench .run-context-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; }
+.tf-workbench .workspace-context #run-progress { margin: 0; }
+.tf-workbench .workspace-context .button-primary,
+.tf-workbench .workspace:has(:is(#workspace-source,#workspace-execution):not([hidden])) .workspace-context .button-primary {
+  color: #fff;
+  background: var(--tf-accent);
+  border-color: var(--tf-accent);
+}
+.tf-workbench .workspace-context .button-primary:hover { background: var(--tf-accent-hover); }
+.tf-workbench .workspace-context-actions { justify-content: flex-end; }
+.tf-workbench .workspace-context-actions .button-outline { color: var(--tf-accent); border-color: #c5d7c8; }
+
+.tf-workbench .delivery-workflow { border-radius: 9px; background: var(--tf-paper); }
+.tf-workbench .delivery-workflow > summary:hover { background: #f2f7ee; }
+.tf-workbench .tf-flow-action::after { content: none; }
+.tf-workbench .flow-chevron { width: 15px; height: 15px; color: var(--tf-accent); }
+.tf-workbench .delivery-workflow[open] .flow-chevron { transform: rotate(180deg); }
+.tf-workbench .delivery-step > span:first-child { border-radius: 7px; background: #f1f5ee; border-color: #d6dfd5; color: var(--tf-muted); }
+.tf-workbench .delivery-step[data-state="done"] > span:first-child { color: var(--tf-accent); background: #e0efe4; border-color: #b4d1be; }
+.tf-workbench .delivery-step[data-state="waiting"] > span:first-child { color: var(--amber); background: var(--amber-tint); border-color: #dbc49b; }
+.tf-workbench .delivery-step[data-state="failed"] > span:first-child { color: var(--red); background: var(--red-tint); border-color: #e2b9ad; }
+.tf-workbench .delivery-step[aria-current="step"] > span:first-child {
+  color: var(--tf-accent);
+  background: var(--tf-accent-soft);
+  border-color: #96bea7;
+  box-shadow: 0 0 0 2px #08624e20;
+}
+.tf-workbench .delivery-step[aria-current="step"] strong { color: var(--tf-accent); }
+.tf-workbench .delivery-workflow li::before { border-color: #a9bcb0; }
+.tf-workbench .delivery-workflow li::after { background: #d6e3d8; }
+
+.tf-workbench .workspace-nav {
+  background: var(--tf-paper);
+  gap: 5px;
+  padding: 5px;
+  border-radius: 10px;
+  margin-block-end: 10px;
+}
+.tf-workbench .workspace-nav button {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 7px;
+  min-height: 39px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-weight: 620;
+}
+.tf-workbench .workspace-nav button svg { flex: none; width: 16px; height: 16px; }
+.tf-workbench .workspace-nav button:hover { background: #eef4eb; }
+.tf-workbench .workspace-nav button[aria-selected="true"] {
+  background: var(--tf-accent-soft);
+  color: #12614e;
+  border-color: #bdd6c4;
+}
+.tf-workbench .workspace-nav button span { background: #d2e5d7; color: #2e604e; }
+.tf-workbench .workspace-panels { border-radius: 10px; box-shadow: none; }
+.tf-workbench .panel-toolbar { border-color: var(--tf-line); }
+.tf-workbench .section-symbol { color: #226a56; background: var(--tf-accent-soft); border-color: #c2d8c8; }
+.tf-workbench .flow-canvas {
+  background-color: #f2f6ef;
+  background-image: radial-gradient(circle, #bacfc2 1px, transparent 1.4px);
+  background-size: 15px 15px;
+  border-color: var(--tf-line);
+}
+.tf-workbench .flow-node.active { border-color: #3b8a70; }
+.tf-workbench :is(.flow-panel, .records-panel, .stage-inspector, .workspace-process, .workspace-secondary) { background-color: var(--tf-paper); }
+.tf-workbench :is(.review-banner, .planning-issue) { background: #f1f7ef; border-color: var(--tf-line); }
+.tf-workbench .planning-issue h3 { color: var(--tf-ink); }
+.tf-workbench :is(.review-item, .review-editor, .review-approval-grid, .planning-issue-draft) { border-color: var(--tf-line); background: var(--tf-paper); }
+.tf-workbench :is(.review-help, .review-source, .review-history, .canvas-label, .canvas-footer, .records-hint, .page-context) { color: var(--tf-muted); }
+.tf-workbench :is(.source-process, .execution-workspace-flow) { background: #f4f8f1; border-color: var(--tf-line); }
+.tf-workbench .execution-workspace-step[data-state="working"] { --step-line: #abcebb; }
+.tf-workbench :is(.project-dialog, .help-dialog, .source-dialog, .task-edit-dialog) {
+  color: var(--tf-ink);
+  background: var(--tf-paper);
+  border-color: var(--tf-line);
+  border-radius: 12px;
+}
+.tf-workbench :is(.dialog-header, .dialog-footer, .task-edit-header, .task-edit-footer) { border-color: var(--tf-line); background: #f5f8f1; }
+.tf-workbench :is(.dialog-header h2, .task-edit-header h2) { color: var(--tf-ink); }
+.tf-workbench .drop-zone { border-color: #a9c7b5; background: #f2f8f0; }
+.tf-workbench .drop-zone.drag-over { background: var(--tf-accent-soft); border-color: var(--tf-accent); }
+
+@media (max-width: 760px) {
+  .tf-workbench .sidebar { padding: 9px 12px 8px; }
+  .tf-workbench .brand { padding: 0; }
+  .tf-workbench .brand strong { font-size: 19px; }
+  .tf-workbench .brand-mark { width: 30px; height: 30px; }
+  .tf-workbench .sidebar-help svg { width: 15px; height: 15px; }
+  .tf-workbench .project-item { padding: 6px; }
+  .tf-workbench .project-row { margin-bottom: 0; }
+  .tf-workbench .topbar { height: 42px; min-height: 42px; padding-inline: 12px; }
+  .tf-workbench .workspace { padding: 15px 12px calc(16px + var(--workspace-notice-space)); }
+  .tf-workbench .workspace-heading { gap: 9px; margin-block-end: 12px; }
+  .tf-workbench .workspace-heading h1 { font-size: clamp(25px, 6.4vw, 32px); }
+  .tf-workbench .onboarding { grid-template-columns: minmax(0, 1fr); min-height: auto; padding: 20px; gap: 15px; }
+  .tf-workbench .onboarding h2 { font-size: 25px; }
+  .tf-workbench .onboarding p { font-size: 13px; }
+  .onboarding-graphic { display: none; }
+  .tf-workbench .workspace-context,
+  .tf-workbench .workspace:has(:is(#workspace-source,#workspace-execution):not([hidden])) .workspace-context { padding: 10px 12px; }
+  .tf-workbench .workspace-context-actions { justify-content: flex-start; }
+  .tf-workbench .flow-chevron { flex: none; }
+  .tf-workbench .workspace-nav { gap: 2px; padding: 3px; }
+  .tf-workbench .workspace-nav button { min-height: 39px; padding: 4px 3px; font-size: 12px; gap: 3px; }
+  .tf-workbench .workspace-nav button svg { display: none; }
+  .tf-workbench .workspace-nav button span { margin-inline-start: 1px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tf-workbench *, .tf-workbench *::before, .tf-workbench *::after { scroll-behavior: auto !important; }
+}

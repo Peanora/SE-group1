@@ -1,5 +1,7 @@
 # 当前规划原型实现说明
 
+`frontend/` 下的 React 和 TypeScript 页面由 Vite 编译到 `public/ui/`。项目工作台、API 服务、Agent 角色、团队账号和 Factory 外壳从同一 Node 服务加载各自入口。工作台使用项目与运行记录组织规划、任务、需求变更和验收，并复用现有面板请求、版本检查及轮询。
+
 ## Factory 工作流
 
 Taskflow 项目页启动固定版本 Factory 进程。浏览器同页显示原生工作台，连接由该进程自行提供的回环 HTTP、SSE 和终端 WebSocket。当前规格在发送前校验内容版本、审批和保存状态。Factory 工作流及 Git 集成保存在对应仓库，Taskflow 按自身的规则管理验收与源码交付。[功能对照](FACTORY_WORKBENCH.md)。

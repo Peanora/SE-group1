@@ -1,17 +1,19 @@
-import { canEditPlanTasks, createPlanningReview } from './planning-review.js';
-import { createSpecRepair } from './spec-repair.js';
-import { createPlanningIssue } from './planning-issue.js';
-import { createSpecificationMeeting } from './specification-meeting.js';
-import { createExecutionPanel } from './execution-panel.js';
-import { createVerificationPlans } from './verification-plans.js';
-import { createPlannedExecutionPanel } from './planned-execution.js';
-import { createProjectEvolution } from './project-evolution.js';
-import { createSourceChanges } from './source-changes.js';
-import { createSimulatedTasks, SIM_STATUS } from './simulated-tasks.js';
-import { createWorkspaceLayout } from './workspace-layout.js';
-import { createWorkspaceNotices } from './workspace-notices.js';
-import { deliverySteps } from './delivery-workflow.js';
-import { createTaskOrchestration } from './task-orchestration-view.js';
+import { clearEventEvidence, renderEventEvidence, renderStageEvidence, renderWorkflowEvidence } from './run-evidence.tsx';
+import { showExecutionTimeline, showProjects, showRunTimeline } from './projections.tsx';
+import { canEditPlanTasks, createPlanningReview } from '../../public/planning-review.js';
+import { createSpecRepair } from '../../public/spec-repair.js';
+import { createPlanningIssue } from '../../public/planning-issue.js';
+import { createSpecificationMeeting } from '../../public/specification-meeting.js';
+import { createExecutionPanel } from '../../public/execution-panel.js';
+import { createVerificationPlans } from '../../public/verification-plans.js';
+import { createPlannedExecutionPanel } from '../../public/planned-execution.js';
+import { createProjectEvolution } from '../../public/project-evolution.js';
+import { createSourceChanges } from '../../public/source-changes.js';
+import { createSimulatedTasks, SIM_STATUS } from '../../public/simulated-tasks.js';
+import { createWorkspaceLayout } from '../../public/workspace-layout.js';
+import { createWorkspaceNotices } from '../../public/workspace-notices.js';
+import { deliverySteps } from '../../public/delivery-workflow.js';
+import { createTaskOrchestration } from '../../public/task-orchestration-view.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -19,8 +21,6 @@ const escape = (value = '') => String(value).replace(/[&<>"']/g, (c) => ({ '&': 
 const taskOrchestration = createTaskOrchestration($('#records-body'), { escape, onLayoutChange: () => { if (state.tab === 'tasks') renderRecords(); } });
 const state = { health: null, projects: [], project: null, run: null, automatic: null, stageId: 'spec', taskId: null, artifactName: 'task.md', tab: 'events', raw: false, busy: false, epoch: 0, selectionPending: false, pollTimer: null, feedback: '', importFile: null, filename: 'requirements.md' };
 let sourceReadyProject = '';
-let deliveryMarkup = '';
-let executionMarkup = '';
 let expandedAutomaticRun = '';
 let automaticRetryConsent = null;
 const notices = createWorkspaceNotices({ errorBanner: $('#error-banner'), errorText: $('#error-text'), dismissButton: $('#dismiss-error'), toast: $('#toast'),
@@ -309,11 +309,7 @@ function renderDeliveryProgress() {
   $('#delivery-current-state').dataset.state = current.state;
   $('#delivery-done-count').textContent = `${steps.filter(step => step.state === 'done').length} / ${steps.length} 完成`;
   if (automatic && expandedAutomaticRun !== state.run.id) { expandedAutomaticRun = state.run.id; $('#delivery-workflow').open = true; }
-  const markup = steps.map(({ id, title, state: status, text, detail, hasUsage }, index) => `<li><button type="button" class="delivery-step" data-delivery-step="${id}" data-focus-key="delivery-${id}" data-state="${status}" ${hasUsage ? 'data-has-usage' : ''} ${upcoming?.id === id ? 'aria-current="step"' : ''} ${state.selectionPending || !state.project && id !== 'source' ? 'disabled' : ''}><span aria-hidden="true">${index + 1}</span><strong>${title}</strong><span class="delivery-state">${escape(text)}</span><small>${escape(detail)}</small></button></li>`).join('');
-  if (deliveryMarkup !== markup) {
-    deliveryMarkup = markup;
-    replacePreservingFocus($('#delivery-steps'), markup);
-  }
+  showRunTimeline($('#delivery-steps'), steps, upcoming?.id, state.selectionPending, Boolean(state.project));
   renderExecutionFlow(steps);
   renderWorkspaceContext(steps);
 }
@@ -324,17 +320,7 @@ function nextExecutionStep(steps) {
 }
 function renderExecutionFlow(steps) {
   const next = nextExecutionStep(steps);
-  const markup = steps.slice(-4).map(({ id, title, state: status, text }, index) => `<li>
-    <button type="button" class="execution-workspace-step" data-execution-step="${id}" data-focus-key="execution-${id}"
-      data-state="${status}" ${id === next.id ? 'aria-current="step"' : ''} ${state.selectionPending ? 'disabled' : ''}>
-      <span class="execution-step-marker" aria-hidden="true">${status === 'done' ? '✓' : status === 'failed' ? '!' : index + 1}</span>
-      <span class="execution-step-label"><strong>${title}</strong><small>${escape(text)}</small></span>
-    </button>
-  </li>`).join('');
-  if (executionMarkup !== markup) {
-    executionMarkup = markup;
-    replacePreservingFocus($('#execution-workspace-steps'), markup);
-  }
+  showExecutionTimeline($('#execution-workspace-steps'), steps.slice(-4), next.id, state.selectionPending);
   const failure = next.state === 'failed' && next.id !== 'verification' && plannedPanel?.workflowProgress().failureHelp;
   const hint = historicalRun() ? '所选规划属于历史需求版本。切换到当前规划可继续开发。'
     : next.id === 'delivery' ? '当前候选已通过独立验收。打开交付可查看预览与源码。'
@@ -574,12 +560,10 @@ const specificationMeeting = createSpecificationMeeting({ container: $('#specifi
 
 function renderProjects() {
   $('#project-count').textContent = state.projects.length;
-  $('#project-list').innerHTML = state.projects.length ? state.projects.map(project => {
-    const status = project.lastRunStatus;
-    const label = status ? STATUS[status] || status : '尚未编排';
-    const active = project.id === state.project?.id;
-    return `<div class="project-row"><button class="project-item ${active ? 'active' : ''}" data-project="${escape(project.id)}" aria-current="${active ? 'page' : 'false'}"><svg class="project-icon" viewBox="0 0 20 22" aria-hidden="true"><path d="M3 2h9l5 5v13H3Z"/><path d="M12 2v6h5M6 12h8M6 16h5"/></svg><span class="project-info"><span class="project-name">${escape(project.name)}</span><span class="project-meta">${escape(label)} / ${project.runCount || 0} 次运行</span></span><span class="project-state-dot ${escape(status || '')}"></span></button><button type="button" class="project-delete" data-delete-project="${escape(project.id)}" aria-label="删除项目：${escape(project.name)}" title="删除项目">×</button></div>`;
-  }).join('') : '<div class="empty-projects">尚无项目<br>从一份需求文档开始</div>';
+  showProjects($('#project-list'), state.projects.map(project => {
+    const status = project.lastRunStatus || '';
+    return { id: project.id, name: project.name, status, label: STATUS[status] || status || '尚未编排', runCount: project.runCount || 0 };
+  }), state.project?.id);
 }
 function renderHeader() {
   $('#project-title').textContent = state.project?.name || '需求编排工作台';
@@ -677,45 +661,15 @@ function renderControls() {
   $('#task-count').textContent = run?.tasks?.length || 0;
   $('#artifact-count').textContent = run?.artifacts?.length || 0;
 }
-function renderWorkflow() {
-  const edge = (from, to, path) => `<path class="flow-edge ${escape(stageOf(to)?.status || 'pending')}" d="${path}" marker-end="url(#arrow-${escape(stageOf(to)?.status || 'pending')})"/>`;
-  const markers = ['pending', 'running', 'succeeded', 'failed', 'blocked'].map((status) => `<marker id="arrow-${status}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L8 4L0 8Z" fill="${({ running: '#6480e5', succeeded: '#7aaea1', failed: '#d4a4ac', blocked: '#d4a4ac' })[status] || '#c4cfdf'}"/></marker>`).join('');
-  const html = `<svg class="flow-edges" viewBox="0 0 1000 292" preserveAspectRatio="none" aria-hidden="true"><defs>${markers}</defs>${edge('intake', 'spec', 'M165 149H200')}${edge('spec', 'architecture', 'M350 149H375V69H400')}${edge('spec', 'tasks', 'M350 149H375V229H400')}${edge('architecture', 'review', 'M550 69H590V149H620')}${edge('tasks', 'review', 'M550 229H590V149')}${edge('review', 'export', 'M770 149H820')}</svg>${STAGES.map((fallback, i) => {
-    const stage = stageOf(fallback.id) || { ...fallback, status: 'pending', attempt: 0 };
-    const specWaiting = fallback.id === 'spec' && specClarificationPending();
-    const waiting = specWaiting ? '等待补充需求' : fallback.id === 'export' && state.run?.status === 'awaiting_review' ? '等待计划确认' : ['architecture', 'tasks'].includes(fallback.id) && state.run?.status === 'awaiting_spec' ? specClarificationPending() ? '等待补充需求' : '等待规格确认' : '';
-    const visualStatus = specWaiting ? 'awaiting_spec' : stage.status;
-    const completed = stage.status === 'succeeded' && !specWaiting;
-    return `<button class="flow-node ${escape(visualStatus)} ${waiting ? 'awaiting-confirmation' : ''} ${state.stageId === stage.id ? 'selected' : ''}" style="--x:${fallback.x}%;--y:${fallback.y}px" data-stage="${escape(stage.id)}" data-focus-key="stage-${escape(stage.id)}" aria-pressed="${state.stageId === stage.id}" aria-label="${escape(stage.title)}，${escape(waiting || STATUS[stage.status] || stage.status)}"><span class="node-top"><span class="node-number">${String(i + 1).padStart(2, '0')}</span><span class="node-status-dot">${completed ? '✓' : ''}</span></span><h3>${escape(stage.title)}</h3><span class="node-meta">${escape(waiting || STATUS[stage.status] || stage.status)}${stage.attempt > 1 ? ` / 第 ${stage.attempt} 次` : ''}</span></button>`;
-  }).join('')}`;
-  replacePreservingFocus($('#workflow-graph'), html);
+function workflowEvidence() {
+  return { run: state.run, stages: STAGES, labels: STATUS, stageId: state.stageId, specWaiting: specClarificationPending() };
 }
+function renderWorkflow() { renderWorkflowEvidence($('#workflow-graph'), workflowEvidence()); }
 function renderInspector() {
-  const fallback = STAGES.find((stage) => stage.id === state.stageId) || STAGES[0];
-  const stage = stageOf(fallback.id) || { ...fallback, status: 'pending', attempt: 0 };
-  const artifacts = state.run?.artifacts?.filter((artifact) => artifact.stageId === stage.id) || [];
-  const specWaiting = stage.id === 'spec' && specClarificationPending();
-  const visualStatus = specWaiting ? 'awaiting_spec' : stage.status;
-  const visualLabel = specWaiting ? '等待补充需求' : STATUS[stage.status] || stage.status;
-  const outputHtml = specWaiting ? '等待补充后生成最终规格' : artifacts.length ? artifacts.map((artifact) => `<button class="inspector-artifact-link" data-artifact="${escape(artifact.name)}" data-focus-key="inspector-${escape(artifact.name)}">${escape(artifact.name)}</button>`).join('') : escape(fallback.output);
-  const note = state.run?.status === 'awaiting_spec' && ['spec', 'architecture', 'tasks'].includes(stage.id) ? specClarificationPending() ? '打开「查看问题」处理待确认的信息。' : '确认规格后才会生成架构和任务。' : stage.id === 'export' && state.run?.status === 'awaiting_review' ? `检查下方计划后，点击“${state.run?.workflowVersion === 2 ? '确认计划并导出' : '确认并导出'}”继续。` : stage.status === 'blocked' ? '前置阶段尚未成功。解决失败并重试后，编排器会重新检查依赖。' : stage.status === 'succeeded' ? '本阶段结果已保存。后续重试会保留成功分支。' : '每个阶段成功后发布产物；下游只读取已成功的结果。';
-  const failure = stage.id === 'spec' ? state.run?.specificationFailure : ['architecture', 'tasks'].includes(stage.id) ? state.run?.engineeringFailure : null;
-  const failureDetail = failure?.detail && failure.detail !== failure.message ? ` ${failure.detail}` : '';
-  const failureText = failure ? `${failure.message}${failureDetail} ${failure.nextStep}` : stage.error;
-  const retryDisabled = state.busy || failure?.canRetry === false;
-  const retryLabel = failure?.pending ? '前次请求待核对' : failure?.canRetry === false ? failure.remaining === 0 ? '调用次数已用尽' : '工程总时长已用尽' : '重试此阶段';
-  const recovery = failure?.canRevalidate ? `<button class="button button-primary" ${stage.id === 'spec' ? `data-revalidate-spec="${escape(failure.attemptId)}"` : 'data-revalidate-engineering'} ${state.busy ? 'disabled' : ''}>${stage.id === 'spec' ? '重新校验已保存响应（不调用模型）' : '重新校验保存的工程草案（不调用模型）'}</button>` : '';
-  const localRecovery = failure?.canUseLocal ? `<button class="button button-outline" data-use-local-engineering ${state.busy ? 'disabled' : ''}>改用本地规则生成架构与任务（不调用模型）</button>` : '';
-  const html = `<div class="inspector-eyebrow"><span>阶段详情</span><span class="status-tag status-${escape(visualStatus)}">${escape(visualLabel)}</span></div><h3 class="inspector-title">${escape(stage.title)}</h3><p class="inspector-description">${escape(fallback.description)}</p><dl class="inspector-info"><dt>前置依赖</dt><dd>${stage.dependsOn.length ? stage.dependsOn.map((id) => escape(stageTitle(id))).join('、') : '无，可直接启动'}</dd><dt>尝试次数</dt><dd>${stage.attempt || '尚未执行'}</dd><dt>执行用时</dt><dd>${duration(stage)}</dd><dt>输出产物</dt><dd>${outputHtml}</dd></dl>${stage.error ? `<div class="stage-error">${escape(failureText)}${recovery}${localRecovery}${state.run?.status === 'failed' && stage.status === 'failed' ? `<button class="button button-outline" data-retry="${escape(stage.id)}" data-focus-key="retry-${escape(stage.id)}" ${retryDisabled ? 'disabled' : ''}>${escape(retryLabel)}</button>` : ''}</div>` : ''}<p class="inspector-note">${escape(note)}</p>`;
-  replacePreservingFocus($('#stage-inspector'), html);
-  if (historicalRun() || automaticOwnsRun()) $$('[data-retry], [data-revalidate-spec], [data-revalidate-engineering], [data-use-local-engineering]', $('#stage-inspector')).forEach(button => { button.disabled = true; });
+  renderStageEvidence($('#stage-inspector'), { ...workflowEvidence(), stageTitle, duration,
+    busy: state.busy, readOnly: historicalRun() || automaticOwnsRun() });
 }
 function emptyContent(icon, title, description) { return `<div class="empty-records">${ICONS[icon] || ICONS.log}<strong>${escape(title)}</strong><p>${escape(description)}</p></div>`; }
-function renderEvents() {
-  const events = state.run?.events || [];
-  if (!events.length) return emptyContent('log', '每一步都将在这里留下记录', '开始编排后，查看阶段执行、失败原因与操作结果。');
-  return `<div class="event-list">${events.slice(-200).map((event) => `<div class="event-row"><span class="event-icon ${escape(event.level)}">${event.level === 'success' ? '✓' : event.level === 'error' ? '!' : '·'}</span><time class="event-time" datetime="${escape(event.time)}">${escape(formatTime(event.time))}</time><span class="event-stage">${escape(event.stageId ? stageTitle(event.stageId) : '运行控制')}</span><p class="event-message">${escape(event.message)}</p></div>`).join('')}</div>`;
-}
 function renderTasks() {
   const simulation = simulatedTasks.selection(), preview = simulation ? null : planningReview.taskDraft();
   const owner = !state.health?.teamAccess?.enabled || state.actorRole === 'owner';
@@ -838,12 +792,27 @@ function renderRecords() {
   for (const button of $$('[data-tab]')) button.setAttribute('aria-selected', String(button.dataset.tab === state.tab));
   $('#records-body').setAttribute('aria-labelledby', state.tab === 'tasks' ? 'records-tab-tasks' : `tab-${state.tab}`);
   $('#records-hint').textContent = ({ events: '执行状态与操作记录', tasks: '待实施计划与独立模拟运行（非真实验收）', artifacts: '可阅读、可交接的项目产物' })[state.tab];
-  const oldEvents = $('.event-list'); const followEvents = !oldEvents || oldEvents.scrollHeight - oldEvents.scrollTop - oldEvents.clientHeight < 45;
+  const records = $('#records-body');
+  if (state.tab === 'events') {
+    renderEventEvidence(records, { events: state.run?.events, stageTitle, formatTime });
+    taskOrchestration.sync();
+    return;
+  }
+  clearEventEvidence(records);
   const savedScroll = {};
-  for (const name of ['event-list', 'task-graph-scroll', 'task-detail', 'artifact-content', 'artifact-list']) { const element = $(`.${name}`); if (element) savedScroll[name] = { x: element.scrollLeft, y: element.scrollTop, context: element.dataset.graphContext }; }
-  replacePreservingFocus($('#records-body'), state.tab === 'tasks' ? renderTasks() : state.tab === 'artifacts' ? renderArtifacts() : renderEvents());
-  for (const [name, pos] of Object.entries(savedScroll)) { const element = $(`.${name}`); if (element && element.dataset.graphContext === pos.context) { element.scrollLeft = pos.x; element.scrollTop = pos.y; } }
-  if (state.tab === 'events' && followEvents && $('.event-list')) $('.event-list').scrollTop = $('.event-list').scrollHeight;
+  for (const name of ['task-graph-scroll', 'task-detail', 'artifact-content', 'artifact-list']) {
+    const element = $('.' + name);
+    if (element) savedScroll[name] = { x: element.scrollLeft, y: element.scrollTop, context: element.dataset.graphContext };
+  }
+  replacePreservingFocus(records, state.tab === 'tasks' ? renderTasks() : renderArtifacts());
+  taskOrchestration.sync();
+  for (const [name, pos] of Object.entries(savedScroll)) {
+    const element = $('.' + name);
+    if (element && element.dataset.graphContext === pos.context) {
+      element.scrollLeft = pos.x;
+      element.scrollTop = pos.y;
+    }
+  }
 }
 function renderRun() { renderControls(); renderWorkflow(); renderInspector(); renderRecords(); syncExecutionPanel(); syncSimulatedTasks(); workspaceLayout.sync(); renderDeliveryProgress(); notices.syncContext(); notices.failure(state.run); }
 function renderAll() { renderProjects(); renderHeader(); renderRun(); }

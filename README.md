@@ -1,4 +1,6 @@
-# Taskflow 需求编排台
+# Taskflow 研发工作台
+
+首页按项目和运行组织规格、计划、任务、代码和验收证据。从当前步骤可直接进入待处理的审批、问题或验收。API 服务、Agent 角色、团队账号及 Factory 外层工作台使用同一套导航和反馈样式。
 
 「Factory 全流程」接入固定版本 Agentic Software Factory 的原生图、配置和执行。首次运行 `npm run factory:install`，在 Taskflow 项目内打开入口，选择专用 Git 工作区或授权仓库。可交接当前已确认的设计规格。[使用方式和功能对照](docs/FACTORY_WORKBENCH.md)。
 
@@ -44,7 +46,7 @@ npm start
 
 浏览器打开 [本地工作台](http://127.0.0.1:4317)。停止服务时，在启动终端按 `Ctrl+C`。
 
-平台锁定`playwright-core`作为独立浏览器验收依赖，使用系统Microsoft Edge；仅生成规划文档不启动验收浏览器。选择模型执行后，后端独立启动检查浏览器。修改服务端代码时可用`npm run dev`启动监视模式，修改前端静态文件后刷新页面即可。
+平台锁定`playwright-core`作为独立浏览器验收依赖，使用系统Microsoft Edge；仅生成规划文档不启动验收浏览器。选择模型执行后，后端独立启动检查浏览器。`npm start` 在选定 Node 运行时下构建 React、TypeScript 和 Vite 前端，然后启动同源服务。改服务端时运行 `npm run dev`。同时改前端时，在另一终端运行 `npm run ui:watch` 并刷新页面。直接执行 `node server.mjs` 或单独运行浏览器测试前，先运行 `npm run ui:build`。
 
 `npm test`将测试文件进程并发上限固定为4，控制同时运行的原生浏览器与MXC数量；测试项、业务断言和停止要求保持不变。本机默认24文件并发曾出现一次归档进程停止未确认，尚未确定具体原因；新测试会保存完整意外报告，并保留任何停止未确认的临时工作区，不能将其当作通过。
 

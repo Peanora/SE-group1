@@ -17,7 +17,7 @@
     "spec-review:demo": "node scripts/create-specification-meeting-demo.mjs",
     "spec-review:test": "node --test --test-concurrency=2 tests/specification-meeting.test.mjs tests/specification-meeting-browser.test.mjs tests/planning-review.test.mjs tests/planning-project-actions.test.mjs tests/specification-planning-integration.test.mjs tests/engineering-planning-integration.test.mjs tests/planning-issue-browser.test.mjs tests/server.test.mjs tests/orchestrator.test.mjs tests/team-access-http.test.mjs tests/source-change-http.test.mjs tests/automatic-delivery-http.test.mjs",
     "simulation:test": "node --test --test-concurrency=2 tests/simulated-tasks.test.mjs tests/simulated-tasks-browser.test.mjs tests/engineering-plan.test.mjs tests/engineering-planning-integration.test.mjs tests/planning-review.test.mjs tests/planning-project-actions.test.mjs tests/server.test.mjs tests/store.test.mjs tests/orchestrator.test.mjs tests/source-change-http.test.mjs",
-    "check": "node scripts/check-syntax.mjs",
+    "check": "npm run ui:typecheck && node scripts/check-syntax.mjs",
     "acceptance": "node scripts/acceptance.mjs",
     "execution:check": "node scripts/check-executor.mjs",
     "web:check": "node scripts/check-web-executor.mjs",
@@ -25,9 +25,29 @@
     "planned:verify": "node scripts/verify-planned-delivery.mjs",
     "planned:recovery": "node scripts/check-planned-recovery.mjs",
     "planned:tasks": "node scripts/check-planned-tasks.mjs",
-    "web:verify": "node scripts/verify-web-delivery.mjs"
+    "web:verify": "node scripts/verify-web-delivery.mjs",
+    "ui:build": "vite build",
+    "ui:typecheck": "tsc --noEmit",
+    "ui:watch": "vite build --watch",
+    "pretest": "npm run ui:build",
+    "predev": "npm run ui:build",
+    "presimulation:test": "npm run ui:build",
+    "prespec-review:test": "npm run ui:build",
+    "preplanned:recovery": "npm run ui:build"
   },
   "dependencies": {
-    "playwright-core": "1.65.0"
+    "@radix-ui/react-slot": "1.2.4",
+    "@xyflow/react": "13.0.3",
+    "class-variance-authority": "0.7.1",
+    "lucide-react": "1.80.0",
+    "playwright-core": "1.65.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "7.0.2",
+    "vite": "8.3.8"
   }
 }

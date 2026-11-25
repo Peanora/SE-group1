@@ -6,83 +6,11 @@
   <meta name="color-scheme" content="light">
   <meta name="referrer" content="no-referrer">
   <title>Factory 工作流 · Taskflow</title>
-  <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="/workbench-theme.css">
-  <link rel="stylesheet" href="/factory-workbench.css">
-  <script type="module" src="/factory-workbench.js"></script>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='8' fill='%2308624e'/%3E%3Cpath d='M12 27V14m8 13V10m8 17V17' stroke='%23f9faf7' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/ui/tools.css">
+  <script type="module" src="/ui/tools.js"></script>
 </head>
-<body class="tf-product factory-workbench">
-  <a class="skip-link" href="#factory-main">跳到 Factory 工作流</a>
-  <header class="factory-header">
-    <a class="factory-brand" href="/" aria-label="Taskflow 工作台首页">
-      <span class="tf-brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-      <strong>Taskflow</strong>
-    </a>
-    <a href="/">返回项目工作台</a>
-  </header>
-  <main class="factory-main" id="factory-main">
-    <div class="factory-heading">
-      <div>
-        <h1>Factory 工作流</h1>
-        <p id="factory-project">正在读取 Taskflow 项目…</p>
-      </div>
-      <div class="factory-status" id="factory-status" data-state="loading">
-        <span class="factory-status-dot" aria-hidden="true"></span>
-        <span id="factory-state">正在读取状态</span>
-        <span id="factory-version" hidden></span>
-      </div>
-    </div>
-    <p id="factory-error" class="factory-message factory-error" role="alert" hidden></p>
-    <p id="factory-notice" class="factory-message" role="status" hidden></p>
-    <div class="factory-controls">
-      <section class="factory-configuration" aria-labelledby="factory-runtime-heading">
-        <div class="factory-section-heading">
-          <h2 id="factory-runtime-heading">本地运行环境</h2>
-          <button type="button" id="factory-refresh" class="text-button">刷新状态</button>
-        </div>
-        <p id="factory-runtime-message">Factory 调用本机配置的编码 CLI。启动后可在原生界面管理 Agent、命令和交互会话。</p>
-        <form id="factory-start-form">
-          <label for="factory-repository">Git 仓库绝对路径 <span>选填</span></label>
-          <input id="factory-repository" name="repositoryPath" type="text" autocomplete="off" spellcheck="false" aria-describedby="factory-repository-hint">
-          <p id="factory-repository-hint" class="factory-hint">留空使用本项目的专用工作目录。选用已有仓库时，请填写你有权操作的本机仓库。</p>
-          <label class="factory-confirmation">
-            <input id="factory-execution-confirmation" type="checkbox" required>
-            <span>我确认启用本机执行。Factory 中配置的 CLI 会以当前系统账户权限运行。</span>
-          </label>
-          <button type="submit" id="factory-start" class="button button-primary" disabled>启动本地 Factory</button>
-        </form>
-        <button type="button" id="factory-stop" class="button button-outline" hidden disabled>停止本地 Factory</button>
-      </section>
-      <section class="factory-handoff" aria-labelledby="factory-handoff-heading">
-        <div class="factory-section-heading"><h2 id="factory-handoff-heading">已确认规格</h2></div>
-        <p id="factory-handoff-message">当前项目的规划运行确认规格后，可以在这里交给 Factory 生成开发计划。</p>
-        <dl id="factory-handoff-version" class="factory-spec" hidden>
-          <div><dt>规格</dt><dd id="factory-spec-title"></dd></div>
-          <div><dt>版本</dt><dd id="factory-spec-revision"></dd></div>
-        </dl>
-        <form id="factory-plan-form" hidden>
-          <label class="factory-confirmation">
-            <input id="factory-planning-confirmation" type="checkbox" required>
-            <span>我确认将此版规格交给 Factory 的 Planner，允许消耗该 CLI 的模型用量。</span>
-          </label>
-          <button type="submit" id="factory-plan" class="button button-primary" disabled>交给 Factory 规划</button>
-        </form>
-        <p class="factory-hint">规划开始后，先在 Factory 核对任务和团队。确认无误后，再从 Factory 启动开发。</p>
-        <a id="factory-created-run" class="text-button factory-inline-link" target="_blank" rel="noopener noreferrer" hidden></a>
-      </section>
-    </div>
-    <section id="factory-dashboard" class="factory-dashboard" aria-labelledby="factory-dashboard-heading" hidden>
-      <div class="factory-dashboard-header">
-        <h2 id="factory-dashboard-heading">Factory 原生工作台</h2>
-        <nav aria-label="Factory 原生工作台入口">
-          <a id="factory-open-graph" target="factory-dashboard-frame">Agent 图</a>
-          <a id="factory-open-settings" target="factory-dashboard-frame">配置与角色</a>
-          <a id="factory-open-performance" target="factory-dashboard-frame">运行表现</a>
-          <a id="factory-open-dashboard" target="_blank" rel="noopener noreferrer">在新标签页打开</a>
-        </nav>
-      </div>
-      <iframe id="factory-dashboard-frame" name="factory-dashboard-frame" title="Agentic Software Factory 原生工作台" referrerpolicy="no-referrer"></iframe>
-    </section>
-  </main>
+<body data-taskflow-tool="factory">
+  <div id="root"></div>
 </body>
 </html>

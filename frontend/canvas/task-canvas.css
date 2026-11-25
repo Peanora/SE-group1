@@ -1,0 +1,65 @@
+.task-flow-slot,
+.task-flow-surface,
+.task-flow-extent {
+  position: absolute;
+  inset: 0 auto auto 0;
+}
+
+.task-flow-slot,
+.task-flow-surface {
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+.task-flow-extent {
+  transform-origin: top left;
+}
+
+.task-orchestration-root .task-flow-extent .react-flow {
+  background: transparent;
+}
+
+.task-orchestration-root .task-flow-extent .react-flow__pane {
+  cursor: inherit;
+}
+
+.task-orchestration-root .task-flow-extent .react-flow__handle {
+  inline-size: 8px;
+  block-size: 8px;
+  min-inline-size: 0;
+  min-block-size: 0;
+  border: 1px solid var(--task-paper);
+  border-radius: 50%;
+  background: var(--task-edge-idle);
+  pointer-events: none;
+}
+
+.task-orchestration-root .task-flow-extent .dev-task {
+  position: relative;
+  inline-size: 100%;
+  block-size: 100%;
+  pointer-events: auto;
+}
+
+section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node {
+  position: relative;
+  inline-size: 100%;
+  block-size: 100%;
+  pointer-events: auto;
+}
+
+section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .react-flow__handle {
+  inline-size: 8px;
+  block-size: 8px;
+  min-inline-size: 0;
+  min-block-size: 0;
+  border: 1px solid var(--pe-paper, #fcfbf7);
+  border-radius: 50%;
+  background: var(--pe-control, #869b94);
+  pointer-events: none;
+}
+
+section.planned-execution .pe-process .pe-graph-canvas .pe-flow-edge {
+  fill: none;
+  stroke: var(--pe-accent, #08624e);
+}

@@ -30,12 +30,17 @@ export function main(args = process.argv.slice(2)) {
   const runtime = findRuntime();
   if (args.includes('--check-runtime')) { console.log(JSON.stringify(runtime)); return 0; }
   const env = { ...process.env, PATH: `${path.dirname(runtime.executable)}${path.delimiter}${process.env.PATH || process.env.Path || ''}` };
-  const run = file => {
-    const result = spawnSync(runtime.executable, [file], { cwd: root, env, stdio: 'inherit', windowsHide: true });
+  const run = (file, ...args) => {
+    const result = spawnSync(runtime.executable, [file, ...args], { cwd: root, env, stdio: 'inherit', windowsHide: true });
     if (result.error) throw result.error;
     return result.status === null ? 1 : result.status;
   };
   console.log(`[Taskflow] Node.js ${runtime.version}: ${runtime.executable}`);
+  if (!existsSync(path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'))) {
+    throw new Error('前端构建依赖缺失。请在项目目录运行 npm ci --ignore-scripts。');
+  }
+  const frontendCode = run('node_modules/vite/bin/vite.js', 'build');
+  if (frontendCode !== 0) return frontendCode;
   if (args.includes('--demo')) {
     env.DATA_DIR = path.join(root, 'output', 'simulation-demo-data'); env.PORT = '4320';
     const hasDemo = existsSync(env.DATA_DIR) && readdirSync(env.DATA_DIR).some(name => /^[0-9a-f-]{36}\.json$/.test(name));

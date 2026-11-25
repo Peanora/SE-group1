@@ -162,7 +162,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
   if (typeof api !== 'function' || typeof getContext !== 'function') throw new TypeError('规划开发面板需要api和当前规划上下文。');
   let root, refs, destroyed = false, mounted = false, timer, epoch = 0, readSerial = 0, action = null, pending = null;
   let context = contextOf(null), key = '', data = null, proposals = null, fresh = false, loading = false, error = '', notice = '', consentKey = '';
-  let selectedId = '', proposalId = '', selectionEdits = 0, previewRead = null, graphRecord = '', selectedTask = '', repairNoteKey = '', selectedVersion = '', focusChain = true, graphOrder = [], resizeObserver;
+  let selectedId = '', proposalId = '', selectionEdits = 0, previewRead = null, graphRecord = '', selectedTask = '', repairNoteKey = '', selectedVersion = '', focusChain = true, graphOrder = [], resizeObserver, graphRenderer;
   const savedSelections = new Map(), processSelections = new Map(), notified = new Set(), eventNodes = new Map(), taskNodes = new Map(), graphNodes = new Map(), versionNodes = new Map();
   const node = (tag, value, cls) => { const element = document.createElement(tag); if (value != null) element.textContent = value; if (cls) element.className = cls; return element; };
   const setText = (element, value) => { const text = printable(value); if (element.textContent !== text) element.textContent = text; };
@@ -397,6 +397,21 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     const events = node('details'), list = node('ol'); events.open = !openVerification; events.append(node('summary', '真实执行日志'), list); detail.append(events); body.append(empty, detail); root.append(body); host.append(root);
     refs = { refreshButton, state, errorBox, noticeBox, prepare, setup, recordSelect, executionSummary, cost, monetary, definitionSelect, consent, start, scope, executionSelect, empty, detail, result, status, roleMonitor, failure, failureHelp: failureHelpBox, failureTitle, failureDetail, failureNext, prepareRevision, facts, repair, repairInfo, repairNote, repairNoteField, cancel, pause, resume, recover, recoveryNote, download, previewBox, previewStatus, previewInfo, previewStart, previewStop, previewAnchor, process, processTitle, processScope, processMap, focusButton, wholeFlow, inspector, inspectorContext, inspectorTitle, inspectorState, inspectorCause, inspectorCommit, inspectorDependencies, inspectorFacts, inspectorFailures, inspectorFailureList, inspectorFailureMore, inspectorRoles, inspectorRoleDetails, inspectorEvidence, inspectorRaw, matrixSection, matrixBody, matrixNote, taskSection, taskList, graphNote, graphScroll, graphCanvas, commands, commandBody, binding, diff, checks, review, calls, list };
     if (typeof ResizeObserver === 'function') { resizeObserver = new ResizeObserver(() => { if (row() && !destroyed) renderGraph(row()); }); resizeObserver.observe(graphScroll); }
+    graphCanvas.addEventListener('click', event => {
+      const control = event.target.closest('.pe-task-node');
+      if (control) selectTask(control.dataset.taskId);
+    });
+    graphCanvas.addEventListener('keydown', event => {
+      const control = event.target.closest('.pe-task-node');
+      if (!control || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const index = graphOrder.indexOf(control.dataset.taskId);
+      let target;
+      if (event.key === 'Home') target = graphOrder[0];
+      else if (event.key === 'End') target = graphOrder.at(-1);
+      else if (['ArrowLeft', 'ArrowUp'].includes(event.key)) target = graphOrder[Math.max(0, index - 1)];
+      else if (['ArrowRight', 'ArrowDown'].includes(event.key)) target = graphOrder[Math.min(graphOrder.length - 1, index + 1)];
+      if (target) { event.preventDefault(); selectTask(target, true); }
+    });
     definitionSelect.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } if (action) return; proposalId = definitionSelect.value; consent.checked = false; remember(); render(); });
     executionSelect.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } if (action) return; selectedId = executionSelect.value; selectionEdits++; previewRead = null; remember(); render(); notifyFailures(); void refresh(); });
     consent.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } render(); });
@@ -410,7 +425,11 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     selectedTask = id; selectedVersion = ''; processSelections.set(keyOf([key, item.id]), { selectedTask, focusChain });
     while (processSelections.size > 60) processSelections.delete(processSelections.keys().next().value);
     renderProcess(item);
-    if (keyboard) { const control = graphNodes.get(id)?.button; control?.focus({ preventScroll: true }); control?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+    if (keyboard) {
+      const control = Array.from(refs.graphCanvas.querySelectorAll('.pe-task-node')).find(button => button.dataset.taskId === id);
+      control?.focus({ preventScroll: true });
+      control?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
   }
   function graphFocus(tasks) {
     if (!focusChain || !selectedTask) return null;
@@ -423,16 +442,25 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     walk(id => tasks.filter(task => task.dependsOn?.includes(id)).map(task => task.id));
     return active;
   }
+  function clearGraph() {
+    graphRenderer?.destroy();
+    graphRenderer = null;
+    graphOrder = [];
+    graphNodes.clear();
+    refs.graphCanvas.replaceChildren();
+    delete refs.graphCanvas.dataset.renderer;
+  }
   function renderGraph(item) {
+    const byTask = item.executionMode === 'task_dag';
     const tasks = Array.isArray(item.tasks) ? item.tasks : [], byId = new Map(tasks.map(task => [task.id, task])), levels = new Map();
-    let valid = tasks.length >= 1 && tasks.length <= 8 && byId.size === tasks.length && tasks.every(task => ID.test(task.id || '') && Array.isArray(task.dependsOn) && new Set(task.dependsOn).size === task.dependsOn.length && task.dependsOn.every(id => byId.has(id) && id !== task.id));
+    let valid = byTask && tasks.length >= 1 && tasks.length <= 8 && byId.size === tasks.length && tasks.every(task => ID.test(task.id || '') && Array.isArray(task.dependsOn) && new Set(task.dependsOn).size === task.dependsOn.length && task.dependsOn.every(id => byId.has(id) && id !== task.id));
     if (valid) for (let pass = 0; pass < tasks.length; pass++) for (const task of tasks) if (!levels.has(task.id) && task.dependsOn.every(id => levels.has(id))) levels.set(task.id, task.dependsOn.length ? Math.max(...task.dependsOn.map(id => levels.get(id))) + 1 : 0);
     valid &&= levels.size === tasks.length;
-    setText(refs.graphNote, valid ? '选择任务查看当前候选、依赖和阻塞原因。方向键切换，Home / End 到首尾任务。' : '任务依赖记录尚不完整，暂不绘制关系；请核对下方实际任务证据。'); refs.graphScroll.hidden = !valid || item.executionMode !== 'task_dag';
-    if (!valid) { for (const view of graphNodes.values()) view.button.remove(); graphNodes.clear(); refs.graphCanvas.querySelector('svg')?.remove(); return; }
+    setText(refs.graphNote, valid ? '选择任务查看当前候选、依赖和阻塞原因。方向键切换，Home / End 到首尾任务。' : '任务依赖记录尚不完整，暂不绘制关系；请核对下方实际任务证据。'); refs.graphScroll.hidden = !valid;
+    if (!valid) { if (refs.graphCanvas.childNodes.length) clearGraph(); return; }
     if (!byId.has(selectedTask)) selectedTask = tasks.find(task => task.status === 'failed')?.id ?? tasks.find(task => task.status === 'running')?.id ?? tasks[0].id;
     const active = graphFocus(tasks), mobile = typeof matchMedia === 'function' && matchMedia('(max-width: 760px)').matches;
-    const ordered = tasks.slice().sort((a, b) => levels.get(a.id) - levels.get(b.id)); graphOrder = ordered.map(task => task.id);
+    const ordered = tasks.slice().sort((a, b) => levels.get(a.id) - levels.get(b.id));
     const columnCount = Math.max(...levels.values()) + 1, availableWidth = refs.graphScroll.clientWidth;
     const fitColumns = !mobile && availableWidth >= columnCount * 145 + (columnCount - 1) * 22 + 40;
     const cardWidth = fitColumns ? Math.min(210, (availableWidth - 40 - (columnCount - 1) * 22) / columnCount) : 210;
@@ -444,6 +472,24 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     const height = mobile ? tasks.length * 150 + 18 : Math.max(...columns.values()) * 150 + 16;
     refs.graphCanvas.style.width = `${width}px`; refs.graphCanvas.style.height = `${height}px`;
     refs.graphCanvas.dataset.orientation = mobile ? 'vertical' : 'horizontal';
+    const installGraph = window.taskflowTaskCanvas;
+    if (typeof installGraph === 'function' && !graphRenderer) {
+      clearGraph();
+      graphRenderer = installGraph(refs.graphCanvas);
+      refs.graphCanvas.dataset.renderer = 'react-flow';
+    }
+    graphOrder = ordered.map(task => task.id);
+    if (graphRenderer) {
+      graphRenderer.render({ variant: 'execution', vertical: mobile, width, height, zoom: 1,
+        nodeWidth: mobile ? width - 46 : cardWidth, nodeHeight: 126,
+        nodes: ordered.map(task => ({ id: task.id, title: task.title || task.id, position: places.get(task.id),
+          status: task.status, statusLabel: taskState(task), dependencies: task.dependsOn.join('、') || '无',
+          focused: !active || active.has(task.id), selected: task.id === selectedTask })),
+        edges: ordered.flatMap(task => task.dependsOn.map(dependency => ({ source: dependency, target: task.id,
+          focused: !active || active.has(dependency) && active.has(task.id) }))),
+      });
+      return;
+    }
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('width', width); svg.setAttribute('height', height); svg.setAttribute('aria-hidden', 'true');
     for (const task of tasks) for (const dependency of task.dependsOn) {
       const from = places.get(dependency), to = places.get(task.id), path = document.createElementNS(svg.namespaceURI, 'path'), x = from.x + cardWidth, y = from.y + 63, endX = to.x - 4, endY = to.y + 63;
@@ -457,15 +503,8 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     for (const task of tasks) {
       kept.add(task.id); let view = graphNodes.get(task.id);
       if (!view) {
-        const control = button('', () => selectTask(task.id), 'pe-task-node'), id = node('small'), title = node('span', null, 'pe-graph-title'), status = node('small'), dependencies = node('small', null, 'pe-graph-dependencies');
-        control.addEventListener('keydown', event => {
-          const index = graphOrder.indexOf(task.id); let target;
-          if (event.key === 'Home') target = graphOrder[0];
-          else if (event.key === 'End') target = graphOrder.at(-1);
-          else if (['ArrowLeft', 'ArrowUp'].includes(event.key)) target = graphOrder[Math.max(0, index - 1)];
-          else if (['ArrowRight', 'ArrowDown'].includes(event.key)) target = graphOrder[Math.min(graphOrder.length - 1, index + 1)];
-          if (target) { event.preventDefault(); selectTask(target, true); }
-        });
+        const control = node('button', null, 'pe-task-node'), id = node('small'), title = node('span', null, 'pe-graph-title'), status = node('small'), dependencies = node('small', null, 'pe-graph-dependencies');
+        control.type = 'button';
         control.append(id, title, status, dependencies); refs.graphCanvas.append(control); view = { button: control, id, title, status, dependencies }; graphNodes.set(task.id, view);
       }
       const position = places.get(task.id); view.button.style.left = `${position.x}px`; view.button.style.top = `${position.y}px`; view.button.style.width = mobile ? `${width - 46}px` : `${cardWidth}px`;
@@ -633,7 +672,8 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
       && selectedDefinition()?.id === item.proposalId && selectedDefinition()?.revision === item.revision);
     refs.repairNote.disabled = !!action || !!pending || refs.repairNoteField.hidden;
     refs.repairInfo.hidden = refs.repairNoteField.hidden;
-    refs.empty.hidden = !!item; refs.detail.hidden = !item; refs.executionSummary.hidden = !item; if (!item) return;
+    refs.empty.hidden = !!item; refs.detail.hidden = !item; refs.executionSummary.hidden = !item;
+    if (!item) { if (refs.graphCanvas.childNodes.length) clearGraph(); return; }
     refs.roleMonitor.element.hidden = item.executionMode === 'task_dag';
     const roleProgress = refs.roleMonitor.element.hidden ? null : renderRoleMonitor(refs.roleMonitor, item);
     const passed = accepted(item); refs.result.dataset.accepted = String(passed); setText(refs.result, passed ? item.checkpoint?.restored === true ? '同版本历史验收已核对，交付资格已恢复；未重新运行测试。' : '当前规格的软件已通过本次验收' : item.status === 'accepted' ? '历史通过记录仅供查看；当前验收许可尚未确认。' : item.status === 'diagnostic_passed' ? '诊断检查通过，不代表当前软件通过验收。' : '当前软件尚未获得完整验收结论。');
@@ -736,5 +776,5 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     finally { if (currentToken(token) && action === token) { action = null; render(); onUpdate(); schedule(); } else if (!destroyed && syncContext()) { render(); void refresh(); } }
   }
   return { async mount(host) { if (destroyed || mounted || !host?.append) throw new Error('规划开发面板只能挂载一次。'); mounted = true; build(host); return refresh(); }, refresh, workflowProgress, focusStage, reviseCurrentChecklist,
-    destroy() { if (destroyed) return; remember(); destroyed = true; mounted = false; epoch++; readSerial++; action = null; pending = null; previewRead = null; clearTimeout(timer); resizeObserver?.disconnect(); root?.remove(); refs = null; eventNodes.clear(); taskNodes.clear(); graphNodes.clear(); versionNodes.clear(); processSelections.clear(); savedSelections.clear(); notified.clear(); } };
+    destroy() { if (destroyed) return; remember(); destroyed = true; mounted = false; epoch++; readSerial++; action = null; pending = null; previewRead = null; clearTimeout(timer); resizeObserver?.disconnect(); if (refs) clearGraph(); root?.remove(); refs = null; eventNodes.clear(); taskNodes.clear(); versionNodes.clear(); processSelections.clear(); savedSelections.clear(); notified.clear(); } };
 }

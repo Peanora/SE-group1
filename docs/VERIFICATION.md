@@ -1,5 +1,13 @@
 # 首版验证记录
 
+## 2026-11-25 研发工作台前端
+
+- `npm run ui:build` 通过，构建项目工作台、设置和团队/Factory 三组静态入口。入口样式分别加载。
+- `npm run check` 通过 TypeScript 校验和 299 个脚本语法检查。
+- `npm test` 共 1,472 项，1,380 通过、92 跳过、0 失败。完整回归从集成构建开始，加载就绪修复随后用下列最终 Edge 构建复验。
+- `node --test --test-concurrency=2 tests/project-redesign-browser.test.mjs tests/workspace-ui-browser.test.mjs tests/task-orchestration-browser.test.mjs tests/agent-settings-browser.test.mjs tests/team-access-browser.test.mjs tests/factory-runtime-browser.test.mjs` 32/32 通过。覆盖真实 Edge 桌面、390px、焦点、旧版本、权限和同源 Factory 嵌入。
+- `npm start -- --demo` 在 Node.js 22.21.0 构建并启动，127.0.0.1:4320 返回五个 HTML 与各入口 JS/CSS 的 HTTP 200。Edge CLI 检查桌面任务图和浏览器控制台。使用本地独立演示数据。
+
 ## 2026-11-24 规格评审 v0.2
 
 在 `c6ddb8d` 基线上使用 Node.js 24.22.3、临时数据及本机模型夹具执行 `npm run spec-review:test`，166/166通过，0失败、取消、跳过。包含新会议9项及原规格/计划、工程规划、问题页面、服务接口、编排器、权限、来源换版和自动交付回归。真实Edge桌面1440×1000和窄屏390×844操作验证了六节点、关联业务裁决、换版全席重审、联合确认才规划、刷新保留及产物/ZIP同版导出，未见页面异常或控制台错误。

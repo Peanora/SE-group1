@@ -10,3 +10,6 @@ output/
 .accepted-checkpoint.key
 *.sqlite
 *.sqlite-*
+
+# Vite emits the same-origin frontend assets.
+public/ui/

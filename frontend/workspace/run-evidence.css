@@ -1,0 +1,49 @@
+.tf-workbench .evidence-flow-edges .flow-edge { stroke: #b1c4b8; }
+.tf-workbench .evidence-flow-edges .flow-edge.running { stroke: #08624e; }
+.tf-workbench .evidence-flow-edges .flow-edge.succeeded { stroke: #6d9b85; }
+.tf-workbench .evidence-flow-edges .flow-edge:is(.failed, .blocked) { stroke: #b46d62; }
+
+.tf-workbench .run-event-list {
+  margin: 0;
+  padding: 4px clamp(12px, 2vw, 22px) 10px;
+  list-style: none;
+}
+
+.tf-workbench .run-event-list .event-row {
+  grid-template-columns: 64px 46px minmax(78px, .18fr) minmax(0, 1fr);
+  align-items: start;
+  column-gap: 10px;
+  row-gap: 4px;
+  padding-block: 8px;
+  border-color: var(--tf-line);
+}
+
+.tf-workbench .run-event-list :is(.event-time, .event-stage) { color: var(--tf-muted); font-size: 12px; }
+.tf-workbench .run-event-list .event-time { margin: 1px 0 0; }
+.tf-workbench .run-event-list .event-stage { display: block; overflow-wrap: anywhere; }
+.tf-workbench .run-event-list .event-message { color: var(--tf-ink); font-size: 13px; line-height: 1.55; }
+
+.tf-workbench .run-event-list .event-level {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: start;
+  width: max-content;
+  min-width: 39px;
+  min-height: 21px;
+  padding-inline: 5px;
+  border-radius: 4px;
+  background: #e9eeea;
+  color: #4a6258;
+  font-size: 11px;
+  line-height: 1.15;
+}
+
+.tf-workbench .run-event-list .event-level.success { background: #e1efe6; color: #155f47; }
+.tf-workbench .run-event-list .event-level.error { background: #f8e8e3; color: #8e2d25; }
+.tf-workbench .run-event-list .event-level:is(.warn, .warning) { background: #f4eddb; color: #795515; }
+
+@media (max-width: 650px) {
+  .tf-workbench .run-event-list .event-row { grid-template-columns: 61px 42px minmax(0, 1fr); }
+  .tf-workbench .run-event-list .event-message { grid-column: 1 / -1; }
+}
