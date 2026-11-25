@@ -124,6 +124,8 @@ export async function createApp(options = {}) {
     ...Object.fromEntries(['engineeringMaxCalls', 'engineeringTimeoutMs', 'engineeringTotalTimeoutMs'].filter(key => options[key] !== undefined).map(key => [key, options[key]])),
     ...(options.specificationMaxCalls === undefined ? {} : { specificationMaxCalls: options.specificationMaxCalls }),
     ...(options.specificationTimeoutMs === undefined ? {} : { specificationTimeoutMs: options.specificationTimeoutMs }) });
+  orchestrator.specificationMeetingExecutor = options.specificationMeetingExecutor;
+  orchestrator.specificationMeetingTimeoutMs = options.specificationMeetingTimeoutMs;
   const executionService = options.executionService === null ? null : options.executionService ?? await (await import('./lib/web-execution-service.mjs')).createWebExecutionService({
     rootDir: path.resolve(options.executionRootDir ?? path.join(store.directory, 'executions')),
     getPlanning: async (projectId, runId) => store.getPersistedRun(projectId, runId),
@@ -285,6 +287,7 @@ export async function createApp(options = {}) {
             agentSettings: { available: true, version: 1 },
             engineeringRouteContractRevision: { available: true, version: 1 },
             planningIssueConversation: { available: true, version: 3 },
+            specificationMeeting: { available: true, version: 2, adapter: 'offline_fixture' },
             automaticDelivery: { available: automaticDelivery.available, ...automaticDelivery.readiness(), ...AUTOMATIC_BUDGET,
               developmentTimeoutMs: plannedExecutionService?.timeoutMs },
             modelPlanning: { engineeringMaxCalls: orchestrator.engineeringMaxCalls, engineeringCallLimit: orchestrator.engineeringMaxCalls !== null, engineeringTimeoutMs: orchestrator.engineeringTimeoutMs,
@@ -671,7 +674,7 @@ export async function createApp(options = {}) {
           if (input.action === 'revise_plan' && run.status === 'succeeded') {
             updated = await atPlanRevisionCheckpoint(projectId, apply);
           } else updated = await apply();
-          const issueAction = input.action === 'explain_planning_issue' || input.action === 'answer_planning_issue';
+          const issueAction = ['explain_planning_issue', 'answer_planning_issue', 'start_spec_meeting', 'advance_spec_meeting'].includes(input.action);
           return respond(response, 200, { run: issueAction ? await orchestrator.describeRun(project, updated) : updated });
         }
         if (segments.length === 7 && segments[5] === 'artifacts' && method === 'GET') {

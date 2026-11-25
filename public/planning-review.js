@@ -135,6 +135,8 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     const revision = draft.kind === 'spec' ? run.specRevision : run.planRevision;
     const stale = !legacy && (draft.revision !== revision || draft.kind === 'plan' && draft.specRevision !== run.specRevision);
     const unanswered = (run.specQuestions || []).filter((q) => !String(q.answer || '').trim()).length;
+    const meeting = run.specReview?.rounds.find(round => round.id === run.specReview.currentRoundId);
+    const meetingBlocked = draft.kind === 'spec' && run.specReview?.required && (meeting?.status !== 'awaiting_confirmation' || meeting?.binding.specRevision !== run.specRevision);
     const blocked = !legacy && rejected(run, draft.kind, revision);
     const lock = busy || pending;
     $$('input, textarea, [data-suggest-answer]').forEach((element) => { element.disabled = lock || !waiting; });
@@ -150,6 +152,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     $$('[data-review-action]').forEach((button) => {
       const action = button.dataset.reviewAction;
       button.disabled = lock || !waiting || stale || (savingOnly && action !== 'save') || (action === 'approve' && !legacy && (run.spec?.clarificationRequired ? (run.specQuestions || []).some(q => !String(draft.answers[q.id] || '').trim()) : draft.dirty || blocked || draft.kind === 'spec' && unanswered > 0)) || (action === 'save' && !draft.dirty);
+      if (action === 'approve' && meetingBlocked) button.disabled = true;
     });
     const status = $('#review-draft-status');
     if (status) status.textContent = stale ? `保存版本已变化。当前草稿基于 ${short(draft.revision)}，仍保留原文；请载入最新版本后重新核对。` : draft.dirty ? '有未保存的修订。先保存，再确认新版本。' : blocked ? '本版已退回。请修改并保存为新版本后再确认。' : run.spec?.clarificationRequired ? '请补充所需信息，可先保存回答，再根据回答整理规格。' : draft.kind === 'spec' && unanswered ? `还有 ${unanswered} 个问题未答复；填写并保存后才能确认。` : '正在审阅已保存的版本。';
@@ -163,6 +166,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     if (issue) { issue.hidden = !draft.error || !run.planningIssue; issue.disabled = lock; }
     const approve = $('[data-review-action="approve"]');
     if (approve) approve.textContent = lock ? '正在处理…' : legacy ? '确认并导出' : draft.kind === 'spec' ? run.spec?.clarificationRequired ? '根据回答整理规格' : '确认规格并继续' : '确认计划并导出';
+    if (approve && draft.kind === 'spec' && run.specReview?.required && !lock) approve.textContent = '确认规格与阶段清单并继续';
     if (approve && draft.kind === 'plan' && routeRoles.hasDirty()) approve.disabled = true;
     syncPlanPreview(run, draft);
     routeRoles.render();
@@ -300,6 +304,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     else {
       apiAction = `${action === 'save' ? 'revise' : action === 'reject' ? 'reject' : 'approve'}_${draft.kind}`;
       payload.revision = draft.revision;
+      if (action === 'approve' && draft.kind === 'spec' && run.specReview?.required) payload.meetingRevision = run.specReview.rounds.find(round => round.id === run.specReview.currentRoundId)?.bundleRevision;
       if (action === 'approve' && draft.kind === 'spec' && run.spec?.clarificationRequired) { apiAction = 'clarify_spec'; payload.answers = draft.answers; }
       if (draft.kind === 'plan') payload.specRevision = draft.specRevision;
       if (action === 'save') payload = { ...payload, ...(draft.kind === 'spec' ? { spec: draft.spec, answers: draft.answers } : { tasks: draft.tasks }) };
