@@ -1,6 +1,6 @@
-import { CircleHelp, Plus, RefreshCw, Workflow } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { WorkspaceDialogs } from './dialogs';
-import { ProjectHeading, RunOverview } from './overview';
+import { ProjectHeading, ProjectLaunch, RunOverview } from './overview';
 import { DeliveryPanel, PlanningPanel, RequirementsPanel, TaskPanel } from './panels';
 
 function WorkAreaNavigation() {
@@ -18,12 +18,23 @@ function WorkAreaNavigation() {
   );
 }
 
-function ProjectStrip() {
+function ProjectSidebar() {
   return (
-    <aside className="project-strip" aria-label="项目导航">
-      <span className="project-strip-label">项目 <span id="project-count">0</span></span>
+    <aside className="sidebar" aria-label="项目导航">
+      <a className="brand" href="/" aria-label="Taskflow 需求编排台首页">
+        <span className="tf-brand-mark" aria-hidden="true"><i /><i /><i /></span>
+        <span><strong>Taskflow</strong><small>研发工作台</small></span>
+      </a>
+      <button type="button" className="new-project-button" id="new-project"><span aria-hidden="true">＋</span> 新建项目</button>
+      <div className="sidebar-section-title"><span>项目</span><span id="project-count">0</span></div>
       <nav id="project-list" className="project-list" aria-label="项目列表" />
-      <button type="button" className="new-project-button" id="new-project"><Plus aria-hidden="true" /> 新建项目</button>
+      <div className="sidebar-bottom tf-sidebar-bottom">
+        <nav className="tf-settings-links" aria-label="模型设置">
+          <a href="/agent-settings.html" className="sidebar-help"><span className="tf-nav-icon tf-icon-roles" aria-hidden="true" />Agent 角色</a>
+          <a href="/api-settings.html" className="sidebar-help"><span className="tf-nav-icon tf-icon-api" aria-hidden="true" />API 服务</a>
+        </nav>
+        <button type="button" id="help-button" className="sidebar-help"><span className="tf-nav-icon tf-icon-help" aria-hidden="true">?</span>使用说明</button>
+      </div>
     </aside>
   );
 }
@@ -31,19 +42,12 @@ function ProjectStrip() {
 function ProjectTopbar() {
   return (
     <header className="topbar">
-      <a className="workbench-brand" href="/" aria-label="Taskflow 工作台首页"><Workflow aria-hidden="true" /> Taskflow</a>
-      <nav className="workbench-links" aria-label="模型设置">
-        <a href="/agent-settings.html">Agent 角色</a>
-        <a href="/api-settings.html">API 服务</a>
-      </nav>
+      <div className="breadcrumb"><span>工作台</span><span aria-hidden="true">/</span><strong id="breadcrumb-project">新项目</strong></div>
       <div className="topbar-right">
         <a id="team-link" href="/team.html" hidden>团队账号</a>
         <span className="connection-status" id="connection-status" role="status"><span />正在连接服务</span>
         <button type="button" className="icon-button" id="refresh-button" aria-label="刷新工作区" title="刷新工作区">
           <RefreshCw aria-hidden="true" />
-        </button>
-        <button type="button" className="icon-button" id="help-button" aria-label="使用说明" title="使用说明">
-          <CircleHelp aria-hidden="true" />
         </button>
       </div>
     </header>
@@ -65,18 +69,23 @@ export function Workspace() {
   return (
     <>
       <a className="skip-link" href="#main">跳到工作区</a>
+      <ProjectSidebar />
       <div className="app-shell">
         <ProjectTopbar />
-        <ProjectStrip />
         <main id="main" className="workspace">
           <div id="error-banner" className="error-banner" role="alert" hidden>
             <span id="error-text" />
             <button type="button" id="dismiss-error" aria-label="关闭错误提示">×</button>
           </div>
           <ProjectHeading />
+          <ProjectLaunch />
           <RunOverview />
           <WorkAreaNavigation />
           <WorkAreas />
+          <details className="workspace-scope">
+            <summary>平台范围</summary>
+            <p className="field-note" id="platform-default-notice">统一按浏览器网页应用规划。平台提供技术方案，无需填写。</p>
+          </details>
         </main>
       </div>
       <WorkspaceDialogs />

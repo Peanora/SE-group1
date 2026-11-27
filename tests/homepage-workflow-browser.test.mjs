@@ -74,7 +74,7 @@ test('active development takes precedence over a locked definition and earlier f
   assert.equal(history.find(step => step.id === 'verification').text, '历史版本');
 });
 
-test('homepage opens the workflow canvas by default and supports keyboard navigation on desktop and mobile', { timeout: 45000 }, async t => {
+test('homepage keeps the current step compact and opens the complete workflow with the keyboard on desktop and mobile', { timeout: 45000 }, async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'tf-homepage-'));
   let app, browser;
   t.after(async () => {
@@ -93,36 +93,22 @@ test('homepage opens the workflow canvas by default and supports keyboard naviga
     await page.setViewportSize({ width, height: 844 });
     await page.goto(endpoint(app.server));
     const summary = flow(page).locator('> summary');
-    await stage(page, 'source').waitFor();
+    await summary.waitFor();
+    await page.locator('#delivery-current-title').getByText('需求输入', { exact: true }).waitFor();
     assert.equal(await flow(page).evaluate(element => element.tagName), 'DETAILS');
-    assert.equal(await flow(page).evaluate(element => element.open), true);
-    assert.match(await summary.innerText(), /项目流程/u);
-    assert.equal(await page.locator('#delivery-current-title').textContent(), '需求输入');
+    assert.equal(await flow(page).evaluate(element => element.open), false);
+    assert.match(await summary.innerText(), /查看完整流程/u);
     assert.equal(await page.locator('#delivery-current-state').innerText(), '尚未开始');
     assert.match(await page.locator('#delivery-done-count').innerText(), /0\s*\/\s*9/u);
+    assert.equal(await stage(page, 'source').isVisible(), false);
     for (const name of ['Agent 角色', 'API 服务']) assert.equal(await page.getByRole('link', { name, exact: true }).filter({ visible: true }).count(), 1);
-    const canvas = page.locator('.project-flow-canvas');
-    const inspector = page.locator('aside.project-flow-inspector');
-    assert.equal(await canvas.locator('[data-delivery-step]').count(), 9);
-    assert.equal(await inspector.getByRole('button', { name: '导入需求文档' }).isVisible(), true);
-    const graphBounds = await canvas.boundingBox();
-    const inspectorBounds = await inspector.boundingBox();
-    assert.ok(graphBounds && inspectorBounds, '画布和操作区均可见');
-    assert.ok(width === 1440 ? graphBounds.x + graphBounds.width <= inspectorBounds.x + 1
-      : graphBounds.y + graphBounds.height <= inspectorBounds.y + 1, '桌面操作区在画布右侧，窄屏位于画布下方');
     await summary.focus();
     await page.keyboard.press('Enter');
-    assert.equal(await flow(page).evaluate(element => element.open), false);
-    assert.equal(await stage(page, 'source').isVisible(), false);
-    assert.equal(await page.locator('#delivery-current-state').isVisible(), true);
-    assert.equal(await page.locator('#delivery-current-title').evaluate(element => getComputedStyle(element).clipPath), 'none');
-    await page.keyboard.press('Enter');
     assert.equal(await flow(page).evaluate(element => element.open), true);
-    const nodes = canvas.locator('[data-delivery-step]:visible');
+    await stage(page, 'source').waitFor();
+    const nodes = page.locator('[data-delivery-step]:visible');
     assert.deepEqual(await nodes.evaluateAll(elements => elements.map(element => element.dataset.deliveryStep)),
       ['source', 'spec', 'spec-approval', 'plan', 'plan-approval', 'verification', 'coding', 'testing', 'delivery']);
-    assert.equal(await stage(page, 'source').getAttribute('aria-current'), 'step');
-    assert.equal(await stage(page, 'spec').isDisabled(), true);
     assert.equal(await page.locator('#guided-workspace, #workspace-view-toggle').count(), 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await stage(page, 'source').focus();
@@ -138,8 +124,8 @@ test('homepage opens the workflow canvas by default and supports keyboard naviga
   assert.equal(await flow(page).evaluate(element => element.open), false);
   await page.locator('#mode-select').selectOption('local');
   await page.locator('#start-run').click();
+  await page.locator('#delivery-current-title').getByText('设计规格', { exact: true }).waitFor();
   await page.locator('#delivery-current-state').getByText('等待补充需求', { exact: true }).waitFor();
-  assert.equal(await page.locator('#delivery-current-title').textContent(), '设计规格');
   assert.match(await page.locator('#delivery-done-count').innerText(), /1\s*\/\s*9/u);
   assert.equal(await flow(page).evaluate(element => element.open), false, '后端进入人工确认停点时不强行展开流程');
   const { projects: [project] } = await (await page.request.get(endpoint(app.server) + '/api/projects')).json();
@@ -148,14 +134,9 @@ test('homepage opens the workflow canvas by default and supports keyboard naviga
   assert.equal(Boolean(saved.runs.at(-1).spec.clarificationRequired || saved.runs.at(-1).specQuestions.some(question => question.blocking && !question.answer?.trim())), true);
   await openFlow(page);
   await stage(page, 'spec').getByText('等待补充需求', { exact: true }).waitFor();
-  assert.equal(await stage(page, 'source').getAttribute('data-state'), 'done');
-  assert.equal(await stage(page, 'spec').getAttribute('data-state'), 'waiting');
-  assert.equal(await stage(page, 'spec').getAttribute('aria-current'), 'step');
-  await flow(page).locator('> summary').click();
-  assert.equal(await flow(page).evaluate(element => element.open), false);
   await page.reload();
   await page.locator('#delivery-current-state').getByText('等待补充需求', { exact: true }).waitFor();
-  assert.equal(await flow(page).evaluate(element => element.open), true, '刷新后默认展开流程画布');
+  assert.equal(await flow(page).evaluate(element => element.open), false, '刷新后默认回到紧凑摘要');
   assert.deepEqual(errors, []);
 });
 

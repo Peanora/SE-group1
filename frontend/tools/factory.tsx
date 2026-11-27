@@ -4,8 +4,25 @@ import { ToolMessages, ToolShell, workbenchUrl } from './shell';
 
 type FactoryStatus = { available?: boolean; state?: string; version?: string; url?: string; message?: string };
 type Handoff = { available?: boolean; specRevision?: string; runId?: string; title?: string };
-type FactoryContext = { factory?: FactoryStatus; handoff?: Handoff; project?: { id: string; name: string }; run?: { id: string | number } };
-type Action = 'start' | 'stop' | 'plan';
+type HandoffResult = {
+  taskflowRunId: string;
+  specRevision: string;
+  submittedAt: string;
+  state: 'linked' | 'unknown' | 'submitted';
+  nativeRunId: number | null;
+  nativeStatus: string | null;
+  available: boolean;
+  integration: { branch: string; head: string | null; integratedTaskCount: number } | null;
+};
+type FactoryContext = {
+  factory?: FactoryStatus;
+  handoff?: Handoff;
+  project?: { id: string; name: string };
+  run?: { id: string | number };
+  result?: HandoffResult | null;
+  resultError?: string | null;
+};
+type Action = 'start' | 'stop' | 'plan' | 'start-workflow';
 
 const params = new URLSearchParams(location.search);
 const projectId = params.get('project')?.trim();
@@ -16,10 +33,16 @@ const states: Record<string, string> = {
   loading: '正在读取状态', idle: '尚未启动', stopped: '尚未启动', starting: '正在启动', running: '运行中', ready: '运行中',
   stopping: '正在停止', unavailable: '当前不可用', blocked: '当前不可用', failed: '启动或连接失败', error: '连接失败',
 };
+const handoffStates = { linked: '已关联 Factory 运行', unknown: '提交结果待核对', submitted: '已记录提交' };
 
 function localDashboard(value?: string) {
   const port = Number(typeof value === 'string' ? /^http:\/\/127\.0\.0\.1:([0-9]+)\/?$/.exec(value)?.[1] : NaN);
   return Number.isInteger(port) && port >= 1 && port <= 65535 ? `http://127.0.0.1:${port}/` : '';
+}
+
+function nativeRunId(value?: string | number | null) {
+  const id = String(value ?? '');
+  return /^[1-9]\d*$/.test(id) && Number.isSafeInteger(Number(id)) ? id : '';
 }
 
 async function factoryRequest(url: string, body?: object, timeout = 30_000): Promise<FactoryContext> {
@@ -46,7 +69,7 @@ export function FactoryPage() {
   const [reading, setReading] = useState(false);
   const [execConfirmed, setExecConfirmed] = useState(false);
   const [planConfirmed, setPlanConfirmed] = useState(false);
-  const [createdRun, setCreatedRun] = useState('');
+  const [createdRun, setCreatedRun] = useState<{ id: string; url: string } | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
@@ -57,12 +80,15 @@ export function FactoryPage() {
   const transitioning = lifecycle === 'starting' || lifecycle === 'stopping';
   const state = url ? 'running' : (transitioning || lifecycle === 'failed') ? lifecycle
     : missingBinary ? 'unavailable' : lifecycle ?? (factory ? 'stopped' : 'loading');
-  const runId = selectedRun || handoff?.runId;
+  const runId = selectedRun || handoff?.runId || context.result?.taskflowRunId;
+  const result = context.result?.taskflowRunId === runId ? context.result : null;
+  const linkedRun = result ? (result.available ? nativeRunId(result.nativeRunId) : '') : createdRun?.url === url ? createdRun.id : '';
   const returnHref = project?.id === projectId ? workbenchUrl(projectId, runId) : '/';
   const revision = handoff?.available && runId ? handoff.specRevision : undefined;
   const canStart = Boolean(factory?.available && !url && !transitioning);
   const canStop = Boolean(url || lifecycle === 'failed');
-  const graph = url ? `${url}#/network` : undefined;
+  const canStartWorkflow = Boolean(url && revision && result?.available && result.specRevision === revision
+    && result.nativeStatus === 'planned' && linkedRun);
 
   function receive(result: FactoryContext) {
     const previous = latestContext.current;
@@ -82,7 +108,7 @@ export function FactoryPage() {
     try {
       const result = await factoryRequest(statusPath);
       if (sequence !== actionSequence.current) return;
-      receive(result);
+      receive({ ...result, result: result.result ?? null, resultError: result.resultError ?? null });
       if (!quiet) setError('');
     } catch (failure) {
       if (!quiet && sequence === actionSequence.current) {
@@ -102,20 +128,17 @@ export function FactoryPage() {
     setActing(true);
     setError('');
     setNotice(pending);
-    let needsRefresh = false;
     try {
       const result = await factoryRequest(`${endpoint}/${action}`, body, action === 'start' ? 90_000 : 30_000);
-      receive(result);
-      if (action === 'stop') setCreatedRun('');
+      receive({ ...result, result: result.result ?? null, resultError: result.resultError ?? null });
       if (action === 'plan') {
-        const id = String(result.run?.id ?? '');
-        setCreatedRun(/^[1-9]\d*$/.test(id) ? id : '');
+        const id = nativeRunId(result.run?.id);
+        setCreatedRun(id ? { id, url } : null);
         setPlanConfirmed(false);
-      }
+      } else setCreatedRun(null);
       if (action === 'start') setExecConfirmed(false);
       setNotice(success);
     } catch (failure) {
-      needsRefresh = true;
       setNotice('');
       setError(failure instanceof Error
         ? (failure.name === 'TimeoutError' ? '等待 Factory 超时。请刷新状态，核对结果后再重试。' : failure.message)
@@ -123,7 +146,7 @@ export function FactoryPage() {
     } finally {
       actionLock.current = false;
       setActing(false);
-      if (needsRefresh) void refresh(true);
+      void refresh(true);
     }
   }
 
@@ -151,6 +174,12 @@ export function FactoryPage() {
     if (!url || !runId || !revision || acting || !planConfirmed) return;
     void act('plan', { runId, specRevision: revision, modelUsageConfirmed: true },
       '正在提交已确认规格…', '已提交给 Factory 规划。请在 Factory 查看任务图和规划结果。');
+  }
+
+  function startWorkflow() {
+    if (!canStartWorkflow || actionLock.current || !window.confirm('启动此 Factory 运行？已配置的 Agent 将在隔离 Git 工作树中执行，可能产生模型用量。')) return;
+    void act('start-workflow', { runId, specRevision: revision, nativeRunId: Number(linkedRun), confirmedLocalExecution: true },
+      '正在请求 Factory 执行…', 'Factory 已接收启动请求，请在原生 Runs 查看进度。');
   }
 
   function stop() {
@@ -183,19 +212,19 @@ export function FactoryPage() {
         </div>
       </header>
       <ToolMessages prefix="factory" error={error} notice={notice} />
-      <div className={`factory-layout${url ? ' factory-layout-running' : ''}`}>
-        <section id="factory-dashboard" className="factory-dashboard" aria-labelledby="factory-dashboard-heading" hidden={!url}>
-          <div className="factory-dashboard-header">
+      <div className="factory-layout">
+        {url && <section id="factory-dashboard" className="factory-dashboard" aria-labelledby="factory-dashboard-heading">
+          <div>
             <h2 id="factory-dashboard-heading">Factory 原生工作台</h2>
-            <nav aria-label="Factory 原生工作台入口">
-              <a href={graph} id="factory-open-graph" target="factory-dashboard-frame">Agent 图</a>
-              <a href={url ? `${url}#/settings` : undefined} id="factory-open-settings" target="factory-dashboard-frame">配置与角色</a>
-              <a href={url ? `${url}#/performance` : undefined} id="factory-open-performance" target="factory-dashboard-frame">运行表现</a>
-              <a href={graph} id="factory-open-dashboard" target="_blank" rel="noopener noreferrer">在新标签页打开 <span aria-hidden="true">↗</span></a>
-            </nav>
+            <p className="tools-hint">在新标签页打开</p>
           </div>
-          {url && <iframe src={graph} id="factory-dashboard-frame" name="factory-dashboard-frame" title="Agentic Software Factory 原生工作台" referrerPolicy="no-referrer" />}
-        </section>
+            <nav aria-label="Factory 原生工作台入口">
+              <a href={`${url}#/network`} id="factory-open-graph" className="tools-button tools-primary" target="_blank" rel="noopener noreferrer">Agent 图</a>
+              <a href={`${url}#/`} id="factory-open-runs" className="tools-button" target="_blank" rel="noopener noreferrer">运行记录</a>
+              <a href={`${url}#/settings`} id="factory-open-settings" className="tools-button" target="_blank" rel="noopener noreferrer">配置、角色与 MCP</a>
+              <a href={`${url}#/performance`} id="factory-open-performance" className="tools-button" target="_blank" rel="noopener noreferrer">运行表现</a>
+            </nav>
+        </section>}
         <aside className="factory-controls" aria-label="Factory 会话与规格">
           <section className="factory-runtime" aria-labelledby="factory-runtime-heading">
             <h2 id="factory-runtime-heading">本地运行环境</h2>
@@ -229,9 +258,27 @@ export function FactoryPage() {
               <button id="factory-plan" className="tools-button tools-primary" disabled={!url || !revision || acting || !planConfirmed}>交给 Factory 规划</button>
             </form>
             <p className="tools-hint">规划完成后，请到 Factory 核对任务和团队，再启动开发。</p>
-            <a id="factory-created-run" className="tools-text-button factory-run-link" href={url && createdRun ? `${url}#/runs/${createdRun}` : undefined} target="_blank" rel="noopener noreferrer" hidden={!url || !createdRun}>
-              {createdRun && `打开 Factory 运行 #${createdRun}`}
+            {context.resultError && <p className="tools-hint" role="status">{context.resultError}</p>}
+            {result && <section className="factory-result" aria-labelledby="factory-result-heading">
+              <h3 id="factory-result-heading">规格交接记录</h3>
+              <dl className="factory-spec">
+                <div><dt>提交状态</dt><dd>{handoffStates[result.state]}</dd></div>
+                <div><dt>规格版本</dt><dd>{result.specRevision}</dd></div>
+                {Number.isFinite(Date.parse(result.submittedAt)) && <div><dt>提交时间</dt><dd><time dateTime={result.submittedAt}>{new Date(result.submittedAt).toLocaleString('zh-CN')}</time></dd></div>}
+                {result.available && result.nativeStatus && <div><dt>原生状态</dt><dd>{result.nativeStatus}</dd></div>}
+                {result.available && result.integration && <>
+                  <div><dt>集成分支</dt><dd><code>{result.integration.branch}</code></dd></div>
+                  {result.integration.head && <div><dt>集成提交</dt><dd><code>{result.integration.head}</code></dd></div>}
+                  <div><dt>集成任务</dt><dd>{result.integration.integratedTaskCount}</dd></div>
+                </>}
+              </dl>
+              {!result.available && result.state !== 'linked' && <p className="tools-hint">原生回执暂未核对，请在 Runs 中查看。</p>}
+            </section>}
+            <a id="factory-created-run" className="tools-text-button factory-run-link" href={url && linkedRun ? `${url}#/runs/${linkedRun}` : undefined} target="_blank" rel="noopener noreferrer" hidden={!url || !linkedRun}>
+              {linkedRun && `查看 Factory 运行 #${linkedRun}`}
             </a>
+            {canStartWorkflow && <button type="button" className="tools-button tools-primary" id="factory-start-workflow"
+              disabled={acting} onClick={startWorkflow}>启动此 Factory 运行</button>}
           </section>
         </aside>
       </div>

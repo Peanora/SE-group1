@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import { Bot, ClipboardCheck, GitBranch, GitMerge, Grip, Shield } from 'lucide-react';
 import {
-  BaseEdge, getBezierPath, Handle, MarkerType, Position, ReactFlow,
+  BaseEdge, getBezierPath, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow,
   type Connection, type Edge, type EdgeProps, type Node, type NodeProps, type OnNodesChange, type XYPosition,
 } from '@xyflow/react';
 import '@xyflow/react/base.css';
@@ -67,8 +67,7 @@ type PlanDependency = {
   sourceSide?: Side;
   targetSide?: Side;
 };
-type DependencyData = ((PlanDependency & { gateState: GateState; motion?: EdgeMotion })
-  | { focused: boolean; vertical: boolean }) & { color: string };
+type DependencyData = (PlanDependency & { gateState: GateState; motion?: EdgeMotion }) | { focused: boolean; vertical: boolean };
 type CanvasEdge = { id?: string; source: string; target: string } & (PlanDependency | { focused: boolean });
 type PlanGroup = { id: string; rank: number; title: string; top: number; height: number; left: number; width: number; count: number };
 type PlanColumn = { rank: number; title: string; left: number; width: number };
@@ -99,17 +98,10 @@ const sidePositions: Record<Side, Position> = {
   top: Position.Top, bottom: Position.Bottom, left: Position.Left, right: Position.Right,
 };
 const markerColors: Record<Relation, string> = {
-  muted: '#65818f',
-  upstream: '#75c9d5',
-  downstream: '#68dccc',
+  muted: '#7685a1',
+  upstream: '#197d79',
+  downstream: '#3846ce',
 };
-const gateColors: Record<Exclude<GateState, 'planned'>, string> = {
-  waiting: '#81949f',
-  checking: '#e5b96d',
-  passed: '#77d9a5',
-  failed: '#f298a3',
-};
-const subduedEdgeColor = '#536773';
 const gateHelp = '同一代码版本的自检、独立 HTTP、Edge 和 Review 均通过且完成代码集成后，才释放后续任务。';
 
 const stopCanvasPan = (event: PointerEvent) => event.stopPropagation();
@@ -138,7 +130,7 @@ function PlanCard({ data }: { data: PlanTask }) {
         aria-pressed={selected} aria-description={explanation}
         title={[data.title, data.group, data.roleLabel, data.reviewLabel, data.gateLabel, explanation].filter(Boolean).join(' · ')}>
         <span className="task-flow-card-kicker">
-          <Bot aria-hidden="true" /><small>{taskId}</small><span>{data.roleLabel}</span>
+          <Bot aria-hidden="true" /><span>{data.roleLabel} <small>{taskId}</small></span>
           {movable && <Grip className="dev-task-grip" aria-hidden="true" />}
         </span>
         <span className="task-flow-card-title dev-task-title">{data.title}</span>
@@ -233,7 +225,7 @@ const Dependency = memo(function Dependency(props: EdgeProps<DependencyEdge>) {
     labelX = (sourceExit.x + targetEntry.x) / 2;
     labelY = plan.channel;
   } else if (plan) {
-    [path, labelX, labelY] = getBezierPath({ ...props, sourceX, sourceY, targetX, targetY, curvature: 0.28 });
+    [path, labelX, labelY] = getSmoothStepPath({ ...props, sourceX, sourceY, targetX, targetY, borderRadius: 9, offset: 12 });
   } else {
     path = execution?.vertical ? `M${sourceX},${sourceY} H10 V${targetY} H${targetX}` : getBezierPath(props)[0];
   }
@@ -243,7 +235,6 @@ const Dependency = memo(function Dependency(props: EdgeProps<DependencyEdge>) {
       className={execution ? 'pe-flow-edge' : plan?.internal ? 'task-flow-internal-edge' : `task-edge relation-${plan?.relation ?? 'muted'}`}
       interactionWidth={0}
       markerEnd={markerEnd}
-      style={{ stroke: data?.color ?? subduedEdgeColor }}
       data-focus={execution?.focused}
       data-gate-state={plan?.internal ? undefined : plan?.gateState}
       data-flow-motion={plan?.motion}
@@ -333,13 +324,10 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
       const { source, target } = edge;
       const execution = 'focused' in edge;
       const id = edge.id ?? JSON.stringify([source, target]);
-      if (execution) {
-        const color = edge.focused ? markerColors.downstream : subduedEdgeColor;
-        return {
-          id, type: 'dependency', source, target, data: { focused: edge.focused, vertical, color },
-          markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color },
-        };
-      }
+      if (execution) return {
+        id, type: 'dependency', source, target, data: { focused: edge.focused, vertical },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: edge.focused ? markerColors.downstream : '#aab5cf' },
+      };
       const fromTask = edge.internal ? undefined : edge.fromTask ?? planNodes.get(source)?.taskId;
       const toTask = edge.internal ? undefined : edge.toTask ?? planNodes.get(target)?.taskId;
       const gateState = fromTask ? gateByTask.get(fromTask) ?? 'planned' : 'planned';
@@ -347,11 +335,11 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
       const related = selectedTask && (selectedTask.taskId === fromTask || selectedTask.taskId === toTask);
       const motion: EdgeMotion | undefined = gateState === 'planned' && related ? 'selected'
         : gateState === 'passed' && targetGate === 'checking' ? 'active' : undefined;
-      const color = edge.internal ? subduedEdgeColor : gateState === 'planned' ? markerColors[edge.relation] : gateColors[gateState];
+      const color = edge.internal ? '#92a0bb' : gateState === 'passed' ? '#19734f' : markerColors[edge.relation];
       return {
         id, type: 'dependency', source, target,
         sourceHandle: `output-${edge.sourceSide ?? 'right'}`, targetHandle: `input-${edge.targetSide ?? 'left'}`,
-        data: { ...edge, fromTask, toTask, gateState, motion, color },
+        data: { ...edge, fromTask, toTask, gateState, motion },
         markerEnd: edge.internal || gateState === 'planned' || gateState === 'passed'
           ? { type: MarkerType.ArrowClosed, width: 11, height: 11, color } : undefined,
       };

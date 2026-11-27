@@ -6,12 +6,15 @@
 
 | 接口 | 结果 |
 | --- | --- |
-| `GET /api/projects/:projectId/factory?run=<runId>` | `{project,factory,handoff}`。省略运行编号时取最后一次规划。 |
+| `GET /api/projects/:projectId/factory?run=<runId>` | `{project,factory,handoff,result?,resultError?}`。省略运行编号时取最后一次规划。 |
 | `POST /api/projects/:projectId/factory/start` | 接受 `{confirmedLocalExecution:true,repositoryPath?}`。可选绝对路径必须是获授权的 Git 顶层目录，默认创建同项目的专用工作区。成功返回 `{factory}`。 |
 | `POST /api/projects/:projectId/factory/stop` | 接受空对象，成功返回 `{factory}`。无法确认停止时保持占用，需要核对进程。 |
 | `POST /api/projects/:projectId/factory/plan` | 接受 `{runId,specRevision,modelUsageConfirmed:true}`。通过当前已保存规格版本校验后交给 Factory Planner，返回 202 `{run,handoff}`。 |
+| `POST /api/projects/:projectId/factory/start-workflow` | 接受 `{runId,specRevision,nativeRunId,confirmedLocalExecution:true}`。仅启动当前已确认规格在同仓库对应的 `planned` 运行，经原生 Start 返回 202 `{handoff}`。执行进度和结果另行读取。 |
 
 `factory` 提供 `available`、`state`、`url`、`version` 及可选的 `message`。就绪 URL 由健康检查后的原生服务提供。许可边界及依赖见 [Factory 工作流](FACTORY_WORKBENCH.md)。
+
+`result` 包含 `taskflowRunId`、`specRevision`、`submittedAt`、`state`、`nativeRunId`、`nativeStatus`、`available` 和 `integration`。创建时核对原始交接目标，回读时核对仓库内的 Factory 数据库、运行编号和创建时间。核对通过时 `available` 为 `true`，`integration` 可提供 `branch`、`head`、`integratedTaskCount`。运行未启动、仓库不匹配或无法核对时，原生状态及集成数据为空。私有交接记录无法读取时，通过 `resultError` 提示，原生入口和启停状态仍可读取。
 
 ## 多 Agent 规格评审
 

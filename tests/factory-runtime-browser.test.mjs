@@ -27,7 +27,18 @@ async function until(check, label) {
   }
 }
 
-test('真实 Factory v1.0.5 和 Edge：规格交接、任务图、原生执行、Review 与 Git 集成', {
+async function openNativeLink(page, selector, url) {
+  const link = page.locator(selector);
+  await link.waitFor();
+  assert.equal(await link.getAttribute('href'), url);
+  await page.bringToFront();
+  const [native] = await Promise.all([page.context().waitForEvent('page', { timeout: 8_000 }), link.click()]);
+  native.setDefaultTimeout(8_000);
+  await native.waitForURL(url);
+  return native;
+}
+
+test('真实 Factory v1.0.5 和 Edge：规格交接、原生图与角色、DAG 执行、Review 和 Git 集成', {
   skip: available ? false : '先运行 npm run factory:install 安装固定版本', timeout: 75_000,
 }, async t => {
   const directory = await mkdtemp(path.join(await realpath(tmpdir()), 'taskflow-factory-runtime-'));
@@ -56,12 +67,27 @@ test('真实 Factory v1.0.5 和 Edge：规格交接、任务图、原生执行�
     "const prompt = readFileSync(0, 'utf8');",
     `if (mode === 'plan') writeFileSync(${JSON.stringify(receivedSpec)}, prompt);`,
     "const output = {",
-    "  plan: { objective: '任务编排夹具', tasks: [{ id: 'T1', title: '写入演示文件', objective: '只写入演示文件', dependencies: [], acceptanceCriteria: ['能读出演示内容'] }] },",
+    "  plan: { objective: '任务编排夹具', tasks: [",
+    "    { id: 'T1', title: '写入演示文件', objective: '只写入演示文件', dependencies: [], acceptanceCriteria: ['能读出演示内容'] },",
+    "    { id: 'T2', title: '生成后继文件', objective: '读取已集成的演示文件', dependencies: ['T1'], acceptanceCriteria: ['后继内容包含前置已验收结果'] },",
+    "  ] },",
     "  work: { commands: [], tests: [] },",
     "  review: { decision: 'approve', reason: '已核对演示产物' },",
     "};",
     `const marker = ${JSON.stringify(firstReview)};`,
-    "if (mode === 'work') writeFileSync('factory-demo.txt', existsSync(marker) ? 'factory fixture result\\n' : 'draft\\n');",
+    "if (mode === 'work' && prompt.includes('\\nTASK\\n生成后继文件')) {",
+    "  const previous = readFileSync('factory-demo.txt', 'utf8').trim();",
+    "  if (previous !== 'factory fixture result') throw new Error('后继任务没有收到已集成的前置候选');",
+    "  writeFileSync('factory-followup.txt', `verified: ${previous}\\n`);",
+    "} else if (mode === 'work') writeFileSync('factory-demo.txt', existsSync(marker) ? 'factory fixture result\\n' : 'draft\\n');",
+    "if (mode === 'review') {",
+    "  const followup = prompt.includes('\\nTASK\\n生成后继文件');",
+    "  const file = followup ? 'factory-followup.txt' : 'factory-demo.txt';",
+    "  const expected = followup ? 'verified: factory fixture result' : existsSync(marker) ? 'factory fixture result' : 'draft';",
+    "  if (!prompt.includes(file) || readFileSync(file, 'utf8').trim() !== expected) {",
+    "    throw new Error('Reviewer 没有收到本轮工作树和文件证据');",
+    "  }",
+    "}",
     "if (mode === 'review' && !existsSync(marker)) {",
     "  writeFileSync(marker, 'requested');",
     "  output.review = { decision: 'request_changes', reason: '请替换草稿内容', feedback: ['写入已确认的演示内容'] };",
@@ -69,10 +95,11 @@ test('真实 Factory v1.0.5 和 Edge：规格交接、任务图、原生执行�
     "console.log(JSON.stringify(output[mode]));",
   ].join('\n'));
 
-  app = await createApp({
+  const applicationOptions = {
     dataDir: path.join(directory, 'data'), teamEnabled: false, stepDelayMs: 0,
     planner: { ...simulationPlanner, getModelConfig: () => ({ configured: false }) },
-  });
+  };
+  app = await createApp(applicationOptions);
   const project = await app.store.create({ name: 'Factory 交接夹具', source: { filename: 'fixture.md', content: '演示规格和计划的交接。' } });
   const planning = await app.orchestrator.createRun(project.id, { mode: 'local' });
   await until(() => planning.status === 'awaiting_spec' && !app.orchestrator.state(planning).driving, '规格待确认');
@@ -80,10 +107,17 @@ test('真实 Factory v1.0.5 和 Edge：规格交接、任务图、原生执行�
   await until(() => planning.status === 'awaiting_review', 'Taskflow 计划待确认');
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const origin = 'http://127.0.0.1:' + app.server.address().port;
-  const base = origin + '/api/projects/' + project.id + '/factory';
+  const factoryPath = '/api/projects/' + project.id + '/factory';
+  let base = origin + factoryPath;
+  const taskflowResult = async () => {
+    const response = await fetch(`${base}?${new URLSearchParams({ run: planning.id })}`);
+    assert.equal(response.status, 200);
+    return (await response.json()).result;
+  };
   const post = (url, body, method = 'POST') => fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   browser = await chromium.launch({ channel: 'msedge', headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+  page.setDefaultTimeout(8_000);
   await page.goto(origin);
   await page.getByRole('link', { name: 'Factory 全流程' }).click();
   await page.waitForURL('**/factory.html?*');
@@ -112,6 +146,39 @@ test('真实 Factory v1.0.5 和 Edge：规格交接、任务图、原生执行�
   config.role_assignments = Object.entries(assignments).map(([role, agent]) => ({ role, agent, preferred: true }));
   assert.equal((await post(new URL('/api/config', factory), config, 'PUT')).status, 204);
 
+  assert.deepEqual(page.frames(), [page.mainFrame()], 'Taskflow 页面没有嵌入 Factory 页面');
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const graph = await openNativeLink(page, '#factory-open-graph', new URL('/#/network', factory).href);
+  await graph.getByText('Agent Graph', { exact: true }).first().waitFor();
+  await graph.getByRole('button', { name: 'Add graph node', exact: true }).click();
+  const addNode = graph.getByRole('dialog', { name: 'Add graph node', exact: true });
+  await addNode.getByRole('button', { name: /^Role Core assignment/u }).click();
+  await addNode.getByRole('button', { name: /^Custom role/u }).click();
+  const roleName = 'Fixture Advisor';
+  await addNode.getByLabel('Name', { exact: true }).fill(roleName);
+  await addNode.getByLabel('Description', { exact: true }).fill('Local fixture reviewer for documentation.');
+  await addNode.getByRole('combobox', { name: 'Execution class', exact: true }).selectOption('advisory');
+  await addNode.getByRole('combobox', { name: /^Policy preset/u }).selectOption('read_only');
+  await addNode.getByRole('checkbox', { name: 'review', exact: true }).check();
+  await addNode.getByRole('button', { name: 'Create role', exact: true }).click();
+  await addNode.waitFor({ state: 'hidden' });
+  const settings = await openNativeLink(page, '#factory-open-settings', new URL('/#/settings', factory).href);
+  await settings.getByRole('heading', { name: 'Settings', exact: true }).waitFor();
+  await settings.getByRole('button', { name: `Edit ${roleName} role`, exact: true }).click();
+  const roleInstructions = 'Verify only the supplied documentation scope.';
+  await settings.locator('form.role-form').getByLabel('Instructions', { exact: true }).fill(roleInstructions);
+  const savingRole = settings.waitForResponse(response => response.url() === new URL('/api/roles/fixture_advisor', factory).href && response.request().method() === 'PUT');
+  await settings.getByRole('button', { name: 'Save role', exact: true }).click();
+  assert.equal((await savingRole).status(), 200);
+  await settings.locator('form.role-form').waitFor({ state: 'hidden' });
+  const role = (await request('/api/roles')).find(item => item.id === 'fixture_advisor');
+  assert.equal(role.kind, 'custom');
+  assert.equal(role.executionClass, 'advisory');
+  assert.equal(role.instructions, roleInstructions);
+  assert.deepEqual(role.assignments, [{ agent: 'review', preferred: true }]);
+
   const handingOff = page.waitForResponse(response => response.url() === base + '/plan' && response.request().method() === 'POST');
   await page.locator('#factory-planning-confirmation').check();
   await page.getByRole('button', { name: '交给 Factory 规划', exact: true }).click();
@@ -125,20 +192,26 @@ test('真实 Factory v1.0.5 和 Edge：规格交接、任务图、原生执行�
     assert.notEqual(data.run.status, 'failed', JSON.stringify(data.sessions));
     return data.run.status === 'planned' && data;
   }, 'Factory 已生成任务');
-  assert.equal(planned.tasks[0].title, '写入演示文件');
+  assert.deepEqual(planned.tasks.map(task => task.title), ['写入演示文件', '生成后继文件']);
+  assert.deepEqual(planned.tasks[0].dependencies, []);
+  assert.deepEqual(planned.tasks[1].dependencies, [planned.tasks[0].id]);
   const plannerInput = await readFile(receivedSpec, 'utf8');
   assert.ok(plannerInput.includes(planning.id) && plannerInput.includes(planning.specRevision));
+  const details = await openNativeLink(page, '#factory-created-run', new URL('/#/runs/' + handed.run.id, factory).href);
+  await details.getByRole('heading', { name: 'Task graph', exact: true }).waitFor();
+  const followup = details.getByRole('row').filter({ hasText: '生成后继文件' });
+  assert.equal(await followup.getByRole('cell').last().innerText(), `#${planned.tasks[0].id}`);
 
-  await page.frameLocator('#factory-dashboard-frame').getByText('Agent Graph', { exact: true }).first().waitFor();
-  if (process.env.TASKFLOW_FACTORY_SCREENSHOT === '1') {
-    const screenshots = path.join(root, 'output', 'factory-workbench');
+  await graph.reload();
+  const workflow = graph.getByLabel(/workflow, planned$/u);
+  await workflow.waitFor();
+  const screenshots = process.env.TASKFLOW_FACTORY_SCREENSHOT === '1' ? path.join(root, 'output', 'factory-workbench') : null;
+  if (screenshots) {
     await mkdir(screenshots, { recursive: true });
-    await page.screenshot({ path: path.join(screenshots, 'dashboard.png'), fullPage: true });
+    await graph.screenshot({ path: path.join(screenshots, 'dashboard.png'), fullPage: true });
+    await details.screenshot({ path: path.join(screenshots, 'native-plan.png'), fullPage: true });
   }
-  await page.setViewportSize({ width: 390, height: 844 });
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
-  await page.setViewportSize({ width: 1440, height: 960 });
-  const terminalId = await page.frameLocator('#factory-dashboard-frame').locator('body').evaluate(async () => {
+  const terminalId = await graph.evaluate(async () => {
     const response = await fetch('/api/agents/console/sessions', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cols: 80, rows: 24 }),
     });
@@ -172,33 +245,88 @@ test('真实 Factory v1.0.5 和 Edge：规格交接、任务图、原生执行�
     }
   });
   assert.ok(terminalId > 0);
-  await page.goto(new URL('/#/runs/' + handed.run.id, factory).href);
-  await page.getByText('写入演示文件', { exact: true }).first().waitFor();
 
-  assert.equal((await fetch(new URL(runURL + '/start', factory), { method: 'POST' })).status, 202);
+  const startRequest = { runId: planning.id, specRevision: planning.specRevision, nativeRunId: handed.run.id, confirmedLocalExecution: true };
+  assert.equal((await post(base + '/start-workflow', { ...startRequest, nativeRunId: handed.run.id + 1 })).status, 409);
+  assert.equal((await post(base + '/start-workflow', { ...startRequest, confirmedLocalExecution: false })).status, 400);
+  await page.locator('#factory-refresh').click();
+  const startWorkflow = page.getByRole('button', { name: '启动此 Factory 运行', exact: true });
+  await startWorkflow.waitFor();
+  page.once('dialog', dialog => dialog.accept());
+  const started = page.waitForResponse(response => response.url() === base + '/start-workflow' && response.request().method() === 'POST');
+  await startWorkflow.click();
+  const startedRun = await started;
+  assert.equal(startedRun.status(), 202, await startedRun.text());
   const complete = await until(async () => {
     const data = await request(runURL);
     if (data.run.status === 'failed' && data.attempts.length >= 3) throw new Error(JSON.stringify(data.attempts));
     return data.run.status === 'completed' && data;
   }, 'Factory 编码、审查并集成');
-  assert.deepEqual(complete.attempts.map(attempt => attempt.status), ['changes_requested', 'approved']);
-  assert.equal(complete.sessions.length, 5);
+  assert.deepEqual(complete.attempts.map(attempt => [attempt.taskId, attempt.status]), [
+    [planned.tasks[0].id, 'changes_requested'], [planned.tasks[0].id, 'approved'], [planned.tasks[1].id, 'approved'],
+  ]);
+  assert.equal(complete.sessions.length, 7);
   const stream = await fetch(new URL('/api/sessions/' + complete.sessions[0].id + '/stream', factory), { signal: AbortSignal.timeout(5000) });
   assert.match(stream.headers.get('content-type'), /^text\/event-stream/);
   assert.match(await stream.text(), /event: session/);
   const workspace = path.join(directory, 'data', 'factory-workspaces', project.id);
   const integrated = await git('git', ['-C', workspace, 'show', 'factory/run-' + handed.run.id + ':factory-demo.txt']);
   assert.equal(integrated.stdout.trim(), 'factory fixture result');
-  const defaultBranch = await git('git', ['-C', workspace, 'ls-tree', 'HEAD', 'factory-demo.txt']);
+  const integratedFollowup = await git('git', ['-C', workspace, 'show', 'factory/run-' + handed.run.id + ':factory-followup.txt']);
+  assert.equal(integratedFollowup.stdout.trim(), 'verified: factory fixture result');
+  assert.deepEqual(complete.integration.integratedTasks, planned.tasks.map(task => task.id));
+  const gitHead = (await git('git', ['-C', workspace, 'rev-parse', complete.integration.branch])).stdout.trim();
+  assert.equal(gitHead, complete.integration.head);
+  const defaultBranch = await git('git', ['-C', workspace, 'ls-tree', 'HEAD', 'factory-demo.txt', 'factory-followup.txt']);
   assert.equal(defaultBranch.stdout, '');
   for (const api of ['/api/graph', '/api/roles', '/api/recipes', '/api/agents', '/api/performance/agents', '/api/mcp/servers', '/api/github/status']) await request(api);
 
+  const resultSummary = await taskflowResult();
+  assert.equal(resultSummary.available, true);
+  assert.equal(resultSummary.nativeStatus, 'completed');
+  assert.equal(resultSummary.nativeRunId, handed.run.id);
+  assert.equal(resultSummary.specRevision, planning.specRevision);
+  assert.deepEqual(resultSummary.integration, { branch: complete.integration.branch, head: gitHead, integratedTaskCount: 2 });
+  assert.equal((await post(base + '/start-workflow', startRequest)).status, 409);
+  if (screenshots) {
+    await details.reload();
+    await details.getByText(/100% complete/u).waitFor();
+    await details.screenshot({ path: path.join(screenshots, 'native-run.png'), fullPage: true });
+  }
+  await page.reload();
+  const resultCard = page.getByRole('region', { name: '规格交接记录', exact: true });
+  await resultCard.getByText(gitHead, { exact: true }).waitFor();
+  assert.ok(await resultCard.getByText('completed', { exact: true }).isVisible());
+  if (screenshots) await page.screenshot({ path: path.join(screenshots, 'handoff.png'), fullPage: true });
   const stopped = await post(base + '/stop', {});
   assert.equal(stopped.status, 200);
   assert.equal((await stopped.json()).factory.state, 'stopped');
   await assert.rejects(fetch(new URL('/api/health', factory), { signal: AbortSignal.timeout(3000) }));
+  const stoppedSummary = await taskflowResult();
+  assert.equal(stoppedSummary.available, false);
+  assert.equal(stoppedSummary.nativeRunId, resultSummary.nativeRunId);
+  assert.equal(stoppedSummary.integration, null);
+  await app.close();
+  app = await createApp(applicationOptions);
+  await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+  base = `http://127.0.0.1:${app.server.address().port}${factoryPath}`;
+  assert.deepEqual(await taskflowResult(), stoppedSummary);
   const reopened = await post(base + '/start', { confirmedLocalExecution: true });
   assert.equal(reopened.status, 200);
   const nextFactory = (await reopened.json()).factory.url;
-  assert.equal((await (await fetch(new URL(runURL, nextFactory))).json()).run.status, 'completed');
+  const history = await (await fetch(new URL(runURL, nextFactory))).json();
+  assert.equal(history.run.status, 'completed');
+  assert.deepEqual(history.attempts, complete.attempts);
+  assert.deepEqual(history.integration, complete.integration);
+  const savedRole = (await (await fetch(new URL('/api/roles', nextFactory))).json()).find(item => item.id === role.id);
+  assert.deepEqual(savedRole, role);
+  assert.deepEqual(await taskflowResult(), resultSummary);
+  if (screenshots) await writeFile(path.join(screenshots, 'run-evidence.json'), JSON.stringify({
+    factoryVersion: result.factory.version,
+    handoff: resultSummary,
+    stopped: stoppedSummary,
+    afterRestart: await taskflowResult(),
+    tasks: history.tasks.map(({ id, title, dependencies, state }) => ({ id, title, dependencies, state })),
+    attempts: history.attempts.map(({ taskId, attemptNumber, status, role, commitSha }) => ({ taskId, attemptNumber, status, role, commitSha })),
+  }, null, 2) + '\n');
 });

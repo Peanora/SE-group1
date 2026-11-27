@@ -17,7 +17,6 @@ import './specification-meeting.css';
 import './delivery-station.css';
 import './fixed-reference.css';
 import './local-delivery.css';
-import './flow-workspace.css';
 
 const container = document.getElementById('root');
 if (!container) throw new Error('未找到项目工作台入口。');

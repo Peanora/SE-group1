@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright-core';
 import { FACTORY_VERSION, factoryBinaryPath } from '../lib/factory-release.mjs';
 import { createFactoryWorkbench } from '../lib/factory-workbench.mjs';
 
@@ -43,7 +44,7 @@ async function fixture(t) {
     return text ? JSON.parse(text) : undefined;
   }
   await start();
-  return { request, start, stop: () => runtime.stop(projectId) };
+  return { request, start, stop: () => runtime.stop(projectId), get url() { return origin; } };
 }
 
 test('真实 Factory 原生设置：Agent、角色、配方、画布布局停启后读回', nativeTest, async t => {
@@ -91,7 +92,7 @@ test('真实 Factory 原生设置：Agent、角色、配方、画布布局停启
   assert.deepEqual(await request('/api/runs'), []);
 });
 
-test('真实 Factory 原生 MCP：本机 HTTP 发现只读工具、读取缓存并删除配置', nativeTest, async t => {
+test('真实 Factory 和 Edge 原生 MCP 设置：本机 HTTP 发现只读工具、读取缓存并删除配置', nativeTest, async t => {
   const methods = [];
   const server = createServer(async (request, response) => {
     let body = '';
@@ -117,21 +118,41 @@ test('真实 Factory 原生 MCP：本机 HTTP 发现只读工具、读取缓存�
     server.once('error', reject);
     server.listen(0, '127.0.0.1', resolve);
   });
-  const { request } = await fixture(t);
+  const factory = await fixture(t);
+  const { request } = factory;
+  const browser = await chromium.launch({ channel: 'msedge', headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+  page.setDefaultTimeout(8_000);
+  await page.goto(new URL('/#/settings', factory.url).href);
+  const settings = page.getByRole('region', { name: 'External Tools MCP' });
+  await settings.getByRole('button', { name: 'Add server', exact: true }).click();
+  await settings.getByLabel('Server id', { exact: true }).fill('fixture');
+  await settings.getByRole('combobox', { name: 'Transport', exact: true }).selectOption('http');
+  await settings.getByLabel('Streamable HTTP URL', { exact: true }).fill(`http://127.0.0.1:${server.address().port}/mcp`);
+  const saving = page.waitForResponse(response => response.url() === new URL('/api/mcp/servers', factory.url).href && response.request().method() === 'POST');
+  await settings.getByRole('button', { name: 'Save server', exact: true }).click();
+  assert.equal((await saving).status(), 201);
+  await settings.getByRole('button', { name: 'Test connection', exact: true }).waitFor();
   const endpoint = '/api/mcp/servers/fixture';
-  const added = await request('/api/mcp/servers', 201, 'POST', {
-    id: 'fixture', transport: 'http', url: `http://127.0.0.1:${server.address().port}/mcp`,
-  });
+  const [added] = await request('/api/mcp/servers');
   assert.equal(added.status, 'unknown');
-  const discovered = await request(`${endpoint}/test`, 200, 'POST');
-  assert.equal(discovered.status, 'connected');
+  await settings.getByRole('button', { name: 'Test connection', exact: true }).click();
+  await settings.getByText(/Connected.*1 tools/u).waitFor();
   assert.ok(methods.includes('initialize') && methods.includes('tools/list'));
   const requestCount = methods.length;
+  await settings.getByRole('button', { name: 'Inspect tools', exact: true }).click();
+  const toolSummary = settings.locator('summary').filter({ hasText: 'fixture.lookup' });
+  await toolSummary.click();
+  assert.match(await toolSummary.innerText(), /read/u);
+  assert.equal(await settings.getByText('Read local fixture data.', { exact: true }).isVisible(), true);
   const [tool] = await request(`${endpoint}/tools`);
   assert.equal(tool.qualifiedName, 'fixture.lookup');
   assert.equal(tool.classification, 'read');
   assert.equal(methods.length, requestCount, '读取已缓存工具不重复请求 MCP 服务');
   assert.ok(!methods.includes('tools/call'));
-  await request(endpoint, 204, 'DELETE');
+  page.once('dialog', dialog => dialog.accept());
+  await settings.getByRole('button', { name: 'Remove', exact: true }).click();
+  await settings.getByRole('button', { name: 'Inspect tools', exact: true }).waitFor({ state: 'hidden' });
   assert.deepEqual(await request('/api/mcp/servers'), []);
 });

@@ -15,42 +15,6 @@
   transform-origin: top left;
 }
 
-.task-orchestration-root .task-canvas-window .task-graph-scroll[data-plan-canvas],
-section.planned-execution .pe-process .pe-graph-scroll:has(> [data-renderer="react-flow"]) {
-  --flow-surface: #10171c;
-  --flow-card: #19252d;
-  --flow-card-active: #20343b;
-  --flow-line: #3b515d;
-  --flow-ink: #e5eef1;
-  --flow-muted: #a4b7c1;
-  --flow-focus: #68dccc;
-  --flow-warn: #e5b96d;
-  --flow-pass: #77d9a5;
-  --flow-fail: #f298a3;
-  color-scheme: dark;
-  scrollbar-color: #45606d var(--flow-surface);
-  background: radial-gradient(#334852 1px, transparent 1.1px) 0 0 / 16px 16px var(--flow-surface);
-}
-
-.task-orchestration-root .task-graph-zone:has(.task-graph-scroll[data-plan-canvas]) :is(.task-navigator, .task-canvas-legend) {
-  --task-accent: #55c2b3;
-  --task-upstream: #65b3c2;
-  --task-downstream: #55c2b3;
-}
-
-.task-orchestration-root .task-graph-zone:has(.task-graph-scroll[data-plan-canvas]) .task-navigator {
-  border-color: #45606d;
-  background: #10171c;
-}
-
-.task-orchestration-root .task-graph-zone:has(.task-graph-scroll[data-plan-canvas]) .task-navigator:is(:hover, :focus-visible) {
-  border-color: var(--task-accent);
-}
-
-.task-orchestration-root .task-graph-zone:has(.task-graph-scroll[data-plan-canvas]) .task-navigator .task-navigator-shade {
-  fill: #10171cad;
-}
-
 .task-orchestration-root .task-flow-extent .react-flow {
   background: transparent;
 }
@@ -64,9 +28,9 @@ section.planned-execution .pe-process .pe-graph-scroll:has(> [data-renderer="rea
   block-size: 8px;
   min-inline-size: 0;
   min-block-size: 0;
-  border: 1px solid var(--flow-surface);
+  border: 1px solid var(--task-paper);
   border-radius: 50%;
-  background: #83a5b4;
+  background: var(--task-edge-idle);
   pointer-events: none;
 }
 
@@ -75,6 +39,12 @@ section.planned-execution .pe-process .pe-graph-scroll:has(> [data-renderer="rea
   inline-size: 100%;
   block-size: 100%;
   pointer-events: auto;
+}
+
+.task-flow-surface[data-plan-canvas] {
+  --flow-ink: #203149;
+  --flow-muted: #4d617c;
+  --flow-focus: #3846ce;
 }
 
 .task-flow-surface[data-plan-canvas] .task-flow-extent > .react-flow {
@@ -92,13 +62,13 @@ section.planned-execution .pe-process .pe-graph-scroll:has(> [data-renderer="rea
 
 .task-flow-surface[data-plan-canvas] .task-flow-group {
   position: absolute;
-  border: 1px dashed #3b515d;
-  border-radius: 8px;
-  background: #18272d66;
+  border: 1px solid #d6e0ef;
+  border-radius: 9px;
+  background: #fafdffdc;
 }
 
 .task-flow-surface[data-plan-canvas] .task-flow-group:nth-of-type(even) {
-  background: #1e283747;
+  background: #eef4fbdd;
 }
 
 .task-flow-surface[data-plan-canvas] .task-flow-group-heading {
@@ -117,7 +87,7 @@ section.planned-execution .pe-process .pe-graph-scroll:has(> [data-renderer="rea
 
 .task-flow-surface[data-plan-canvas] .task-flow-group-heading strong {
   overflow: hidden;
-  color: var(--flow-ink);
+  color: #354b69;
   font-size: 13px;
   font-weight: 710;
   text-overflow: ellipsis;
@@ -130,7 +100,7 @@ section.planned-execution .pe-process .pe-graph-scroll:has(> [data-renderer="rea
 .task-flow-surface[data-plan-canvas] .task-flow-column {
   position: absolute;
   top: 6px;
-  border-inline: 1px dashed #5e7e8e38;
+  border-inline: 1px dashed #b5c5dc48;
   color: var(--flow-muted);
   text-align: center;
 }
@@ -141,9 +111,9 @@ section.planned-execution .pe-process .pe-graph-scroll:has(> [data-renderer="rea
   justify-content: center;
   min-block-size: 22px;
   padding-inline: 9px;
-  border: 1px solid var(--flow-line);
+  border: 1px solid #d5e0ee;
   border-radius: 4px;
-  background: var(--flow-surface);
+  background: #f9fbff;
   font-size: 11px;
   font-weight: 660;
 }
@@ -155,7 +125,6 @@ section.planned-execution .pe-process .pe-graph-scroll:has(> [data-renderer="rea
 }
 
 .task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card {
-  --module-accent: #7d9cae;
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -168,12 +137,12 @@ section.planned-execution .pe-process .pe-graph-scroll:has(> [data-renderer="rea
   margin: 0;
   padding: 5px 8px;
   overflow: hidden;
-  border: 1px solid var(--flow-line);
-  border-inline-start: 3px solid var(--module-accent);
-  border-radius: 6px;
-  background: var(--flow-card);
+  border: 1px solid #bdcae0;
+  border-inline-start: 3px solid #536eaf;
+  border-radius: 7px;
+  background: #fff;
   color: var(--flow-ink);
-  box-shadow: none;
+  box-shadow: 0 2px 6px #23375914;
   text-align: start;
   cursor: pointer;
   pointer-events: auto;
@@ -183,35 +152,15 @@ section.planned-execution .pe-process .pe-graph-scroll:has(> [data-renderer="rea
   grid-template-rows: 14px minmax(0, 1fr) 15px 13px;
 }
 
-.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card:is([data-gate-state="checking"], .sim-awaiting_confirmation, .draft-downstream) {
-  --module-accent: var(--flow-warn);
-}
-.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card:is([data-gate-state="passed"], .sim-completed) {
-  --module-accent: var(--flow-pass);
-}
-.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card:is([data-gate-state="failed"], .sim-failed, .sim-blocked) {
-  --module-accent: var(--flow-fail);
-}
-.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card:is(.sim-running, .draft-changed) {
-  --module-accent: var(--flow-focus);
-}
-
-.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card:hover {
-  background: var(--flow-card-active);
-}
-
 .task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card[aria-pressed="true"] {
   border-color: var(--flow-focus);
-  border-inline-start-color: var(--module-accent);
-  background: var(--flow-card-active);
-  color: var(--flow-ink);
-  box-shadow: 0 0 0 2px #68dccc35;
-  outline: none;
+  background: #f1f4ff;
+  box-shadow: 0 0 0 2px #5d70da36;
 }
 
 .task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card:focus-visible {
   outline: 2px solid var(--flow-focus);
-  outline-offset: -2px;
+  outline-offset: 2px;
 }
 
 .task-flow-surface[data-plan-canvas] .task-flow-card-kicker {
@@ -219,7 +168,7 @@ section.planned-execution .pe-process .pe-graph-scroll:has(> [data-renderer="rea
   min-inline-size: 0;
   align-items: center;
   gap: 4px;
-  color: var(--flow-muted);
+  color: #3e5990;
   font-size: 10px;
   font-weight: 700;
   white-space: nowrap;
@@ -234,18 +183,14 @@ section.planned-execution .pe-process .pe-graph-scroll:has(> [data-renderer="rea
   flex: none;
   inline-size: 13px;
   block-size: 13px;
-  color: var(--module-accent);
 }
 
 .task-flow-surface[data-plan-canvas] .task-flow-card-kicker small {
-  flex: none;
-  max-inline-size: 40%;
-  overflow: hidden;
-  color: var(--module-accent);
+  margin-inline-start: 5px;
+  color: var(--flow-muted);
   font-family: var(--mono-type, Consolas, monospace);
   font-size: 10px;
   font-weight: 630;
-  text-overflow: ellipsis;
 }
 
 .task-flow-surface[data-plan-canvas] .task-flow-card .task-flow-card-title {
@@ -278,15 +223,15 @@ section.planned-execution .pe-process .pe-graph-scroll:has(> [data-renderer="rea
   gap: 3px;
   padding-inline: 4px;
   border-radius: 3px;
-  background: #263945;
-  color: #bdcdd5;
+  background: #edf2fa;
+  color: #3e557a;
 }
 
 .task-flow-surface[data-plan-canvas] .task-module-checkpoint {
   flex: none;
   margin-inline-start: auto;
-  background: #24403f;
-  color: #b3ded9;
+  background: #fff3d7;
+  color: #755317;
 }
 
 .task-flow-surface[data-plan-canvas] :is(.task-module-review, .task-module-checkpoint, .task-module-junctions > span) svg {
@@ -303,21 +248,21 @@ section.planned-execution .pe-process .pe-graph-scroll:has(> [data-renderer="rea
 
 .task-flow-surface[data-plan-canvas] :is(.task-module-checkpoint, .task-module-junctions > span)[data-gate-state="passed"],
 .task-flow-surface[data-plan-canvas] .task-module-review[data-review-state="passed"] {
-  background: #213c34;
-  color: var(--flow-pass);
+  background: #e3f4e9;
+  color: #165d40;
 }
 
 .task-flow-surface[data-plan-canvas] :is(.task-module-checkpoint, .task-module-junctions > span)[data-gate-state="checking"],
 .task-flow-surface[data-plan-canvas] .task-module-review[data-review-state="checking"] {
-  background: #3a3224;
-  color: var(--flow-warn);
+  background: #fff1d3;
+  color: #825016;
 }
 
 .task-flow-surface[data-plan-canvas] :is(.task-module-checkpoint, .task-module-junctions > span)[data-gate-state="failed"],
 .task-flow-surface[data-plan-canvas] .task-module-checkpoint[data-blocked="true"],
 .task-flow-surface[data-plan-canvas] .task-module-review[data-review-state="failed"] {
-  background: #472a32;
-  color: var(--flow-fail);
+  background: #ffe7e9;
+  color: #8e2f41;
 }
 
 .task-flow-surface[data-plan-canvas] .task-flow-card-kicker .dev-task-grip {
@@ -325,35 +270,25 @@ section.planned-execution .pe-process .pe-graph-scroll:has(> [data-renderer="rea
   inline-size: 15px;
   block-size: 15px;
   margin: 0 0 0 auto;
-  color: var(--flow-muted);
+  color: #677a97;
   cursor: ns-resize;
 }
 
 .task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .react-flow__node.dragging .task-flow-card {
   border-color: var(--flow-focus);
-  box-shadow: 0 5px 14px #0006;
+  box-shadow: 0 5px 14px #2433602b;
   cursor: grabbing;
 }
 
-.task-orchestration-root [data-focus-relations="true"] .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card.relation-muted {
-  border-color: var(--flow-line);
-  border-inline-start-color: var(--module-accent);
-  background: var(--flow-card);
-  color: var(--flow-ink);
-  opacity: .78;
-}
-
-.task-orchestration-root [data-focus-relations="true"] .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card.relation-muted:is(:hover, :focus-visible, [aria-pressed="true"]) {
-  background: var(--flow-card-active);
-  opacity: 1;
-}
+.task-flow-surface[data-plan-canvas] .react-flow__handle-left { background: #7390b6; }
+.task-flow-surface[data-plan-canvas] .react-flow__handle-right { background: #5267b7; }
 
 .task-flow-surface[data-plan-canvas] .plan-task-node[data-editing="true"] > [data-task-connector] {
   inline-size: 16px;
   block-size: 16px;
   z-index: 2;
   border: 2px solid var(--flow-focus);
-  background: var(--flow-card);
+  background: #fff;
   cursor: crosshair;
   pointer-events: auto;
   touch-action: none;
@@ -374,70 +309,68 @@ section.planned-execution .pe-process .pe-graph-scroll:has(> [data-renderer="rea
 }
 
 .task-flow-surface[data-plan-canvas] .react-flow__edge-text {
-  fill: var(--flow-muted);
+  fill: #435775;
   font-size: 10px;
   font-weight: 630;
 }
 
 .task-flow-surface[data-plan-canvas] .react-flow__edge-textbg {
-  fill: var(--flow-surface);
+  fill: #f7faff;
   opacity: .97;
 }
 
 section.planned-execution .pe-process .pe-graph-canvas[data-renderer="react-flow"] {
-  background: none;
+  --execution-canvas-accent: #3846ce;
+  --execution-canvas-ink: #182342;
+  background: radial-gradient(#cfd8ee 1px, transparent 1.15px) 0 0 / 18px 18px #f8faff;
 }
 
 section.planned-execution .pe-process .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node {
   position: relative;
   inline-size: 100%;
   block-size: 100%;
-  border-color: var(--flow-line);
-  border-inline-start-color: var(--flow-status, #7d9cae);
-  border-radius: 6px;
-  background: var(--flow-card);
-  color: var(--flow-ink);
+  border-color: #bdcae8;
+  border-inline-start-width: 1px;
+  border-radius: 9px;
+  background: #fff;
+  color: var(--execution-canvas-ink);
+  box-shadow: 0 3px 7px #18234216;
   pointer-events: auto;
 }
 
 section.planned-execution .pe-process .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node[aria-pressed="true"] {
-  border-color: var(--flow-focus);
-  border-inline-start-color: var(--flow-status, #7d9cae);
-  background: var(--flow-card-active);
-  box-shadow: 0 0 0 2px #68dccc35;
+  border-color: var(--execution-canvas-accent);
+  background: #e8ecff;
+  box-shadow: 0 0 0 2px #3846ce3d;
 }
 
 section.planned-execution .pe-process .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node:focus-visible {
-  outline: 2px solid var(--flow-focus);
-  outline-offset: -2px;
-}
-
-section.planned-execution .pe-process .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node small:not(.pe-task-status) {
-  color: var(--flow-muted);
+  outline: 2px solid var(--execution-canvas-accent);
+  outline-offset: 3px;
 }
 
 section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node .pe-task-status {
   max-inline-size: 100%;
   padding-inline: 6px;
   border-radius: 4px;
-  background: var(--flow-status-bg, #263945);
-  color: var(--flow-status, #bdcdd5);
+  background: #eef2fa;
+  color: #435275;
   font-weight: 650;
 }
 
-section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node[data-status="completed"] {
-  --flow-status-bg: #213c34;
-  --flow-status: var(--flow-pass);
+section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node[data-status="completed"] .pe-task-status {
+  background: #d8f2e7;
+  color: #135c45;
 }
 
-section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node:is([data-status="failed"], [data-status="blocked"]) {
-  --flow-status-bg: #472a32;
-  --flow-status: var(--flow-fail);
+section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node[data-status="failed"] .pe-task-status {
+  background: #fbe4e6;
+  color: #8f2537;
 }
 
-section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node[data-status="running"] {
-  --flow-status-bg: #3a3224;
-  --flow-status: var(--flow-warn);
+section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .pe-task-node:is([data-status="running"],[data-status="blocked"]) .pe-task-status {
+  background: #fbe7b8;
+  color: #674016;
 }
 
 section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .react-flow__handle {
@@ -445,8 +378,17 @@ section.planned-execution .pe-graph-canvas[data-renderer="react-flow"] .react-fl
   block-size: 8px;
   min-inline-size: 0;
   min-block-size: 0;
-  border: 1px solid var(--flow-surface);
+  border: 1px solid #fff;
   border-radius: 50%;
-  background: #83a5b4;
+  background: #7e8eae;
   pointer-events: none;
+}
+
+section.planned-execution .pe-process .pe-graph-canvas[data-renderer="react-flow"] .pe-flow-edge {
+  fill: none;
+  stroke: var(--execution-canvas-accent);
+}
+
+section.planned-execution .pe-process .pe-graph-canvas[data-renderer="react-flow"] .pe-flow-edge[data-focus="false"] {
+  stroke: #aab5cf;
 }

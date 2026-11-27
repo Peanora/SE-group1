@@ -353,8 +353,12 @@ export async function createApp(options = {}) {
           if (segments.length === 4 && method === 'GET') {
             const runId = url.searchParams.get('run');
             const run = runId ? store.getRun(projectId, runId).run : project.runs.at(-1);
+            let result, resultError;
+            try { result = run && await factoryWorkbench.result?.(projectId, run.id); }
+            catch { resultError = '无法读取规格交接记录。可在原生 Runs 中查看工作流。'; }
             return respond(response, 200, { project: { id: project.id, name: project.name },
-              factory: factoryWorkbench.status(projectId), handoff: factoryHandoff(project, run) });
+              factory: factoryWorkbench.status(projectId), handoff: factoryHandoff(project, run), ...(result ? { result } : {}),
+              ...(resultError ? { resultError } : {}) });
           }
           if (segments.length !== 5 || method !== 'POST') throw new HttpError(404, '未找到该 Factory 操作。');
           const body = await readJson(request);
@@ -373,18 +377,31 @@ export async function createApp(options = {}) {
             dataFields(body, []);
             return respond(response, 200, { factory: await factoryWorkbench.stop(projectId) });
           }
-          if (segments[4] === 'plan') {
-            dataFields(body, ['runId', 'specRevision', 'modelUsageConfirmed']);
-            if (typeof body.runId !== 'string' || typeof body.specRevision !== 'string' || body.modelUsageConfirmed !== true) {
-              throw new HttpError(400, '请确认 Factory 会使用配置的 Planner，并提交当前规格版本。');
+          if (['plan', 'start-workflow'].includes(segments[4])) {
+            const planning = segments[4] === 'plan';
+            dataFields(body, ['runId', 'specRevision', ...(planning ? ['modelUsageConfirmed'] : ['nativeRunId', 'confirmedLocalExecution'])]);
+            const confirmed = planning ? body.modelUsageConfirmed === true : body.confirmedLocalExecution === true
+              && Number.isSafeInteger(body.nativeRunId) && body.nativeRunId >= 1;
+            if (typeof body.runId !== 'string' || typeof body.specRevision !== 'string' || !confirmed) {
+              throw new HttpError(400, '请确认 Factory 将调用已有 Agent，并提交当前规格版本。');
             }
             const { run } = store.getRun(projectId, body.runId);
             const handoff = factoryHandoff(project, run);
             if (!handoff.available || handoff.specRevision !== body.specRevision) throw new HttpError(409, '该设计规格未确认或已失效，请刷新当前版本。');
-            if (closing) throw new HttpError(503, '工作台正在停止，请稍后重新连接。');
+            const assertCurrent = () => {
+              if (closing) throw new HttpError(503, '工作台正在停止，请稍后重新连接。');
+              const current = store.getRun(projectId, run.id);
+              const currentHandoff = factoryHandoff(current.project, current.run);
+              if (currentHandoff.specRevision !== body.specRevision) throw new HttpError(409, '该设计规格已失效，请刷新当前版本。');
+            };
+            assertCurrent();
+            if (!planning) {
+              await factoryWorkbench.startWorkflow(projectId, { runId: run.id, specRevision: handoff.specRevision, nativeRunId: body.nativeRunId, assertCurrent });
+              return respond(response, 202, { handoff });
+            }
             const objective = '根据以下已确认设计规格生成开发任务、依赖、角色和验收条件。\n\n'
               + 'Taskflow 运行 ' + run.id + ' / 规格版本 ' + handoff.specRevision + '\n\n' + orchestrator.renderSpec(run.spec);
-            return respond(response, 202, { run: await factoryWorkbench.plan(projectId, { objective }), handoff });
+            return respond(response, 202, { run: await factoryWorkbench.plan(projectId, { objective, runId: run.id, specRevision: handoff.specRevision, assertCurrent }), handoff });
           }
           throw new HttpError(404, '未找到该 Factory 操作。');
         }
@@ -782,9 +799,6 @@ export async function createApp(options = {}) {
       try { info = await stat(file); } catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) throw new HttpError(404, '未找到该页面。'); throw error; }
       if (!info.isFile()) throw new HttpError(404, '未找到该页面。');
       const body = await readFile(file);
-      if (relative === 'factory.html' && !teamAccess) {
-        response.setHeader('Content-Security-Policy', response.getHeader('Content-Security-Policy') + "; frame-src http://127.0.0.1:*");
-      }
       if (method === 'HEAD') { response.writeHead(200, { 'Content-Type': MIME[path.extname(file)] ?? 'application/octet-stream', 'Content-Length': body.length }); return response.end(); }
       respond(response, 200, body, MIME[path.extname(file)] ?? 'application/octet-stream');
     } catch (error) {

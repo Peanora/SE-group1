@@ -6,6 +6,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createApp } from '../server.mjs';
 import { simulationPlanner } from '../examples/simulation-fixture.mjs';
+import { createFactoryHandoffStore } from '../lib/factory-handoff-store.mjs';
 
 const prefix = 'taskflow-factory-http-';
 const upstream = 'http://127.0.0.1:49451/';
@@ -36,8 +37,8 @@ async function fixture(t, teamEnabled = false) {
       calls.push({ action: 'stop', projectId }); active.delete(projectId);
       return this.status(projectId);
     },
-    async plan(projectId, { objective }) {
-      calls.push({ action: 'plan', projectId, objective });
+    async plan(projectId, { objective, runId, specRevision }) {
+      calls.push({ action: 'plan', projectId, objective, runId, specRevision });
       return { id: 17, status: 'planning' };
     },
     async close() { calls.push({ action: 'close' }); },
@@ -136,7 +137,17 @@ test('Factory 只接收已确认的当前规格版本并保留所属运行', asy
   assert.equal(f.calls.length, 1);
   assert.equal(f.calls[0].projectId, f.project.id);
   assert.equal(f.calls[0].action, 'plan');
+  assert.equal(f.calls[0].runId, run.id);
+  assert.equal(f.calls[0].specRevision, run.specRevision);
   for (const value of [run.id, run.specRevision, requirement]) assert.ok(f.calls[0].objective.includes(value), value);
+
+  f.factoryWorkbench.result = async () => { throw new Error('private receipt storage failure'); };
+  const degraded = await f.request(view);
+  assert.equal(degraded.status, 200);
+  assert.match(degraded.data.resultError, /原生 Runs/u);
+  assert.equal(degraded.data.factory.available, true);
+  assert.equal(degraded.data.handoff.specRevision, run.specRevision);
+  delete f.factoryWorkbench.result;
 
   run.sourceSuperseded = true;
   assert.equal((await f.request(view)).data.handoff.available, false);
@@ -144,12 +155,12 @@ test('Factory 只接收已确认的当前规格版本并保留所属运行', asy
   assert.equal(f.calls.length, 1);
 });
 
-test('Factory 内嵌白名单仅开放给本机单人工作台，团队负责人同样不能启动原生服务', async t => {
+test('Factory 原生页面使用独立顶层导航，团队负责人同样不能启动原生服务', async t => {
   const local = await fixture(t);
   const framePolicy = /(?:^|;)\s*frame-src http:\/\/127\.0\.0\.1:\*/u;
   const shell = await local.request('/factory.html');
   assert.equal(shell.status, 200);
-  assert.match(shell.headers.get('content-security-policy'), framePolicy);
+  assert.doesNotMatch(shell.headers.get('content-security-policy'), framePolicy);
   assert.doesNotMatch((await local.request('/')).headers.get('content-security-policy'), framePolicy);
 
   const team = await fixture(t, true);
@@ -166,4 +177,31 @@ test('Factory 内嵌白名单仅开放给本机单人工作台，团队负责人
   assert.equal(teamShell.status, 200);
   assert.doesNotMatch(teamShell.headers.get('content-security-policy'), framePolicy);
   assert.deepEqual(team.calls, []);
+});
+
+test('Factory 交接在提交前占位，未知回执可重开核对，运行与仓库切换保留各自归属', async t => {
+  const directory = await mkdtemp(path.join(await realpath(tmpdir()), prefix));
+  t.after(async () => {
+    assert.equal(path.dirname(directory), await realpath(tmpdir()));
+    assert.ok(path.basename(directory).startsWith(prefix));
+    await rm(directory, { recursive: true, force: true });
+  });
+  const store = createFactoryHandoffStore(directory);
+  const binding = { id: 'intent-1', projectId: 'project-1', runId: 'planning-1', specRevision: 'a'.repeat(64),
+    workspaceKey: 'b'.repeat(64), objectiveHash: 'c'.repeat(64), submittedAt: '2026-11-27T04:30:00Z' };
+  assert.equal(await store.latest(binding.projectId, binding.runId), null);
+  await store.reserve(binding);
+  await store.unknown(binding.id);
+  const reopened = createFactoryHandoffStore(directory);
+  assert.equal((await reopened.latest(binding.projectId, binding.runId)).state, 'unknown');
+  await assert.rejects(reopened.reserve({ ...binding, id: 'duplicate' }), { status: 409 });
+  await reopened.link(binding.id, 7, binding.submittedAt);
+  await store.unknown(binding.id);
+  assert.equal((await store.latest(binding.projectId, binding.runId)).native_id, 7);
+  await reopened.reserve({ ...binding, id: 'repo-2-intent', workspaceKey: 'd'.repeat(64) });
+  await reopened.link('repo-2-intent', 7, binding.submittedAt);
+  assert.equal((await reopened.latest(binding.projectId, binding.runId, binding.workspaceKey)).id, binding.id);
+  assert.equal((await reopened.latest(binding.projectId, binding.runId, 'd'.repeat(64))).id, 'repo-2-intent');
+  assert.equal(await reopened.latest('other-project', binding.runId), null);
+  assert.equal(await reopened.latest(binding.projectId, 'other-run'), null);
 });
