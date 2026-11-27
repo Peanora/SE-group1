@@ -1,7 +1,8 @@
 const NODE_HEIGHT = 100;
-const ROW_STEP = 168;
+const CHECKPOINT_HEIGHT = 36;
+const ROW_STEP = 204;
 const PADDING = 46;
-const BAND_TOP = 16;
+const TOP_PADDING = 32;
 const POSITION_KEY = 'taskflow.canvas.positions';
 const zoomLabel = zoom => `${Number((zoom * 100).toFixed(zoom < .01 ? 2 : zoom < .1 ? 1 : 0))}%`;
 const sizerStyle = (width, height, zoom) => `width:${Math.ceil(width * zoom)}px;height:${Math.ceil(height * zoom)}px`;
@@ -54,7 +55,7 @@ function placeTasks(tasks, { dependencies, dependants }, narrow) {
   }
   const rows = Math.max(...columns.map(column => column.length));
   const width = Math.max(narrow ? 318 : 524, PADDING * 2 + nodeWidth + (rows - 1) * laneStep);
-  const height = Math.max(348, BAND_TOP * 2 + columns.length * ROW_STEP);
+  const height = Math.max(348, TOP_PADDING + (columns.length - 1) * ROW_STEP + NODE_HEIGHT + CHECKPOINT_HEIGHT + TOP_PADDING);
   const lanes = new Map();
   for (const column of columns) {
     // Keep branches near their immediate parents and use the input order to break ties.
@@ -68,33 +69,32 @@ function placeTasks(tasks, { dependencies, dependants }, narrow) {
   const ranks = new Map();
   const positions = new Map(columns.flatMap((column, level) => column.map((id, row) => {
     const x = (width - nodeWidth) / 2 + (row - (column.length - 1) / 2) * laneStep;
-    const y = BAND_TOP + 34 + level * ROW_STEP;
+    const y = TOP_PADDING + level * ROW_STEP;
     ranks.set(id, level);
     return [id, { x, y }];
   })));
-  return {
-    positions, ranks, width, height, nodeWidth,
-    bands: columns.map((column, index) => ({ count: column.length, top: BAND_TOP + index * ROW_STEP, height: ROW_STEP - 10 })),
-  };
+  return { positions, ranks, width, height, nodeWidth };
 }
 
-function fallbackCanvas({ nodes, edges, bands, width, height, nodeWidth, zoom }, escape) {
+function fallbackCanvas({ nodes, edges, width, height, nodeWidth, zoom }, escape) {
   const positions = new Map(nodes.map(node => [node.id, node.position]));
   const paths = edges.map(({ source, target, relation }) => {
     const from = positions.get(source), to = positions.get(target);
     const x1 = from.x + nodeWidth / 2, x2 = to.x + nodeWidth / 2;
-    const y1 = from.y + NODE_HEIGHT, y2 = to.y;
+    const y1 = from.y + NODE_HEIGHT + CHECKPOINT_HEIGHT, y2 = to.y;
     const middle = (y1 + y2) / 2;
     return `<path class="task-edge relation-${relation}" d="M${x1} ${y1}V${middle}H${x2}V${y2}" marker-end="url(#task-arrow-${relation})"/>`;
   });
   const buttons = nodes.map(({ id, title, position: { x, y }, selected, className, label, meta, topology }) =>
     `<button type="button" class="dev-task ${escape(className)}" style="left:${x}px;top:${y}px;width:${nodeWidth}px;height:${NODE_HEIGHT}px" data-task="${escape(id)}" data-topology="${topology}" data-focus-key="task-${escape(id)}" aria-pressed="${selected}" title="${escape(title)}"><span class="dev-task-top"><span>${escape(id)}</span><span>${escape(label)}</span></span><span class="dev-task-title">${escape(title)}</span><span class="dev-task-meta">${escape(meta)}</span></button>`);
+  const checkpoints = nodes.map(({ position: { x, y }, gateState, gateLabel }) =>
+    `<div class="task-fallback-checkpoint" style="left:${x}px;top:${y + NODE_HEIGHT}px;width:${nodeWidth}px"><span class="task-checkpoint" data-gate-state="${gateState}">验收检查点<span class="task-checkpoint-status">${escape(gateLabel)}</span></span></div>`);
   const markers = ['muted', 'upstream', 'downstream'].map(relation =>
     `<marker id="task-arrow-${relation}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L8 4L0 8Z"/></marker>`);
   return `<div class="task-graph" style="width:${width}px;height:${height}px;transform:scale(${zoom})">
-    ${bands.map(({ count, top, height }, index) => `<div class="task-level-band" style="top:${top}px;height:${height}px"><span class="task-level-caption">依赖层 ${index + 1} · ${count} 项任务</span></div>`).join('')}
     <svg class="task-edges" width="${width}" height="${height}" aria-hidden="true"><defs>${markers.join('')}</defs>${paths.join('')}</svg>
     ${buttons.join('')}
+    ${checkpoints.join('')}
   </div>`;
 }
 
@@ -105,7 +105,7 @@ function loadPositions() {
   } catch { return new Map(); }
 }
 
-export function createTaskOrchestration(host, { escape, onLayoutChange }) {
+export function createTaskOrchestration(host, { escape, onLayoutChange, onChangeDependency, onSaveGraph, onError }) {
   const narrow = matchMedia('(max-width: 850px)');
   narrow.addEventListener('change', onLayoutChange);
   let contextKey = '';
@@ -113,6 +113,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange }) {
   let focusRelations = false;
   let manualZoom = false;
   let centerPending = false;
+  let editingKey = '', editing = false;
   let model, focusedTaskKey, defaultPositions;
   const savedPositions = loadPositions();
   let surface, canvas, observedViewport;
@@ -124,9 +125,11 @@ export function createTaskOrchestration(host, { escape, onLayoutChange }) {
       scheduleNavigator();
     }) : null;
 
-  function render({ key, tasks, selected, simulation, preview, statusNames }) {
+  function render({ key, tasks, selected, simulation, preview, statusNames, execution, editable, dependencyExecution, engineeringReady }) {
+    if (key !== editingKey) { editingKey = key; editing = false; }
+    const editingGraph = editable && editing;
     const graph = buildGraph(tasks);
-    const { positions, ranks, width, height, nodeWidth, bands } = placeTasks(tasks, graph, narrow.matches);
+    const { positions, ranks, width, height, nodeWidth } = placeTasks(tasks, graph, narrow.matches);
     const layoutKey = `${key}/${narrow.matches ? 'narrow' : 'wide'}/${preview ? 'draft' : 'saved'}`;
     defaultPositions = positions;
     const activeElement = document.activeElement;
@@ -144,6 +147,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange }) {
     const changed = new Set(preview?.changedIds);
     const affected = new Set(preview?.downstreamIds);
     const simulated = new Map((simulation?.tasks ?? []).map(task => [task.id, task.status]));
+    const activeTasks = new Map((execution?.tasks ?? []).map(task => [task.id, task]));
     const overrides = savedPositions.get(layoutKey) ?? {};
     const edges = tasks.flatMap(task => graph.dependencies.get(task.id).map((id, index) => ({
       source: id,
@@ -165,22 +169,36 @@ export function createTaskOrchestration(host, { escape, onLayoutChange }) {
       const refs = task.requirementIds ?? [];
       const requirementLabel = refs.length ? refs.slice(0, 2).join(' / ') + (refs.length > 2 ? ` +${refs.length - 2}` : '') : '';
       const meta = requirementLabel || (parents > 1 ? `汇合 ${parents} 条依赖` : children > 1 ? `分出 ${children} 条路径` : parents ? '1 项前置任务' : '起始任务');
+      const observed = activeTasks.get(task.id);
+      const status = observed?.status;
+      const blocked = graph.dependencies.get(task.id).filter(id => activeTasks.get(id)?.status !== 'completed');
+      const gateState = !execution ? 'planned' : status === 'completed' ? 'passed'
+        : ['failed', 'stopped', 'timed_out', 'integration_rework'].includes(status) ? 'failed'
+          : !status || ['pending', 'blocked', 'reconciliation_required'].includes(status) ? 'waiting' : 'checking';
+      const gateLabel = gateState === 'passed' ? '已验收并集成'
+        : gateState === 'failed' ? '未通过 · 后续阻断'
+          : status === 'reconciliation_required' ? '停止或证据待核对'
+            : status === 'verified' || status === 'accepted' ? '已有候选 · 待集成'
+              : gateState === 'checking' ? '任务执行或验收中'
+                : gateState === 'waiting' ? blocked.length ? `等待 ${blocked.join('、')} 通过` : '等待派发' : '验收通过后放行';
       const override = Object.hasOwn(overrides, task.id) ? overrides[task.id] : null;
       const position = Number.isFinite(override?.x) && Number.isFinite(override?.y)
-        ? { x: Math.max(12, Math.min(width - nodeWidth - 12, override.x)), y: Math.max(12, Math.min(height - NODE_HEIGHT - 12, override.y)) }
+        ? { x: Math.max(12, Math.min(width - nodeWidth - 12, override.x)), y: Math.max(12, Math.min(height - NODE_HEIGHT - CHECKPOINT_HEIGHT - 12, override.y)) }
         : positions.get(task.id);
-      return { id: task.id, title: task.title, position, label, meta, topology, selected: active,
+      return { id: task.id, title: task.title, position, label, meta, topology, selected: active, gateState, gateLabel,
         className: [style, relation, active && 'selected'].filter(Boolean).join(' ') };
     });
-    model = { key: layoutKey, nodes, edges, bands, width, height, vertical: true, nodeWidth, nodeHeight: NODE_HEIGHT, zoom,
-      onNodeMove: (id, position) => savePosition(layoutKey, id, position) };
+    model = { key: layoutKey, nodes, edges, width, height, vertical: true, nodeWidth, nodeHeight: NODE_HEIGHT, zoom,
+      editing: editingGraph, onNodeMove: (id, position) => savePosition(layoutKey, id, position),
+      onConnect: (from, to) => { if (layoutKey === contextKey) changeLink(from, to); } };
     const enhanced = typeof window.taskflowTaskCanvas === 'function';
     const diagram = enhanced ? '<div class="task-flow-slot"></div>' : fallbackCanvas(model, escape);
     return {
       nextIds: graph.dependants.get(selected.id),
       html: `<div class="task-graph-zone" data-focus-relations="${focusRelations}">
         <div class="task-orchestration-bar">
-          <div class="task-orchestration-heading"><h3>开发任务依赖图</h3><p>${tasks.length} 项任务 · ${edges.length} 条依赖 · ${bands.length} 层${simulation ? ' · 模拟运行，非真实验收' : ''}</p></div>
+          <div class="task-orchestration-heading"><h3>开发任务依赖图</h3><p>${tasks.length} 项任务 · ${edges.length} 条依赖${simulation ? ' · 模拟运行，非真实验收' : execution ? ' · 真实逐任务执行' : dependencyExecution ? engineeringReady ? ' · 按图运行' : ' · 按图计划，待工程契约' : ' · 编排设计'}</p></div>
+          ${editable ? `<button type="button" class="task-canvas-relations" data-task-canvas="edit-links" data-focus-key="task-canvas-edit-links" aria-pressed="${editingGraph}">编辑连线</button>` : ''}
           <button type="button" class="task-canvas-relations" data-task-canvas="relations" data-focus-key="task-canvas-relations" aria-pressed="${focusRelations}">突出关联</button>
           <div class="task-orchestration-tools" role="group" aria-label="画布缩放">
             <button type="button" data-task-canvas="out" data-focus-key="task-canvas-out" aria-label="缩小">−</button>
@@ -190,6 +208,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange }) {
             ${enhanced ? '<button type="button" data-task-canvas="reset" data-focus-key="task-canvas-reset">恢复节点位置</button>' : ''}
           </div>
         </div>
+        ${editingGraph ? graphEditor(tasks, selected, graph.dependencies.get(selected.id), preview, dependencyExecution) : ''}
         <div class="task-canvas-window">
           <div class="task-graph-scroll" data-plan-canvas role="region" aria-label="开发任务依赖画布" tabindex="0" data-focus-key="task-canvas" data-graph-context="${escape(layoutKey)}" data-graph-width="${width}" data-graph-height="${height}">
             <div class="task-graph-sizer" style="${sizerStyle(width, height, zoom)}">${diagram}</div>
@@ -206,11 +225,42 @@ export function createTaskOrchestration(host, { escape, onLayoutChange }) {
           <div class="task-canvas-legend" aria-label="任务图图例">
             <span class="task-legend-selected">当前任务</span><span class="task-legend-upstream">前置路径</span><span class="task-legend-downstream">后续路径</span>
           </div>
-          ${enhanced ? '<span class="task-canvas-note">拖动节点调整位置，拖动空白平移。</span>' : ''}
+          ${enhanced ? '<span class="task-canvas-note">直接前置通过才放行。拖动任务调整位置，拖动空白平移。</span>' : ''}
         </div>
       </div>`,
     };
   }
+
+  function graphEditor(tasks, selected, parents, preview, dependencyExecution) {
+    const options = (items, current) => items.map(task => `<option value="${escape(task.id)}" ${task.id === current ? 'selected' : ''}>${escape(task.id)} · ${escape(task.title)}</option>`).join('');
+    const canEnableExecution = tasks.length >= 2 && tasks.length <= 8;
+    return `<section class="task-link-editor" aria-label="编辑任务流程">
+      <p>从检查点拖线到后继的顶端，或用下面的选择器添加。保存后请重新确认计划。正式开发还需要当前工程契约和逐任务联合验收清单。</p>
+      <form data-task-link-form class="task-link-fields">
+        <label>起点<select name="source" data-focus-key="task-link-source">${options(tasks, selected.id)}</select></label>
+        <label>后继<select name="target" data-focus-key="task-link-target">${options(tasks, tasks.find(task => task.id !== selected.id)?.id)}</select></label>
+        <button type="submit" class="button button-outline">添加连线</button>
+      </form>
+      ${parents.length ? `<div class="task-link-parents"><span>${escape(selected.id)} 的前置</span>${parents.map(id =>
+        `<button type="button" class="button button-outline" data-link-from="${escape(id)}" data-link-to="${escape(selected.id)}" aria-label="移除 ${escape(id)} 到 ${escape(selected.id)} 的连线">${escape(id)} ×</button>`).join('')}</div>` : ''}
+      <div class="task-link-actions">
+        ${!dependencyExecution ? `<button type="button" class="button button-outline" data-task-canvas="save-design" data-focus-key="task-canvas-save-design" ${!preview?.graphEdited ? 'disabled' : ''}>保存连线</button>` : ''}
+        ${canEnableExecution ? `<button type="button" class="button button-primary" data-task-canvas="save-links" data-focus-key="task-canvas-save-links" ${dependencyExecution && !preview?.graphEdited ? 'disabled' : ''}>保存为按图运行</button>` : '<span>逐任务开发支持 2 至 8 项任务。当前图可以继续保存连线。</span>'}
+      </div>
+      ${preview?.error ? `<p class="inline-error" role="alert">${escape(preview.error)}</p>` : ''}
+    </section>`;
+  }
+
+  function changeLink(source, target, remove = false) {
+    try { onChangeDependency(source, target, remove); } catch (error) { onError(error); }
+  }
+
+  host.addEventListener('submit', event => {
+    if (!event.target.matches('[data-task-link-form]')) return;
+    event.preventDefault();
+    const form = new FormData(event.target);
+    changeLink(form.get('source'), form.get('target'));
+  });
 
   function persistPositions() {
     while (savedPositions.size > 12) savedPositions.delete(savedPositions.keys().next().value);
@@ -336,6 +386,11 @@ export function createTaskOrchestration(host, { escape, onLayoutChange }) {
   }
 
   host.addEventListener('click', event => {
+    const removeLink = event.target.closest('[data-link-from]');
+    if (removeLink) {
+      changeLink(removeLink.dataset.linkFrom, removeLink.dataset.linkTo, true);
+      return;
+    }
     const navigator = event.target.closest('.task-navigator');
     if (navigator) {
       const viewport = navigator.previousElementSibling;
@@ -354,7 +409,12 @@ export function createTaskOrchestration(host, { escape, onLayoutChange }) {
     if (!action) return;
     const viewport = host.querySelector('.task-graph-scroll');
     if (!viewport) return;
-    if (action.dataset.taskCanvas === 'relations') {
+    if (action.dataset.taskCanvas === 'edit-links') {
+      editing = !editing;
+      onLayoutChange();
+    } else if (action.dataset.taskCanvas === 'save-links' || action.dataset.taskCanvas === 'save-design') {
+      void onSaveGraph(action.dataset.taskCanvas === 'save-links').catch(onError);
+    } else if (action.dataset.taskCanvas === 'relations') {
       focusRelations = !focusRelations;
       viewport.closest('.task-graph-zone').dataset.focusRelations = String(focusRelations);
       action.setAttribute('aria-pressed', String(focusRelations));
@@ -376,7 +436,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange }) {
 
   host.addEventListener('pointerdown', event => {
     const viewport = event.target.closest('.task-graph-scroll');
-    if (!viewport || event.pointerType !== 'mouse' || event.button !== 0 || event.target.closest('button')) return;
+    if (!viewport || event.pointerType !== 'mouse' || event.button !== 0 || event.target.closest('button,[data-task-connector]')) return;
     const bounds = viewport.getBoundingClientRect();
     if (event.clientX >= bounds.left + viewport.clientWidth || event.clientY >= bounds.top + viewport.clientHeight) return;
     const { clientX, clientY, pointerId } = event;

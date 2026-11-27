@@ -1,5 +1,13 @@
 # 首版验证记录
 
+## 2026-11-27 按任务图派发与验收检查点
+
+- `npm run ui:build` 和 `npm run check` 通过，覆盖 TypeScript 与 300 个脚本。
+- `task-orchestration-browser`、`simulated-tasks-browser` 与 `team-access-browser` 在真实 Edge 通过 16 项。覆盖 1440px/390px、实际拖线和节点移动、循环阻断、另存设计版及按图版、重新确认、刷新回读、权限与 80 项长链显示。独立预约工程演示在两种宽度显示 7 项任务和 7 个检查点，汇合有两条输入，控制台无错误。
+- `planned-task-parallel.test.mjs` 的隔离子进程套件通过。以真实 Git 和 SQLite 检查快分支的后继在慢分支结束前启动、汇合等待全部前置、失败不放行、已派发任务的终止与成本核对。编码模型、审查模型和业务验收使用夹具。
+- 工程规划、执行服务、验收清单与分组、历史规则、编排 API 的七文件组合通过 185 项，自动交付 HTTP 通过 25 项，工程提案与计划审阅/差异通过 32 项。
+- 未运行全量 `npm test` 或带付费用量的模型交付验收。演示使用独立临时数据。详细命令和边界见 [任务记录](tasks/dependency-workflow.md)。
+
 ## 2026-11-27 旧版布局与可拖动任务图
 
 - `npm run ui:build` 和 `npm run check` 通过，检查包含 TypeScript 和 300 个脚本。

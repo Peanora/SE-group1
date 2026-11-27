@@ -335,7 +335,7 @@ sourceSnapshot为本次运行不可变原文，导出requirements.md也使用该
 - `revise_spec {revision,spec?,answers?:{问题id:答复},feedback?}`：可在两个等待停点修改；校验规格结构及原文引用，回答按服务端问题重建，不信任客户端clarifications。必须有实际内容变化；新版本清除两审批与当前下游结果并回awaiting_spec，历史保留。
 - `reject_spec {revision,feedback}`：记录理由，本版不可再批准；须保存新修订。
 - `approve_plan {revision,specRevision,feedback?}`：仅awaiting_review，规格确认有效、当前计划及结构检查一致后导出。
-- `revise_plan {revision,tasks,feedback?}`：仅awaiting_review，校验真实依赖图、需求映射和非空验收，保存新计划并重新结构检查；非法任务原子拒绝，保留可编辑状态。
+- `revise_plan {revision,tasks,feedback?,dependencyExecution?}` 保存并重新检查当前开发计划。`dependencyExecution:true` 启用按图执行并计入新 `planRevision`。启用的版本要求 2 至 8 项任务、一项含 `src/app.mjs` 的基础入口、一个承接所有路径的最终集成任务、每项明确 `writePaths` 和已知需求。并行任务的写入路径须独立。计划变更继续需要重新确认。
 - `reject_plan {revision,feedback}`：记录理由并阻止批准同版，须实际修订后再确认。
 
 approvals为`{spec:null|{revision,at,feedback},plan:null|{revision,specRevision,at,feedback}}`。specQuestions为`[{id,question,answer,blocking:true}]`；decisions记录`{action,revision,specRevision,at,feedback,newRevision?}`。revisionHistory.spec/plan为已替换版本`{version,revision,specRevision,at,spec,specQuestions,tasks,artifacts,stages,review,approvals}`。确认和修订不会把文档完成升级为代码完成。
@@ -416,6 +416,8 @@ Change含`id/projectId/status/baseRevision/generation/sourceRevision/source/reas
 网页“新增功能”表单将名称、说明和验收条件追加到本地需求草稿，复用上述创建变更与应用接口，不新增直接执行模型的端点。步骤、应用和“重新规划”入口绑定本次所选变更与完整草稿，未保存功能及其他历史记录不能替代本次确认。后端确认当前版本后，用户点击“重新规划”才通过已有创建run接口启动；前端再次核对项目、sourceRevision与generation，规划仍执行原预算和双确认。任务图编辑同样沿用`revise_plan`，本地差异预览不授予保存或执行权限。
 
 `revise_plan` 同时接受当前 `awaiting_review` 计划和已确认的 `succeeded` 计划。后者保存前检查开发、验收定义、预览和在途状态，冲突返回409。保存成功后将原计划与审批存为历史，作废当前计划确认，重新执行覆盖与依赖检查。旧验收定义和执行结果仍绑定原计划，新计划另行确认。
+
+启用 `dependencyExecution` 的当前工程计划只接受已确认且精确覆盖当前任务集的联合清单。缺少 `taskScopes` 或联合定义时，确认或启动会以 `dependency_execution_definition_required` 拒绝，须编辑或导入对应清单。启动沿用计划研发接口。运行 DTO 的 `tasks[].status` 只有 `completed` 可释放列出的直接后继，`verified` 表示独立验收已通过、仍待集成。最终任务用完整统一清单验证。共用文件与 Git 来源校验失败会停止派发。
 
 创建run可选提交`expectedSourceRevision`（64位小写十六进制）和`expectedSourceGeneration`（非负安全整数），必须成对提供，缺失或非法返回400。控制器在项目准入互斥的同步区内比较当前需求双版本；任一不符返回409，尚未创建运行、保存或调用模型。同正文hash但generation已改变也拒绝。网页创建和重新规划均附带用户所见双版本，消除按钮核对与请求处理之间的发布竞争；旧API调用不传两字段时维持原兼容行为。
 

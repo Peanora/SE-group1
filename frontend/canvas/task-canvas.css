@@ -77,8 +77,36 @@
   box-shadow: 0 5px 14px #2433602b;
 }
 
+.task-flow-surface[data-plan-canvas] .plan-task-node {
+  position: relative;
+  display: grid;
+  inline-size: 100%;
+  block-size: 100%;
+}
+
 .task-flow-surface[data-plan-canvas] .react-flow__handle-top { background: #7390b6; }
 .task-flow-surface[data-plan-canvas] .react-flow__handle-bottom { background: #5267b7; }
+
+.task-flow-surface[data-plan-canvas] .plan-task-node[data-editing="true"] > [data-task-connector] {
+  inline-size: 16px;
+  block-size: 16px;
+  z-index: 2;
+  border: 2px solid var(--task-accent);
+  background: var(--task-paper);
+  cursor: crosshair;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.task-flow-surface[data-plan-canvas] .plan-task-node[data-editing="true"] > [data-task-connector]:is(:hover, .valid) {
+  background: var(--task-accent);
+}
+
+.task-flow-surface[data-plan-canvas] .react-flow__connection-path {
+  stroke: var(--task-accent);
+  stroke-width: 2;
+  stroke-dasharray: 4 3;
+}
 
 section.planned-execution .pe-process .pe-graph-canvas[data-renderer="react-flow"] {
   --execution-canvas-accent: #3846ce;

@@ -19,16 +19,20 @@ const config = { baseUrl: 'https://planned-service.synthetic.invalid/v1', model:
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 async function until(read, label = '服务状态') { const end = Date.now() + 5000; for (;;) { const value = await read(); if (value) return value; assert.ok(Date.now() < end, `${label}超时`); await new Promise(done => setTimeout(done, 5)); } }
 function definition() { return { version: 1, id: 'resources', name: '资源定义', sessions: [], steps: [{ id: 'read', type: 'request', requirementIds: ['R1'], dependsOn: [], request: { id: 'get', method: 'GET', path: '/resources', assertions: [{ id: 'ok', op: 'status', value: 200 }] } }], browser: { version: 1, sessions: ['visitor'], steps: [{ id: 'home', session: 'visitor', requirementIds: ['R1'], op: 'goto', path: '/' }, { id: 'list', session: 'visitor', requirementIds: ['R1'], op: 'visible', testId: 'resources', value: true }] } }; }
-function planning() {
+function planning(dependencyExecution = false) {
   const source = { filename: 'requirements.md', content: '用户读取资源列表。' };
   const spec = { title: '资源系统', summary: source.content, goals: ['读取资源'], roles: [], constraints: [], assumptions: [], questions: [], acceptanceScenarios: ['返回资源'], stack: { frontend: 'HTML/CSS/JavaScript', backend: 'Node.js', storage: 'SQLite' }, requirements: [{ id: 'R1', title: '读取', description: source.content, sourceQuote: source.content, acceptance: ['返回列表'] }] };
-  const specRevision = contentRevision(spec), engineeringPlan = validateEngineeringPlan({ spec, binding: { ...ids, specRevision }, proposal: { version: 1, title: '资源工程', summary: '读取接口', entities: [], routes: [{ id: 'resources', method: 'GET', path: '/resources', roles: [], request: '无正文', response: '资源列表', errors: [], requirementIds: ['R1'] }], views: [{ id: 'home', path: '/', title: '资源', requirementIds: ['R1'], selectors: [{ testId: 'resources', role: 'list' }] }], tasks: [{ id: 'implement', title: '实现资源', description: '实现读取', requirementIds: ['R1'], dependsOn: [], writePaths: ['src/app.mjs'], inputs: ['规格'], outputs: ['读取接口'], acceptance: ['可读'] }] } });
+  const base = { id: 'implement', title: '实现资源', description: '实现读取', requirementIds: ['R1'], dependsOn: [], writePaths: ['src/app.mjs'], inputs: ['规格'], outputs: ['读取接口'], acceptance: ['可读'] };
+  const tasks = [base];
+  if (dependencyExecution) tasks.push({ ...base, id: 'integrate', title: '集成资源', dependsOn: [base.id], writePaths: ['docs/README.md'] });
+  const specRevision = contentRevision(spec), engineeringPlan = validateEngineeringPlan({ spec, binding: { ...ids, specRevision }, proposal: { version: 1, title: '资源工程', summary: '读取接口', entities: [], routes: [{ id: 'resources', method: 'GET', path: '/resources', roles: [], request: '无正文', response: '资源列表', errors: [], requirementIds: ['R1'] }], views: [{ id: 'home', path: '/', title: '资源', requirementIds: ['R1'], selectors: [{ testId: 'resources', role: 'list' }] }], tasks } });
   const run = { id: ids.runId, projectId: ids.projectId, workflowVersion: 2, sourceSnapshot: source, sourceRevision: contentRevision(source), sourceGeneration: 0, status: 'succeeded', stages: [], spec, specRevision, specQuestions: [], engineeringPlan, tasks: engineeringTasks(engineeringPlan), artifacts: [{ name: 'architecture.md', content: '读取资源' }], review: { passed: true, issues: [] }, approvals: { spec: { revision: specRevision } } };
+  if (dependencyExecution) run.dependencyExecution = true;
   run.planRevision = planningRevision(run); run.approvals.plan = { revision: run.planRevision, specRevision };
   return { project: { id: ids.projectId, source, currentSourceRevision: run.sourceRevision, sourceGeneration: 0 }, run };
 }
 async function fixture(t, options = {}) {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'planned-service-test-')), data = planning();
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'planned-service-test-')), data = planning(options.dependencyExecution);
   const ledger = [], contexts = [], providerSettings = [], services = [], releases = [], checkpoint = deferred(); let service, verification, row, mode = options.mode ?? 'known', coreCalls = 0, modeCancelled = false;
   const query = sql => { const db = new DatabaseSync(path.join(directory, 'planned', 'planned.sqlite'), { readOnly: true }); try { return db.prepare(sql).all(); } finally { db.close(); } };
   const seedLegacyBudget = () => {
@@ -40,7 +44,7 @@ async function fixture(t, options = {}) {
       return legacy;
     } finally { db.close(); }
   };
-  const verifyReservation = () => { const [budget] = query('SELECT * FROM budgets'); assert.equal(budget.reserved_calls, 6); assert.equal(budget.attempts, coreCalls + 1); ledger.push('reserved-before-core'); };
+  const verifyReservation = () => { const [budget] = query('SELECT * FROM budgets'); assert.equal(budget.reserved_calls, data.run.dependencyExecution ? 12 : 6); assert.equal(budget.attempts, coreCalls + 1); ledger.push('reserved-before-core'); };
   async function openVerification() {
     verification = await createVerificationPlanningService({ rootDir: path.join(directory, 'verification'), getPlanning: () => data, getPlanningSync: () => data, config, timeoutMs: 2000, cleanupMs: 30,
       dependencies: { createModel: () => async input => { const proposal = definition(), usage = { inputTokens: 1, outputTokens: 1 }; await input.onReceipt({ model: config.model, finishReason: 'stop', usage, content: JSON.stringify(proposal) }); return { proposal, usage, model: config.model, policyHash: verificationModelPolicy.hash, coverage: 'structural_only' }; } } });
@@ -104,6 +108,76 @@ test('native admission receives each confirmed requirement body and acceptance, 
   assert.deepEqual(f.contexts[0].requirements, f.data.run.spec.requirements.map(r => ({ id: r.id, text: `${r.title}\n${r.description}\n${r.acceptance.join('\n')}` })));
   assert.ok(f.contexts[0].requirements[0].text.includes('返回列表'));
   assert.deepEqual(f.contexts[0].engineeringContract.routes, f.data.run.engineeringPlan.proposal.routes);
+});
+
+test('explicit graph execution receives the trusted plan only after approval of both classes of checks for every task', async t => {
+  const f = await fixture(t, { dependencyExecution: true, approved: false });
+  const { id: proposalId, revision, proposal, actions, notice } = f.row;
+  assert.equal(actions.canApprove, false);
+  assert.equal(actions.canRevise, true);
+  assert.match(notice, /人工导入 JSON/u);
+  const before = (await f.service.list(ids)).capabilities;
+  assert.equal(before.canStart, false);
+  assert.deepEqual(before.supportedProposalIds, []);
+  assert.match(before.reason, /taskScopes/u);
+  const approval = { ...ids, proposalId, revision, feedback: '核对联合验收定义' };
+  await assert.rejects(f.verification.approve(approval), { code: 'dependency_execution_definition_required' });
+  await assert.rejects(f.service.start(await f.input()), { code: 'dependency_execution_definition_required' });
+  assert.deepEqual(f.query('SELECT * FROM budgets'), []);
+  assert.deepEqual(f.query('SELECT * FROM executions'), []);
+  assert.deepEqual(f.providerSettings, []);
+
+  const grouped = { ...proposal, taskScopes: f.data.run.tasks.map(task => ({ taskId: task.id, httpStepIds: ['read'], browserStepIds: ['list'] })) };
+  const revised = (await f.verification.revise({ ...approval, proposal: grouped })).proposal;
+  assert.equal(revised.actions.canApprove, true);
+  await assert.rejects(f.service.start(await f.input({ revision: revised.revision })), { code: 'dependency_execution_definition_required' });
+  assert.deepEqual(f.query('SELECT * FROM budgets'), []);
+  const approved = (await f.verification.approve({ ...approval, revision: revised.revision })).proposal;
+  const after = (await f.service.list(ids)).capabilities;
+  assert.equal(after.canStart, true);
+  assert.deepEqual(after.supportedProposalIds, [proposalId]);
+  assert.equal(after.budget.attemptModelCalls, 12);
+  await f.service.start(await f.input({ revision: approved.revision }));
+  await f.finished();
+  assert.equal(f.contexts[0].dependencyExecution, true);
+  assert.deepEqual(f.contexts[0].tasks.map(task => [task.id, task.dependsOn]), [['implement', []], ['integrate', ['implement']]]);
+  assert.equal(f.coreCalls(), 1);
+});
+
+test('a newly approved explicit graph can replace an older run budget scope without rewriting history or dropping costs', async t => {
+  const f = await fixture(t);
+  const previousInput = await f.input();
+  await f.service.start(previousInput);
+  await f.finished();
+  const [before] = f.query('SELECT * FROM budgets');
+  const [priorExecution] = f.query('SELECT id,budget FROM executions');
+  assert.equal(before.attempts, 1);
+  assert.equal(before.used_calls, 2);
+  assert.equal(before.reserved_calls, 0);
+  assert.equal(JSON.parse(before.budget).taskLimit, undefined);
+  Object.assign(f.data, planning(true));
+  const fresh = await f.verification.list(ids);
+  assert.equal(fresh.proposals[0].current, false);
+  const proposal = { ...definition(), taskScopes: f.data.run.tasks.map(task => ({ taskId: task.id, httpStepIds: ['read'], browserStepIds: ['list'] })) };
+  const imported = (await f.verification.importDefinition({ ...ids, contractRevision: fresh.capabilities.contractRevision, proposal, feedback: '人工核对每任务定义' })).proposal;
+  const { id: proposalId, revision } = imported;
+  const pending = await f.input({ proposalId, revision });
+  await assert.rejects(f.service.start(pending), { code: 'dependency_execution_definition_required' });
+  await f.verification.approve({ ...ids, proposalId, revision, feedback: '批准当前分组定义' });
+  const current = await f.input({ proposalId, revision });
+  assert.notEqual(current.contractRevision, previousInput.contractRevision);
+  assert.deepEqual(f.query('SELECT * FROM budgets'), [before]);
+  await assert.rejects(f.service.start({ ...current, contractRevision: previousInput.contractRevision }), { code: 'contract_changed' });
+  assert.deepEqual(f.query('SELECT * FROM budgets'), [before]);
+  await f.service.start(current);
+  await until(async () => f.query('SELECT * FROM executions').filter(row => row.status === 'failed').length === 2);
+  const [after] = f.query('SELECT * FROM budgets');
+  assert.equal(after.attempts, 2);
+  assert.equal(after.used_calls, 4);
+  assert.equal(after.reserved_calls, 0);
+  assert.equal(JSON.parse(after.budget).taskLimit, 2);
+  assert.equal(JSON.parse(after.budget).dependencyPlanRevision, f.data.run.planRevision);
+  assert.deepEqual(f.query(`SELECT id,budget FROM executions WHERE id='${priorExecution.id}'`), [priorExecution]);
 });
 
 test('service freezes absent model controls, binds explicit changes in contract and keeps prior budget charges', async t => {

@@ -19,12 +19,18 @@ import { createTaskOrchestration } from '../../public/task-orchestration-view.js
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const escape = (value = '') => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const taskOrchestration = createTaskOrchestration($('#records-body'), { escape, onLayoutChange: () => { if (state.tab === 'tasks') renderRecords(); } });
+const taskOrchestration = createTaskOrchestration($('#records-body'), {
+  escape, onLayoutChange: () => { if (state.tab === 'tasks') renderRecords(); },
+  onChangeDependency: (...values) => { assertEditableTaskGraph(); planningReview.changeDependency(...values); },
+  onSaveGraph: async dependencyExecution => { assertEditableTaskGraph(); await planningReview.saveTaskGraph(dependencyExecution); },
+  onError: error => showError(error, 'tasks'),
+});
 const state = { health: null, projects: [], project: null, run: null, automatic: null, stageId: 'spec', taskId: null, artifactName: 'task.md', tab: 'events', raw: false, busy: false, epoch: 0, selectionPending: false, pollTimer: null, feedback: '', importFile: null, filename: 'requirements.md' };
 wireTaskSchedule($('#records-body'));
 let sourceReadyProject = '';
 let expandedAutomaticRun = '';
 let automaticRetryConsent = null;
+let taskExecutionSignature = '';
 const notices = createWorkspaceNotices({ errorBanner: $('#error-banner'), errorText: $('#error-text'), dismissButton: $('#dismiss-error'), toast: $('#toast'),
   getContext: () => ({ projectId: state.project?.id || '', runId: state.run?.id || '' }), locate: locateWorkspaceProblem });
 const workspaceLayout = createWorkspaceLayout({ getContext: () => ({ projectId: state.selectionPending ? '' : state.project?.id || '', runId: state.run?.id || '', busy: state.busy, runStatus: state.run?.status, historical: historicalRun() }),
@@ -105,7 +111,7 @@ function syncExecutionPanel() {
   if (plannedAvailable && !plannedPanel) {
     plannedPanel = createPlannedExecutionPanel({ api: plannedApi, getContext: executionContext, onError: error => showError(error, 'planned'),
       onFailure: ({ message, context }) => notices.error(message, { source: 'planned', context }),
-      onUpdate: renderDeliveryProgress, openVerification: () => openDeliveryStage('verification'), reviseChecklist: prepareChecklistRevision,
+      onUpdate: () => { renderDeliveryProgress(); updateTaskExecutionView(); }, openVerification: () => openDeliveryStage('verification'), reviseChecklist: prepareChecklistRevision,
       automated: automaticOwnsRun,
       canReviseChecklist: () => !state.busy && !state.selectionPending && (!state.health?.teamAccess?.enabled || state.actorRole === 'owner') });
     plannedContextKey = next; void plannedPanel.mount($('#planned-execution-host'));
@@ -760,6 +766,27 @@ function renderInspector() {
     busy: state.busy, readOnly: historicalRun() || automaticOwnsRun() });
 }
 function emptyContent(icon, title, description) { return `<div class="empty-records">${ICONS[icon] || ICONS.log}<strong>${escape(title)}</strong><p>${escape(description)}</p></div>`; }
+function currentTaskExecution() {
+  const execution = plannedPanel?.workflowProgress().execution;
+  return execution?.executionMode === 'task_dag' && execution.binding?.planRevision === state.run?.planRevision
+    && execution.binding?.specRevision === state.run?.specRevision ? execution : null;
+}
+function updateTaskExecutionView() {
+  const execution = currentTaskExecution();
+  const signature = execution ? JSON.stringify([execution.id, execution.status,
+    execution.tasks.map(task => [task.id, task.status])]) : '';
+  if (signature === taskExecutionSignature) return;
+  taskExecutionSignature = signature;
+  if (state.tab === 'tasks' && !$('#workspace-tasks').hidden) renderRecords();
+}
+function canEditTaskGraph(simulation = simulatedTasks.selection()) {
+  return (!state.health?.teamAccess?.enabled || state.actorRole === 'owner') && !simulation && !historicalRun()
+    && !state.busy && !state.selectionPending && !automaticOwnsRun() && !plannedPanel?.workflowProgress().execution?.active
+    && canEditPlanTasks(state.run);
+}
+function assertEditableTaskGraph() {
+  if (!canEditTaskGraph() || state.tab !== 'tasks' || $('#workspace-tasks').hidden) throw new Error('当前任务图不可修改。');
+}
 function renderTasks() {
   const simulation = simulatedTasks.selection(), preview = simulation ? null : planningReview.taskDraft();
   const owner = !state.health?.teamAccess?.enabled || state.actorRole === 'owner';
@@ -777,7 +804,9 @@ function renderTaskWorkspace(simulation, preview, owner) {
   const run = state.run;
   const version = simulation?.planRevision ?? run.planRevision;
   const key = JSON.stringify([run.id, version, simulation?.id]);
-  const graph = taskOrchestration.render({ key, tasks, selected, simulation, preview, statusNames: SIM_STATUS });
+  const graph = taskOrchestration.render({ key, tasks, selected, simulation, preview, statusNames: SIM_STATUS,
+    execution: simulation || preview ? null : currentTaskExecution(), editable: canEditTaskGraph(simulation),
+    dependencyExecution: run.dependencyExecution === true, engineeringReady: Boolean(run.engineeringPlan) });
   const planConfirmed = Boolean(run.planRevision && run.approvals?.plan?.revision === run.planRevision
     && run.approvals.plan.specRevision === run.specRevision);
   const taskView = state.tab === 'schedule'

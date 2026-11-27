@@ -11,6 +11,7 @@ import * as planner from '../lib/planner.mjs';
 import { createEngineeringModel, engineeringModelPolicy } from '../lib/engineering-model.mjs';
 import { contentRevision, planningRevision } from '../lib/planning-review.mjs';
 import { engineeringTasks } from '../lib/engineering-planner.mjs';
+import { inspectVerificationPlanning } from '../lib/verification-planning-service.mjs';
 
 const config = { baseUrl: 'https://model.invalid/v1', model: 'design-mock', apiKey: 'synthetic-design-secret' };
 const source = '用户能够读取资源并提交预约。';
@@ -244,6 +245,66 @@ test('人工计划编辑同步工程任务及哈希，越写域原子拒绝，�
   assert.deepEqual(x.run, before); await assert.rejects(x.orchestrator.action(x.project.id, x.run.id, { action: 'approve_plan', revision: oldRevision, specRevision: x.run.specRevision }), { status: 409 });
   x.run.engineeringPlan.proposal.routes[0].response = '伪造变化';
   await assert.rejects(approvePlan(x), { status: 409 });
+});
+
+test('显式逐任务计划具有独立哈希、人工重审及可验证的持久快照', async t => {
+  const x = await setup(t);
+  const { project, run, store } = x;
+  await x.approve();
+  await waitFor(() => run.status === 'awaiting_review');
+  const before = structuredClone(run), previousRevision = run.planRevision;
+  const action = (revision, tasks, options = {}) => x.orchestrator.action(project.id, run.id, { action: 'revise_plan', revision, tasks, ...options });
+  await assert.rejects(action(previousRevision, run.tasks, { dependencyExecution: false }), { status: 400 });
+  await assert.rejects(action(previousRevision, run.tasks, { dependencyExecution: true }), error => error.status === 409
+    && error.code === 'unsupported_task_graph' && /2.*8/u.test(error.message));
+  assert.deepEqual(run, before);
+  const tasks = structuredClone(run.tasks);
+  const base = tasks[0];
+  base.writePaths = base.suggestedFiles = ['src/app.mjs'];
+  tasks.push({ ...base, id: 'INTEGRATE', title: '集成页面', dependsOn: [], writePaths: ['public/app.js'], suggestedFiles: ['public/app.js'] });
+  await assert.rejects(action(previousRevision, tasks, { dependencyExecution: true }), error => error.status === 409
+    && error.code === 'unsupported_task_graph' && /基础入口/u.test(error.message));
+  tasks[1].dependsOn = [base.id];
+  const incomplete = structuredClone(tasks);
+  delete incomplete[1].writePaths;
+  await assert.rejects(action(previousRevision, incomplete, { dependencyExecution: true }), error => error.status === 409
+    && error.code === 'unsupported_task_graph' && /writePaths/u.test(error.message));
+  const unassigned = structuredClone(tasks);
+  unassigned[1].requirementIds = [];
+  await assert.rejects(action(previousRevision, unassigned, { dependencyExecution: true }), error => error.status === 409
+    && error.code === 'unsupported_task_graph' && /任务需求/u.test(error.message));
+  await action(previousRevision, tasks, { dependencyExecution: true });
+  await waitFor(() => run.status === 'awaiting_review');
+  const graphRevision = run.planRevision;
+  assert.equal(run.dependencyExecution, true);
+  assert.equal(run.planRevision, planningRevision(run));
+  const { dependencyExecution, ...withoutFlag } = run;
+  assert.equal(dependencyExecution, true);
+  assert.notEqual(graphRevision, planningRevision(withoutFlag));
+  assert.equal(run.approvals.plan, null);
+  assert.deepEqual(run.approvals.spec, before.approvals.spec);
+  assert.equal(run.revisionHistory.plan[0].revision, previousRevision);
+  assert.equal(Object.hasOwn(run.revisionHistory.plan[0], 'dependencyExecution'), false);
+  await assert.rejects(x.orchestrator.action(project.id, run.id, { action: 'approve_plan', revision: previousRevision, specRevision: run.specRevision }), { status: 409 });
+  await assert.rejects(async () => inspectVerificationPlanning(store.getPersistedRun(project.id, run.id), project.id, run.id), { code: 'approval_required' });
+  await approvePlan(x);
+  await waitFor(() => run.status === 'succeeded');
+  assert.equal(JSON.parse(run.artifacts.find(artifact => artifact.name === 'plan.json').content).dependencyExecution, true);
+  const confirmed = inspectVerificationPlanning(store.getPersistedRun(project.id, run.id), project.id, run.id);
+  assert.equal(confirmed.context.task.dependencyExecution, true);
+  assert.deepEqual(confirmed.context.task.tasks[1].dependsOn, [base.id]);
+
+  tasks[1].title = '修订后的集成页面';
+  await action(graphRevision, tasks);
+  await waitFor(() => run.status === 'awaiting_review');
+  assert.equal(run.dependencyExecution, true);
+  assert.notEqual(run.planRevision, graphRevision);
+  const prior = run.revisionHistory.plan.at(-1);
+  assert.equal(prior.dependencyExecution, true);
+  assert.equal(prior.revision, graphRevision);
+  assert.equal(prior.approvals.plan.revision, graphRevision);
+  assert.equal(planningRevision(prior), graphRevision);
+  assert.equal(x.calls(), 1);
 });
 
 test('重启保留完成草案和等待门禁；中断历史标识未知且不退还调用预算', async t => {

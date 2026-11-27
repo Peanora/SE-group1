@@ -116,14 +116,16 @@ function taskErrors(tasks) {
 }
 
 /** Compare a browser draft with its saved plan; this does not grant approval. */
-export function summarizeTaskChanges(savedTasks, draftTasks) {
+export function summarizeTaskChanges(savedTasks, draftTasks, { includeWritePaths = false } = {}) {
   const saved = taskIndex(savedTasks), draft = taskIndex(draftTasks);
   const orderedIds = [...new Set([...draft.keys(), ...saved.keys()])];
+  const editable = includeWritePaths ? [...EDITABLE_FIELDS, ['writePaths', '可写文件']] : EDITABLE_FIELDS;
   const changed = [];
   for (const id of orderedIds) {
     const before = saved.get(id), after = draft.get(id);
-    const fields = EDITABLE_FIELDS.flatMap(([key, label]) => {
-      if (comparable(before?.[key], ['dependsOn', 'requirementIds'].includes(key)) === comparable(after?.[key], ['dependsOn', 'requirementIds'].includes(key))) return [];
+    const fields = editable.flatMap(([key, label]) => {
+      const unordered = ['dependsOn', 'requirementIds', 'writePaths'].includes(key);
+      if (comparable(before?.[key], unordered) === comparable(after?.[key], unordered)) return [];
       return [{ key, label, before: before?.[key], after: after?.[key] }];
     });
     if (fields.length) changed.push({ id, title: after?.title || before?.title || id, fields });

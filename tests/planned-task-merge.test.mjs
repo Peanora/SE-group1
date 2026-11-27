@@ -2,7 +2,7 @@ import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createVerificationControl, compileManifest, compileTaskManifest } from '../lib/verification-contract.mjs';
@@ -34,7 +34,7 @@ if (!process.env.TASKFLOW_TASK_MERGE_CHILD) {
     processes: [{ ...stopped, kind: 'runtime', pid: 2 }, { ...stopped, kind: 'runtime', pid: 3 }, { ...stopped, kind: 'browser', pid: 4 }], checks: browserScenarioChecks(input.manifest.browser).map(rule => ({ ...rule, passed: true })) }) } });
   const { startPlannedWebExecution, isPlannedWebTaskAccepted } = await import('../lib/planned-web-executor.mjs');
   const { createPlannedTaskSeed } = await import('../lib/planned-task-base.mjs');
-  const { inspectPlannedSource } = await import('../lib/planned-source.mjs');
+  const { assertPlannedSource, inspectPlannedSource } = await import('../lib/planned-source.mjs');
   const { mergePlannedTaskCandidates, assertPlannedMergedSource } = await import('../lib/planned-task-merge.mjs');
 
   test('two truly overlapping coding callbacks on distinct clones merge exact source deltas, preserving both native Git parents and no inherited pass', async t => {
@@ -74,5 +74,30 @@ if (!process.env.TASKFLOW_TASK_MERGE_CHILD) {
     await assert.rejects(mergePlannedTaskCandidates({ rootDir: root, sourceRootDir: root, binding, manifest: parent, task, base, candidates: [candidates[0], candidates[0]], assertCurrent: () => true }));
     const wrong = structuredClone(task); wrong.tasks[1].writePaths.push('src/other.mjs');
     await assert.rejects(mergePlannedTaskCandidates({ rootDir: root, sourceRootDir: root, binding, manifest: parent, task: wrong, base, candidates, assertCurrent: () => true }));
+
+    const current = await inspectPlannedSource({ rootDir: root, reportPath: candidates[0].record.reportPath, expectedRecord: candidates[0].record, binding, writablePaths });
+    const integrate = (base, candidateBase, inputs) => mergePlannedTaskCandidates({ rootDir: root, sourceRootDir: root, binding,
+      manifest: parent, task, base, candidateBase, candidates: inputs, assertCurrent: () => true });
+    const rebased = assertPlannedMergedSource(await integrate(current, base, [candidates[1]]), binding, writablePaths);
+    assert.deepEqual(rebased.files, result.files);
+    const secondReport = JSON.parse(await readFile(rebased.provenance.sourceReportPath, 'utf8'));
+    assert.equal(secondReport.base.sourceCommit, candidates[0].record.candidateCommit);
+    assert.equal(secondReport.candidateBase.sourceCommit, scaffold.record.candidateCommit);
+    assert.equal(secondReport.taskAccepted, false);
+    const parents = spawnSync('git', ['rev-list', '--parents', '-n', '1', rebased.provenance.sourceCommit], { cwd: rebased.provenance.sourceWorkspace, encoding: 'utf8', windowsHide: true });
+    assert.equal(parents.status, 0);
+    assert.deepEqual(parents.stdout.trim().split(' '), [rebased.provenance.sourceCommit, candidates[0].record.candidateCommit, candidates[1].record.candidateCommit]);
+    const readBack = () => inspectPlannedSource({ rootDir: root, reportPath: rebased.provenance.sourceReportPath, binding, writablePaths });
+    const reloaded = assertPlannedSource(await readBack(), binding, writablePaths);
+    assert.deepEqual(reloaded.files, rebased.files);
+
+    const alreadyWritten = await run('alpha', { initialSource: base });
+    await assert.rejects(integrate(current, base, [alreadyWritten]));
+    await assert.rejects(integrate(current, current, [candidates[1]]));
+    await assert.rejects(integrate(current, structuredClone(base), [candidates[1]]));
+    await assert.rejects(integrate(current, base, candidates));
+    delete secondReport.candidateBase;
+    await writeFile(rebased.provenance.sourceReportPath, JSON.stringify(secondReport));
+    await assert.rejects(readBack());
   });
 }

@@ -15,6 +15,9 @@ test('任务草稿预览仅比较可编辑内容，忽略依赖和来源排列�
   draft[0].writePaths = ['src/new.mjs'];
   const before = structuredClone({ saved, draft });
   assert.deepEqual(summarizeTaskChanges(saved, draft), { changed: [], downstreamIds: [], errors: [] });
+  const editableFiles = summarizeTaskChanges(saved, draft, { includeWritePaths: true });
+  assert.deepEqual(editableFiles.changed.map(item => item.fields.map(field => field.key)), [['writePaths']]);
+  assert.deepEqual(editableFiles.downstreamIds, ['B', 'C', 'D']);
   assert.deepEqual({ saved, draft }, before);
 });
 

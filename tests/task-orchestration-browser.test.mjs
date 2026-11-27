@@ -143,7 +143,9 @@ for (const width of [1440, 390]) test(`真实 Edge ${width}px：开发任务依�
   assert.ok(await zoomPercent() > 0);
   assert.equal(await canvas.evaluate(element => element.scrollWidth <= element.clientWidth + 1
     && element.scrollHeight <= element.clientHeight + 1), true);
-  assert.equal(await canvas.locator('.task-level-band').count(), 4, '五个任务按真实依赖深度分为四层');
+  const row = id => canvas.locator(`.dev-task[data-task="${id}"]`).evaluate(element => element.getBoundingClientRect().top);
+  assert.equal(await row('B'), await row('C'), '独立分支并列展示');
+  assert.ok(await row('A') < await row('B') && await row('B') < await row('D'), '按实际前置关系向下排布');
 
   const firstTask = root.locator('.dev-task[data-task="A"]');
   await firstTask.click();
@@ -226,6 +228,138 @@ test('真实 Edge 390px：80 项长链可适应到 10% 以下并完整显示', {
   assert.ok(zoom > 0 && zoom < 10);
   assert.equal(await canvas.evaluate(element => element.scrollWidth <= element.clientWidth + 1
     && element.scrollHeight <= element.clientHeight + 1), true);
+});
+
+test('真实 Edge 390px：画布修改直接依赖，保存并重新确认按图执行计划', { timeout: 60000 }, async t => {
+  const planner = { ...simulationPlanner, generateTasks: (...args) => simulationPlanner.generateTasks(...args).map(task => {
+    const files = task.id === 'A' ? ['src/app.mjs'] : task.suggestedFiles;
+    return { ...task, suggestedFiles: files, writePaths: [...files] };
+  }) };
+  const { app, project, run, settled, page, origin } = await fixture(t, { width: 390, planner });
+  const oldRevision = run.planRevision;
+  const specRevision = run.specRevision;
+  await app.orchestrator.action(project.id, run.id, { action: 'approve_plan', revision: oldRevision, specRevision });
+  await until(() => settled('succeeded'), '旧计划确认');
+  const runPath = `/api/projects/${project.id}/runs/${run.id}`;
+  const posts = [];
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('request', request => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname.startsWith(runPath)) posts.push(request.postDataJSON());
+  });
+
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.goto(origin + '/?view=details');
+  const tasksTab = page.getByRole('tab', { name: /开发任务/ });
+  await tasksTab.click();
+  const root = page.locator('.task-orchestration-root');
+  await root.getByText('计划已确认', { exact: true }).waitFor();
+  const canvas = root.locator('.task-graph-scroll[data-plan-canvas]');
+  const node = id => canvas.locator('.plan-task-node').filter({ has: page.locator(`.dev-task[data-task="${id}"]`) });
+  const edge = (from, to) => canvas.locator(`.task-edge[data-from="${from}"][data-to="${to}"]`);
+  const control = name => root.getByRole('button', { name, exact: true });
+  const edit = control('编辑连线');
+  await edit.click();
+  assert.equal(await edit.getAttribute('aria-pressed'), 'true');
+  const editor = root.getByRole('region', { name: '编辑任务流程' });
+  await editor.waitFor();
+  assert.equal(await canvas.locator('.task-checkpoint[data-gate-state="planned"]').count(), 5);
+  const checkpoint = node('D').locator('.task-checkpoint');
+  assert.match(await checkpoint.getAttribute('title'), /直接前置：B、C.*自检、独立 HTTP、Edge 和 Review.*代码集成/);
+  assert.equal(await edge('D', 'E').count(), 1);
+  assert.equal(await edge('A', 'B').evaluate(node => getComputedStyle(node).animationName), 'task-dependency-flow');
+  assert.equal(await edge('D', 'E').evaluate(node => getComputedStyle(node).animationName), 'none');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  assert.equal(await edge('A', 'B').evaluate(node => getComputedStyle(node).animationName), 'none');
+
+  await control('适应画布').click();
+  await canvas.scrollIntoViewIfNeeded();
+  const from = await node('B').locator('[data-task-connector="output"]').boundingBox();
+  const to = await node('E').locator('[data-task-connector="input"]').boundingBox();
+  assert.ok(from && to, '检查点出口与后继入口都在画布上');
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 12 });
+  await page.mouse.up();
+  await edge('B', 'E').waitFor({ state: 'attached' });
+  await root.getByText('计划修订预览', { exact: true }).waitFor();
+  assert.equal(run.planRevision, oldRevision);
+  assert.equal(run.approvals.plan.revision, oldRevision);
+  assert.deepEqual(run.tasks.find(task => task.id === 'E').dependsOn, ['D']);
+
+  const source = editor.getByLabel('起点');
+  const target = editor.getByLabel('后继');
+  await source.selectOption('E');
+  await target.selectOption('A');
+  await editor.getByRole('button', { name: '添加连线' }).press('Enter');
+  await page.getByText('这条连线会形成循环。', { exact: true }).waitFor();
+  assert.equal(await edge('E', 'A').count(), 0);
+  assert.equal(await edge('B', 'E').count(), 1, '循环拒绝保留已存在的合法草稿');
+  await page.locator('#dismiss-error').click();
+
+  await node('E').locator('.dev-task').click();
+  await editor.getByRole('button', { name: '移除 B 到 E 的连线' }).click();
+  await edge('B', 'E').waitFor({ state: 'detached' });
+  assert.equal(await editor.getByRole('button', { name: '移除 D 到 E 的连线' }).isVisible(), true);
+  await source.selectOption('B');
+  await target.selectOption('E');
+  await editor.getByRole('button', { name: '添加连线' }).press('Enter');
+  await edge('B', 'E').waitFor({ state: 'attached' });
+  assert.deepEqual(posts, [], '画布拖连、循环检查和删除只修改当前本地草稿');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+
+  const designSave = page.waitForResponse(response => response.url() === origin + runPath + '/action'
+    && response.request().method() === 'POST');
+  await editor.getByRole('button', { name: '保存连线', exact: true }).click();
+  assert.equal((await designSave).status(), 200);
+  await until(() => run.planRevision !== oldRevision && settled('awaiting_review'), '保存直接依赖的设计版本');
+  const designRevision = run.planRevision;
+  assert.equal(run.dependencyExecution, undefined);
+  assert.deepEqual([...run.tasks.find(task => task.id === 'E').dependsOn].sort(), ['B', 'D']);
+  await tasksTab.click();
+  await control('编辑连线').click();
+  const pendingSave = page.waitForResponse(response => response.url() === origin + runPath + '/action'
+    && response.request().method() === 'POST');
+  await editor.getByRole('button', { name: '保存为按图运行' }).click();
+  const saveResponse = await pendingSave;
+  assert.equal(saveResponse.status(), 200, await saveResponse.text());
+  await until(() => run.planRevision !== designRevision && settled('awaiting_review'), '新任务图保存后重新审阅');
+  const newRevision = run.planRevision;
+  assert.equal(run.dependencyExecution, true);
+  assert.equal(run.approvals.plan, null);
+  assert.equal(run.approvals.spec.revision, specRevision);
+  assert.equal(run.revisionHistory.plan.at(-1).revision, designRevision);
+  assert.deepEqual([...run.tasks.find(task => task.id === 'E').dependsOn].sort(), ['B', 'D']);
+  assert.deepEqual(posts.map(body => [body.action, body.revision, body.dependencyExecution]), [
+    ['revise_plan', oldRevision, undefined],
+    ['revise_plan', designRevision, true],
+  ]);
+
+  await tasksTab.click();
+  await root.getByText('计划待确认', { exact: true }).waitFor();
+  await control('去确认计划').click();
+  await page.getByRole('button', { name: '确认计划并导出', exact: true }).click();
+  await until(() => settled('succeeded'), '新任务图计划确认');
+  assert.deepEqual(posts.map(body => [body.action, body.revision]), [
+    ['revise_plan', oldRevision],
+    ['revise_plan', designRevision],
+    ['approve_plan', newRevision],
+  ]);
+
+  const response = await page.request.get(origin + runPath);
+  assert.equal(response.status(), 200);
+  const { run: saved } = await response.json();
+  assert.equal(saved.planRevision, newRevision);
+  assert.equal(saved.approvals.plan.revision, newRevision);
+  assert.equal(saved.dependencyExecution, true);
+  assert.ok(saved.tasks.every(task => task.requirementIds.includes('R1') && task.writePaths.length > 0));
+  assert.deepEqual([...saved.tasks.find(task => task.id === 'E').dependsOn].sort(), ['B', 'D']);
+  await page.reload();
+  await tasksTab.click();
+  await root.getByText('计划已确认', { exact: true }).waitFor();
+  await edge('B', 'E').waitFor({ state: 'attached' });
+  assert.equal(await edge('D', 'E').count(), 1);
+  assert.deepEqual(errors, []);
 });
 
 test('真实 Edge：评审者可从任务图确认计划，开发入口仍由负责人操作', { timeout: 30000 }, async t => {

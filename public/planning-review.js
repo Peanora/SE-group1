@@ -84,12 +84,13 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
       <div class="review-item-list">${draft.tasks.map((task, index) => index !== selectedIndex ? '' : `<details class="review-item" data-review-details="task-${index}" open>
         <summary><span>${escape(task.id)}</span><strong>${escape(task.title)}</strong><small data-task-change="${escape(task.id)}">${(task.dependsOn || []).length} 项依赖</small></summary>
         <div class="review-item-body">${field('任务标题', `task.${index}.title`, task.title, { max: 300 })}${field('任务描述', `task.${index}.description`, task.description, { multiline: true, rows: 3 })}${field('验收条件', `task.${index}.acceptance`, (task.acceptance || []).join('\n'), { multiline: true, rows: 3, help: '每行一条可检查的条件。' })}
+        ${!run.engineeringPlan ? field('可写文件（每行一个）', `task.${index}.writePaths`, (task.writePaths ?? []).join('\n'), { multiline: true, rows: 3, help: '按图计划需填写精确项目相对路径，如 src/app.mjs。' }) : ''}
         <div class="review-form-grid"><fieldset class="review-choices"><legend>前置任务（勾选后才可开始本任务）</legend>${choices(draft.tasks, index, 'dependsOn', task.dependsOn || [], unavailableDependencies(draft.tasks, task.id))}<small>不能选择自身或其下游任务，避免形成循环。</small></fieldset>
         <fieldset class="review-choices"><legend>关联需求</legend>${choices(run.spec?.requirements || [], index, 'requirementIds', task.requirementIds || [])}<small>每条规格需求至少应关联一项开发任务。</small></fieldset></div>
         <div class="review-source"><strong>需求原文参考</strong>${(run.spec?.requirements || []).map(requirement => `<details><summary>${escape(requirement.id)} ${escape(requirement.title)}</summary><blockquote>${escape(requirement.sourceQuote)}</blockquote></details>`).join('') || '<p>无</p>'}</div></div></details>`).join('')}</div>`;
   }
   function planSummary(run, draft) {
-    const summary = summarizeTaskChanges(run.tasks || [], draft.tasks);
+    const summary = summarizeTaskChanges(run.tasks || [], draft.tasks, { includeWritePaths: !run.engineeringPlan });
     const covered = new Set(draft.tasks.flatMap(task => task.requirementIds || []));
     for (const requirement of run.spec?.requirements || []) if (!covered.has(requirement.id)) summary.errors.push(`需求 ${requirement.id} ${requirement.title} 尚未关联开发任务。`);
     return summary;
@@ -244,7 +245,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
       if (group === 'spec') draft.spec[key] = value;
       if (group === 'stack') { draft.spec.stack ||= {}; draft.spec.stack[key] = value; }
       if (group === 'requirement') draft.spec.requirements[Number(key)][property] = property === 'acceptance' ? lines(value) : value;
-      if (group === 'task') draft.tasks[Number(key)][property] = ['acceptance', 'dependsOn', 'requirementIds'].includes(property) ? lines(value) : value;
+      if (group === 'task') draft.tasks[Number(key)][property] = ['acceptance', 'dependsOn', 'requirementIds', 'writePaths'].includes(property) ? lines(value) : value;
       if (group === 'answer') draft.answers[key] = value;
     }
     persist(draft); syncControls();
@@ -275,9 +276,8 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     if (/外部协作|外部成员/.test(question)) return '建议：首版仅允许项目内已授权成员参与，暂不开放外部协作者。';
     return '建议：首版仅实现原文明确范围；本项暂不扩展，后续变更另行评审。';
   }
-  async function act(action) {
+  async function act(action, draft = currentDraft) {
     const { run, busy } = getState();
-    const draft = currentDraft;
     if (!run || run.sourceSuperseded || !draft || busy || pending) return;
     const legacy = run.workflowVersion !== 2;
     const revisingSpec = isSpecRevisionFromPlan(run, draft.kind);
@@ -308,13 +308,14 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
       if (action === 'approve' && draft.kind === 'spec' && run.spec?.clarificationRequired) { apiAction = 'clarify_spec'; payload.answers = draft.answers; }
       if (draft.kind === 'plan') payload.specRevision = draft.specRevision;
       if (action === 'save') payload = { ...payload, ...(draft.kind === 'spec' ? { spec: draft.spec, answers: draft.answers } : { tasks: draft.tasks }) };
+      if (action === 'save' && draft.kind === 'plan' && draft.dependencyExecution === true) payload.dependencyExecution = true;
     }
     pending = true; syncControls();
     try {
       const savedRun = await submit(apiAction, payload);
       if (action === 'save' || action === 'approve') clearDraft(draft);
       if (revisingSpec && action === 'save') reviewModes.delete(run.id);
-      if (revisingPlan && action === 'save') onPlanRevised();
+      if (action === 'save' && (revisingPlan || draft.graphEdited || draft.dependencyExecution)) onPlanRevised();
       viewKey = ''; render();
       toast(apiAction === 'clarify_spec' ? '回答已保存，正在根据补充信息整理规格' : action === 'save' ? '修订已保存，请核对新版本后单独确认' : action === 'reject' ? '已退回，请修改并保存为新版本' : legacy || draft.kind === 'plan' ? '已确认计划，正在导出规划文档' : '已确认规格，正在生成开发计划');
       return savedRun;
@@ -385,7 +386,38 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     const draft = getDraft(run, 'plan');
     if (!draft.dirty || draft.revision !== run.planRevision || draft.specRevision !== run.specRevision) return null;
     const summary = planSummary(run, draft);
-    return { tasks: draft.tasks, changedIds: summary.changed.map(task => task.id), downstreamIds: summary.downstreamIds };
+    return { tasks: draft.tasks, changedIds: summary.changed.map(task => task.id), downstreamIds: summary.downstreamIds,
+      graphEdited: draft.graphEdited === true, error: draft.error };
   }
-  return { render, openTask, taskDraft };
+
+  function editableGraphDraft() {
+    const { run, busy } = getState();
+    if (busy || pending || !canEditPlanTasks(run)) throw new Error('当前计划暂不可修改。');
+    const draft = getDraft(run, 'plan');
+    if (draft.revision !== run.planRevision || draft.specRevision !== run.specRevision) throw new Error('计划已换版，请核对并载入最新版本。');
+    return draft;
+  }
+
+  function changeDependency(source, target, remove = false) {
+    const draft = editableGraphDraft();
+    const task = draft.tasks.find(item => item.id === target);
+    if (!task || !draft.tasks.some(item => item.id === source) || source === target) throw new Error('请选择两个不同的任务。');
+    if (!remove && unavailableDependencies(draft.tasks, target).has(source)) throw new Error('这条连线会形成循环。');
+    const includes = task.dependsOn.includes(source);
+    if (remove ? !includes : includes) return;
+    task.dependsOn = remove ? task.dependsOn.filter(id => id !== source) : [...task.dependsOn, source];
+    draft.graphEdited = true;
+    draft.dirty = true; draft.error = ''; persist(draft);
+    viewKey = ''; render(); onPlanDraft();
+  }
+
+  async function saveTaskGraph(dependencyExecution) {
+    const draft = editableGraphDraft();
+    draft.dependencyExecution = dependencyExecution; draft.graphEdited = true;
+    draft.dirty = true; draft.error = ''; persist(draft);
+    onPlanDraft();
+    await act('save', draft);
+    onPlanDraft();
+  }
+  return { render, openTask, taskDraft, changeDependency, saveTaskGraph };
 }
