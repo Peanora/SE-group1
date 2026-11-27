@@ -147,6 +147,54 @@ test('each new frozen task-budget field change withdraws previously granted fee 
   assert.equal(await page.evaluate(() => window.requests.filter(r => r.method === 'POST').length), 0);
 });
 
+test('task execution recipe requires renewed consent and shows the frozen recipe for the selected execution', async t => {
+  const page = await pageFor(t, 390);
+  const graphId = 'proposal-graph';
+  await setupTasks(page);
+  await page.evaluate(graphId => {
+    const { dev, definitions } = window.states.a;
+    dev.capabilities.executionRecipes = [{ id: 'sequential', maxConcurrency: 1 }, { id: 'parallel', maxConcurrency: 2 }];
+    dev.capabilities.defaultExecutionRecipeId = 'parallel';
+    dev.capabilities.supportedProposalIds.push(graphId);
+    const graph = structuredClone(definitions.proposals[0]);
+    graph.id = graphId;
+    graph.proposal.name = '逐任务联合清单';
+    graph.proposal.taskScopes = [{ taskId: 'TASK_A' }, { taskId: 'TASK_B' }];
+    definitions.proposals.push(graph);
+  }, graphId);
+  await refresh(page);
+  const definitions = page.getByLabel('已认可的联合验收定义', { exact: true });
+  const recipes = page.getByLabel('执行配方', { exact: true });
+  assert.equal(await recipes.isVisible(), false, '整体清单没有执行配方');
+  await consent(page).check();
+  await definitions.selectOption(graphId);
+  assert.equal(await consent(page).isChecked(), false);
+  assert.equal(await recipes.inputValue(), 'parallel');
+  await consent(page).check();
+  assert.equal(await start(page).isEnabled(), true);
+  await recipes.selectOption('sequential');
+  assert.equal(await consent(page).isChecked(), false);
+  assert.equal(await start(page).isDisabled(), true);
+  assert.match(await page.getByText(/本次最多24次模型调用/u).innerText(), /并发最多1项/u);
+  assert.equal(await page.evaluate(() => window.requests.some(request => request.method === 'POST')), false);
+
+  const row = taskRow({ proposalId: graphId, budget: { ...taskBudget(), executionRecipeId: 'sequential', maxConcurrency: 1 } });
+  await page.evaluate(row => { window.nextPost = row; }, row);
+  await consent(page).check();
+  await start(page).click();
+  await page.getByText(/后端已核对本次执行记录/u).waitFor();
+  const posts = await page.evaluate(() => window.requests.filter(request => request.method === 'POST'));
+  assert.equal(posts.length, 1);
+  assert.deepEqual(posts[0].body, { proposalId: graphId, revision: A, contractRevision: D, executionRecipeId: 'sequential' });
+  const frozen = page.getByText(/本次执行配方：逐项执行（每次 1 项）/u);
+  await frozen.waitFor();
+  await recipes.selectOption('parallel');
+  assert.equal(await frozen.isVisible(), true, '更换下次开发的配方不能改写本次记录');
+  await definitions.selectOption('proposal-1');
+  assert.equal(await recipes.isVisible(), false);
+  assert.equal(await frozen.isVisible(), true);
+});
+
 test('unsupported definitions and invalid task costs cannot enable start or historical delivery', async t => {
   const page = await pageFor(t);
   for (const [name, value] of [['taskLimit', 0], ['taskLimit', 9], ['taskLimit', 1.5], ['attemptModelCalls', 23], ['maxConcurrency', 0], ['maxConcurrency', 3], ['timeoutMs', 3600001], ['remainingModelCalls', 23]]) {

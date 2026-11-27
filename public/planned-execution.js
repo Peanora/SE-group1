@@ -1,5 +1,9 @@
 const HASH = /^[a-f0-9]{64}$/u, ID = /^[A-Za-z0-9_-]{1,128}$/u;
 const MAX_DEVELOPMENT_TIMEOUT_MS = 3600000;
+const EXECUTION_RECIPES = {
+  sequential: { label: '逐项执行（每次 1 项）', maxConcurrency: 1 },
+  parallel: { label: '并行执行（最多 2 项）', maxConcurrency: 2 },
+};
 const WORKING = new Set(['reserved', 'preparing', 'checking_environment', 'generating', 'proposal_rejected', 'self_check', 'validating', 'running', 'merging', 'pause_requested', 'paused', 'paused_recovery_ready', 'recovery_requested']);
 const STATES = { reserved: '已受理，等待准备', preparing: '准备工作区', checking_environment: '检查执行环境', generating: '编码与修订', self_check: '运行编码自检', validating: '独立测试与审查', restoring_delivery: '核对同版本历史交付，未调用模型', accepted: '本次检查已结束', diagnostic_passed: '诊断检查通过，未计为软件验收', failed: '开发执行失败', stopped: '已确认停止', timed_out: '已达到时长上限', cancel_requested: '已请求停止，等待确认', reconciliation_required: '状态待核对，尚未确认停止' };
 Object.assign(STATES, { running: '按依赖执行真实任务', proposal_rejected: '文件建议未通过，正在预算内纠正', merging: '合并已验收候选', pause_requested: '已请求暂停，等待在途任务保存', paused: '已暂停派发新任务', paused_recovery_ready: '安全暂停点已保存，等待恢复', recovery_requested: '正在核对安全暂停点并恢复任务' });
@@ -59,6 +63,10 @@ const contextOf = raw => Object.fromEntries(['projectId', 'runId', 'specRevision
 const keyOf = value => JSON.stringify(value);
 const count = value => Number.isSafeInteger(value) && value >= 0 ? String(value) : '未知';
 const money = ({ amount, currency }) => `${amount} ${currency}`;
+const executionRecipe = (id, maxConcurrency) => Object.hasOwn(EXECUTION_RECIPES, id)
+  && EXECUTION_RECIPES[id].maxConcurrency === maxConcurrency ? EXECUTION_RECIPES[id] : null;
+const recipeMatches = (item, recipe) => !recipe || item?.budget?.executionRecipeId === recipe.id
+  && item.budget.maxConcurrency === recipe.maxConcurrency;
 
 function priceLabel(prices) {
   if (!prices) return '费用估算：未知。未配置模型单价。';
@@ -251,6 +259,14 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
   const definitions = () => proposals?.coverage === 'structural_only' && Array.isArray(proposals.proposals) ? proposals.proposals.filter(item => eligible(item)
     && (!Array.isArray(data?.capabilities?.supportedProposalIds) || data.capabilities.supportedProposalIds.includes(item.id))) : [];
   const selectedDefinition = () => definitions().find(item => item.id === proposalId);
+  function recipesFor(definition) {
+    const scopes = definition?.proposal?.taskScopes, advertised = data?.capabilities?.executionRecipes;
+    if (!Array.isArray(scopes) || scopes.length < 2 || !Array.isArray(advertised)) return [];
+    return Object.keys(EXECUTION_RECIPES).flatMap(id => {
+      const recipe = EXECUTION_RECIPES[id];
+      return advertised.some(item => item?.id === id && item.maxConcurrency === recipe.maxConcurrency) ? [{ id, ...recipe }] : [];
+    });
+  }
   function validBudget() {
     if (automated()) return false;
     const cap = data?.capabilities, budget = cap?.budget;
@@ -333,7 +349,9 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
   function syncContext() {
     const next = contextOf(getContext()), nextKey = keyOf(next); if (nextKey === key) return false;
     remember(); context = next; key = nextKey; epoch++; readSerial++; action = null; pending = null; data = null; proposals = null; fresh = false; loading = false; error = ''; notice = ''; consentKey = ''; previewRead = null;
-    ({ selectedId = '', proposalId = '' } = savedSelections.get(key) ?? {}); if (refs) refs.consent.checked = false; return true;
+    ({ selectedId = '', proposalId = '' } = savedSelections.get(key) ?? {});
+    if (refs) { refs.consent.checked = false; refs.recipeSelect.value = ''; }
+    return true;
   }
   function notifyFailures() {
     if (!fresh || !currentToken({ key, epoch })) return;
@@ -359,10 +377,12 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     const setup = node(openVerification ? 'details' : 'div', null, 'pe-settings');
     const setupContent = openVerification ? node('div') : setup;
     if (openVerification) setup.append(node('summary', '开发设置与费用'), setupContent);
-    const cost = node('p', null, 'pe-note'), definitionSelect = node('select'), consent = node('input'); consent.type = 'checkbox'; const label = node('label', null, 'pe-consent'); label.append(consent, node('span', '我已核对当前规格、联合验收定义、所选执行、模型和冻结预算，同意本次开发或保留代码修复产生模型用量。'));
+    const cost = node('p', null, 'pe-note'), definitionSelect = node('select'), recipeSelect = node('select');
+    const recipeField = field('执行配方', recipeSelect); recipeField.hidden = true;
+    const consent = node('input'); consent.type = 'checkbox'; const label = node('label', null, 'pe-consent'); label.append(consent, node('span', '我已核对当前规格、联合验收定义、所选执行、模型和冻结预算，同意本次开发或保留代码修复产生模型用量。'));
     const start = button('按当前规划开始开发', () => { void perform('start'); }, 'pe-primary');
     const monetary = node('p', '费用估算：未知。实际调用和token用量单独记录。', 'pe-note');
-    setupContent.append(cost, monetary, field('已认可的联合验收定义', definitionSelect), label, start);
+    setupContent.append(cost, monetary, field('已认可的联合验收定义', definitionSelect), recipeField, label, start);
     const scope = section('规格、来源和预算', setupContent), executionSelect = node('select');
     const recordSelect = field('开发执行记录', executionSelect);
     const empty = node('p', '尚无开发执行记录。'), detail = node('div'), result = node('p', null, 'pe-result'), status = node('h3', null, 'pe-status'), failure = node('p', null, 'pe-note pe-error'), facts = node('p'), actions = node('div', null, 'pe-actions');
@@ -439,7 +459,7 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     const events = node('details'), list = node('ol'); events.open = !openVerification; events.append(node('summary', '真实执行日志'), list); detail.append(events);
     body.append(errorBox, noticeBox, executionSummary, state, prepare, setup, empty, detail); root.append(body); host.append(root);
     refs = { refreshButton, state, errorBox, noticeBox, prepare, setup, recordSelect, executionSummary, cost, monetary, definitionSelect, consent, start, scope, executionSelect, empty, detail, result, status, roleMonitor, failure, failureHelp: failureHelpBox, failureTitle, failureDetail, failureNext, prepareRevision, facts, repair, repairInfo, repairNote, repairNoteField, cancel, pause, resume, recover, recoveryNote, download, previewBox, previewStatus, previewInfo, previewStart, previewStop, previewAnchor, process, processTitle, processScope, processMap, focusButton, wholeFlow, inspector, inspectorContext, inspectorTitle, inspectorState, inspectorCause, inspectorCommit, inspectorDependencies, inspectorFacts, inspectorFailures, inspectorFailureList, inspectorFailureMore, inspectorRoles, inspectorRoleDetails, inspectorEvidence, inspectorRaw, matrixSection, matrixBody, matrixNote, taskSection, taskList, graphNote, graphScroll, graphCanvas, commands, commandBody, binding, diff, checks, review, calls, list };
-    Object.assign(refs, { commit, checkValues, repairSettings });
+    Object.assign(refs, { commit, checkValues, repairSettings, recipeField, recipeSelect });
     if (typeof ResizeObserver === 'function') { resizeObserver = new ResizeObserver(() => { if (row() && !destroyed) renderGraph(row()); }); resizeObserver.observe(graphScroll); }
     graphCanvas.addEventListener('click', event => {
       const control = event.target.closest('.pe-task-node');
@@ -457,6 +477,11 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
       if (target) { event.preventDefault(); selectTask(target, true); }
     });
     definitionSelect.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } if (action) return; proposalId = definitionSelect.value; consent.checked = false; remember(); render(); });
+    recipeSelect.addEventListener('change', () => {
+      if (syncContext()) { render(); void refresh(); return; }
+      consent.checked = false;
+      render();
+    });
     executionSelect.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } if (action) return; selectedId = executionSelect.value; selectionEdits++; previewRead = null; remember(); render(); notifyFailures(); void refresh(); });
     consent.addEventListener('change', () => { if (syncContext()) { render(); void refresh(); return; } render(); });
     repairNote.addEventListener('input', () => { consent.checked = false; if (syncContext()) void refresh(); render(); });
@@ -699,19 +724,26 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     refs.setup.hidden = Boolean(openVerification) && (!confirmed() || !candidates.length);
     refs.recordSelect.hidden = Boolean(openVerification) && !rows().length;
     proposalId = options(refs.definitionSelect, candidates.map(item => ({ id: item.id, label: `${item.proposal.name || item.id} · ${item.revision.slice(0, 12)}` })), proposalId, '尚无当前认可的联合验收定义');
+    const definition = selectedDefinition(), recipes = recipesFor(definition);
+    const selectedRecipeId = refs.recipeSelect.value;
+    const recipeId = options(refs.recipeSelect, recipes, recipes.some(item => item.id === selectedRecipeId) ? selectedRecipeId : cap?.defaultExecutionRecipeId, '执行配方不可用');
+    const recipe = recipes.find(item => item.id === recipeId);
+    refs.recipeField.hidden = recipes.length === 0;
+    refs.recipeSelect.disabled = !!action || !!pending || !fresh || !validBudget() || !recipe;
     const latest = latestExecution();
     const preferredExecution = !action && !pending && !selectedId && latest?.createdAt ? latest?.id : null;
     selectedId = options(refs.executionSelect, rows().filter(scoped).map(item => ({ id: item.id, label: `${STATES[item.status] || '未知状态'} · ${item.id}` })), preferredExecution ?? selectedId, '尚无执行记录'); refs.executionSelect.disabled = !!action || !rows().filter(scoped).length;
-    const signature = keyOf([key, cap?.contractRevision, cap?.model, cap?.budget, proposalId, selectedDefinition()?.revision, selectedId, row()?.candidateCommit, row()?.revision, row()?.actions?.canRepair]);
+    const signature = keyOf([key, cap?.contractRevision, cap?.model, cap?.budget, proposalId, definition?.revision, recipe?.id, selectedId, row()?.candidateCommit, row()?.revision, row()?.actions?.canRepair]);
     if (signature !== consentKey) { consentKey = signature; refs.consent.checked = false; }
     const checklistBlocked = checklistBlocksDefinition();
     setText(refs.state, !context.projectId || !context.runId ? '请先选择项目与规划运行。' : !confirmed() ? '请先确认当前规格与开发计划；历史运行只读。' : loading && !data ? '正在读取开发状态与验收定义…' : error ? '读取或操作未确认，请保留选择并刷新核对。' : checklistBlocked ? '当前验收清单需要修订。请查看下方的失败原因与下一步。' : cap?.reason || '只有后端当前版本验收通过后才开放源码下载。');
     refs.errorBox.hidden = !error; setText(refs.errorBox, error); refs.noticeBox.hidden = !notice; setText(refs.noticeBox, notice);
     const attemptLimit = budget?.unlimited === true ? '整份计划可以不限次执行。' : `剩余开发尝试${count(budget?.remainingAttempts)}/${count(budget?.maxAttempts)}，剩余模型调用${count(budget?.remainingModelCalls)}，共享调用总额度${count(budget?.totalModelCalls)}。`;
-    setText(refs.cost, `编码模型：${cap?.model?.name || '尚未确认'}；审查模型：${cap?.model?.reviewName || cap?.model?.name || '尚未确认'}。${budget?.taskLimit ? `最多${count(budget.taskLimit)}项真实任务，每项` : '每次'}编码最多${count(budget?.maxCalls)}次、独立Review最多${count(budget?.maxReviewCalls)}次；${budget?.taskLimit ? `本次最多${count(budget.attemptModelCalls)}次模型调用，并发最多${count(budget.maxConcurrency)}项；` : ''}总时限${Number.isSafeInteger(budget?.timeoutMs) ? `${budget.timeoutMs / 1000}秒` : '未知'}。${attemptLimit}`);
+    setText(refs.cost, `编码模型：${cap?.model?.name || '尚未确认'}；审查模型：${cap?.model?.reviewName || cap?.model?.name || '尚未确认'}。${budget?.taskLimit ? `最多${count(budget.taskLimit)}项真实任务，每项` : '每次'}编码最多${count(budget?.maxCalls)}次、独立Review最多${count(budget?.maxReviewCalls)}次；${budget?.taskLimit ? `本次最多${count(budget.attemptModelCalls)}次模型调用，并发最多${count(recipe?.maxConcurrency ?? budget.maxConcurrency)}项；` : ''}总时限${Number.isSafeInteger(budget?.timeoutMs) ? `${budget.timeoutMs / 1000}秒` : '未知'}。${attemptLimit}`);
     refs.definitionSelect.disabled = !!action || !fresh || !candidates.length; refs.consent.disabled = !!action || !!pending || !fresh || !confirmed() || !validBudget() || !selectedDefinition() || checklistBlocked; refs.start.disabled = !mayStart(); refs.refreshButton.disabled = !!action;
     setText(refs.monetary, priceLabel(cap?.modelPrices));
-    setText(refs.scope, { specRevision: context.specRevision, planRevision: context.planRevision, definition: selectedDefinition() ? { id: proposalId, revision: selectedDefinition().revision, binding: selectedDefinition().binding } : null, budget });
+    setText(refs.scope, { specRevision: context.specRevision, planRevision: context.planRevision, definition: definition ? { id: definition.id, revision: definition.revision, binding: definition.binding } : null,
+      budget: recipe ? { ...budget, executionRecipeId: recipe.id, maxConcurrency: recipe.maxConcurrency } : budget });
     const item = row();
     const settingsTarget = keyOf([key, item?.id]);
     if (openVerification && settingsRecord !== settingsTarget) {
@@ -747,7 +779,8 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
       setText(refs.failureTitle, help.title); setText(refs.failureDetail, help.detail); setText(refs.failureNext, help.nextStep);
       refs.prepareRevision.hidden = !mayReviseChecklist(item);
     }
-    setText(refs.facts, `最近固定的提交 ${item.candidateCommit || '暂无'}。模型调用 ${count(item.totalModelCalls)} 次，输入${count(item.usage?.inputTokens)}、输出${count(item.usage?.outputTokens)} token。${estimateLabel(item.costEstimate)}`);
+    const frozenRecipe = executionRecipe(item.budget?.executionRecipeId, item.budget?.maxConcurrency);
+    setText(refs.facts, `${frozenRecipe ? `本次执行配方：${frozenRecipe.label}。` : ''}最近固定的提交 ${item.candidateCommit || '暂无'}。模型调用 ${count(item.totalModelCalls)} 次，输入${count(item.usage?.inputTokens)}、输出${count(item.usage?.outputTokens)} token。${estimateLabel(item.costEstimate)}`);
     refs.repair.disabled = !mayRepair(item); refs.cancel.disabled = !mayCancel(item); refs.download.hidden = !mayDownload(item); if (!refs.download.hidden) refs.download.href = `${base()}/${encodeURIComponent(item.id)}/download`; else refs.download.removeAttribute('href');
     if (openVerification) { refs.repair.hidden = refs.repairNoteField.hidden; refs.cancel.hidden = !item.active; refs.previewBox.hidden = !passed && !item.preview; }
     const preview = previewOf(item), link = previewLink(item), previewKnown = preview && Object.hasOwn(PREVIEW_STATES, preview.state);
@@ -793,7 +826,8 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
       notice = preview.state === 'running' && preview.active === true ? '后续读取已确认预览运行；地址仍须符合当前版本与安全限制。' : preview.state === 'stopped' && preview.active === false ? '后续读取已确认软件预览停止。' : preview.state === 'reconciliation_required' ? '预览停止状态待核对，请保留记录；不会自动重新启动。' : '后续读取已核对预览请求，请以实际状态为准。';
       pending = null; remember(); return;
     }
-    if (!scoped(item) || item.proposalId !== pending.proposalId || item.revision !== pending.revision || !sameBinding(item) || !Object.hasOwn(STATES, item.status)) return;
+    if (!scoped(item) || item.proposalId !== pending.proposalId || item.revision !== pending.revision || !sameBinding(item)
+      || !Object.hasOwn(STATES, item.status) || !recipeMatches(item, pending.recipe)) return;
     if (pending.kind === 'recover' && (item.binding.sourceRevision !== pending.sourceRevision || item.binding.sourceGeneration !== pending.sourceGeneration
       || ['pause_requested', 'paused', 'paused_recovery_ready', 'recovery_requested'].includes(item.status))) return;
     if (pending.kind === 'cancel' && WORKING.has(item.status)) return;
@@ -821,14 +855,16 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
   async function perform(kind) {
     if (destroyed) return; if (syncContext()) { render(); void refresh(); return; }
     const selected = row(), definition = selectedDefinition(), isPreview = ['preview', 'stop-preview'].includes(kind); if (kind === 'start' ? !mayStart() : kind === 'repair' ? !mayRepair(selected) : kind === 'preview' ? !mayPreview(selected) : kind === 'stop-preview' ? !mayStopPreview(selected) : kind === 'recover' ? !mayRecover(selected) : ['pause', 'resume'].includes(kind) ? !mayTaskControl(selected, kind) : !mayCancel(selected)) return;
-    const token = { epoch, key, kind, selectionEdits, proposalId: kind === 'start' ? definition.id : selected.proposalId, revision: kind === 'start' ? definition.revision : selected.revision,
+    const recipe = kind === 'start' ? recipesFor(definition).find(item => item.id === refs.recipeSelect.value) : null;
+    const token = { epoch, key, kind, selectionEdits, proposalId: kind === 'start' ? definition.id : selected.proposalId, revision: kind === 'start' ? definition.revision : selected.revision, recipe,
       ...(kind === 'recover' ? { sourceRevision: selected.binding.sourceRevision, sourceGeneration: selected.binding.sourceGeneration } : {}) };
     const path = kind === 'start' ? `${base()}/start` : `${base()}/${encodeURIComponent(selected.id)}/${kind}`, body = kind === 'start' ? { proposalId: definition.id, revision: definition.revision, contractRevision: data.capabilities.contractRevision } : kind === 'repair' ? { contractRevision: data.capabilities.contractRevision } : {};
+    if (recipe) body.executionRecipeId = recipe.id;
     if (kind === 'repair' && !refs.repairNoteField.hidden && refs.repairNote.value.trim()) body.repairNote = refs.repairNote.value.trim();
     action = token; pending = null; fresh = false; previewRead = null; readSerial++; clearTimeout(timer); error = ''; notice = ''; if (!isPreview) refs.consent.checked = false; render();
     try {
       const result = await api(path, { method: 'POST', body: JSON.stringify(body) }); if (!currentToken(token) || action !== token) return;
-      if (!scoped(result?.execution) || ['cancel', 'pause', 'resume', 'recover', 'preview', 'stop-preview'].includes(kind) && result.execution.id !== selected.id
+      if (!scoped(result?.execution) || !recipeMatches(result.execution, recipe) || ['cancel', 'pause', 'resume', 'recover', 'preview', 'stop-preview'].includes(kind) && result.execution.id !== selected.id
         || kind === 'recover' && (!sameBinding(result.execution) || result.execution.proposalId !== token.proposalId || result.execution.revision !== token.revision
           || result.execution.binding.sourceRevision !== token.sourceRevision || result.execution.binding.sourceGeneration !== token.sourceGeneration)
         || kind === 'repair' && (result.execution.id === selected.id || result.execution.proposalId !== token.proposalId || result.execution.revision !== token.revision)) throw new Error('操作返回未包含本次完整记录，请刷新核对；不会自动重新发起开发。');

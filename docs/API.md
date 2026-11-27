@@ -178,7 +178,7 @@ Cookie为8小时HttpOnly/SameSite=Strict的随机会话，数据库仅保存令�
 | 方法/后缀 | 请求 | 行为 |
 | --- | --- | --- |
 | GET基础路径 | 无 | `capabilities` 返回当前模型与执行预算的 `contractRevision`，包括每角色 3 次请求和新尝试 60 分钟总时限。`executions` 保留每次实际执行时的冻结预算和状态。 |
-| POST `/start` | 精确`{proposalId,revision,contractRevision}` | 当前联合HTTP+浏览器定义已认可才202创建新记录。SQLite先预留预算，再进入共同检查点/冻结定义并启动编码；不自动开始。 |
+| POST `/start` | `{proposalId,revision,contractRevision}`，逐任务执行可加 `executionRecipeId` | 当前联合HTTP+浏览器定义已认可才202创建新记录。SQLite保存本次配方与预算，再进入共同检查点/冻结定义并启动编码。 |
 | POST `/:id/cancel` | `{}` | 请求停止；本地结束不证明远端终止。未知保持活动及预算预留。 |
 | POST `/:id/pause` | `{}` | 仅当前控制器持有的真实任务图：暂停新批次派发，返回`pause_requested`；在途结果保存后才`paused`。旧执行器/整体编码不支持则409。 |
 | POST `/:id/resume` | `{}` | 仅当前任务图`pause_requested/paused`，继续同版本就绪任务；不直接把失败检查标为通过。 |
@@ -186,6 +186,8 @@ Cookie为8小时HttpOnly/SameSite=Strict的随机会话，数据库仅保存令�
 | GET `/:id/download` | 无 | 当前版本全部验收、阻塞关闭且可信原始结论仍有效才返回源码ZIP；存储JSON或POST通过声明不能授权。 |
 
 `actions.canRepair/canCancel/canDownload`只表示当前后端能力。前端收费动作还需本次预算勾选；POST后通过GET核对新id及定义版本，不能先显示通过。JSON DTO不包含工作区、回执路径、配置凭据或数据库。
+
+有可用的逐任务联合清单时，GET 的 `capabilities.executionRecipes` 返回可选 `{id,maxConcurrency}`，并给出 `defaultExecutionRecipeId`。当前内置 `sequential`（1 项）和 `parallel`（2 项），默认沿用可用上限。未知配方返回 400 `invalid_execution_recipe`。整体执行或预算不覆盖所选配方时返回 409 `execution_recipe_unavailable`。新逐任务记录的 `budget.executionRecipeId` 与 `budget.maxConcurrency` 由服务器冻结。旧调用可省略配方，旧记录可缺少配方编号。客户端只传编号。
 
 同版本交付恢复（当前实现仍在独立验收）：真实原始对象完整通过后，accepted行、私有HMAC封存及本次预算结算在同一SQLite事务保存。重启后的GET列表/下载可以在共同检查点惰性核对当前审批、代码/Git/原始回执/全部策略，再发行仅用于历史交付的私有许可；原任务品牌不重造、不新增模型调用或扣减预算。DTO `checkpoint:{sealed,restored,message}`区分；网页标明恢复历史资格，没有刚重跑测试。校核期间状态`restoring_delivery`持久占用项目槽，未知停止保留待协调；本会话失败不随轮询无变化重复Git。并发下载遇正在恢复可409，待列表核对后再试。
 

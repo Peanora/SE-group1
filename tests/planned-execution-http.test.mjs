@@ -39,14 +39,18 @@ test('development routes derive identity, accept precise data and never turn a s
   const f = stub(), r = await routeFixture(t, f.service), body = { proposalId: 'proposal', revision: 'a'.repeat(64), contractRevision: 'b'.repeat(64) };
   assert.equal((await fetch(r.route)).status, 200);
   assert.equal((await fetch(`${r.route}/start`, post(body))).status, 202);
+  const withRecipe = { ...body, executionRecipeId: 'sequential' };
+  assert.equal((await fetch(`${r.route}/start`, post(withRecipe))).status, 202);
   assert.equal((await fetch(`${r.route}/inert-execution/cancel`, post({}))).status, 200);
   assert.equal((await fetch(`${r.route}/inert-execution/download`)).status, 409);
-  assert.deepEqual(f.calls, [['list', r.identity], ['start', { ...r.identity, ...body }], ['cancel', { ...r.identity, executionId: 'inert-execution' }], ['download', { ...r.identity, executionId: 'inert-execution' }]]);
+  assert.deepEqual(f.calls, [['list', r.identity], ['start', { ...r.identity, ...body }], ['start', { ...r.identity, ...withRecipe }],
+    ['cancel', { ...r.identity, executionId: 'inert-execution' }], ['download', { ...r.identity, executionId: 'inert-execution' }]]);
 });
 
 test('extra capabilities, missing fields and wrong route methods never reach the planned controller', async t => {
   const f = stub(), r = await routeFixture(t, f.service), body = { proposalId: 'proposal', revision: 'a'.repeat(64), contractRevision: 'b'.repeat(64) };
-  for (const extra of ['projectId', 'runId', 'executionId', 'workspace', 'budget', 'provider', 'passed', 'approval']) assert.equal((await fetch(`${r.route}/start`, post({ ...body, [extra]: 'forbidden' }))).status, 400);
+  for (const extra of ['projectId', 'runId', 'executionId', 'workspace', 'budget', 'maxConcurrency', 'provider', 'passed', 'approval']) assert.equal((await fetch(`${r.route}/start`, post({ ...body, [extra]: 'forbidden' }))).status, 400);
+  for (const executionRecipeId of [null, {}, 1, '']) assert.equal((await fetch(`${r.route}/start`, post({ ...body, executionRecipeId }))).status, 400);
   for (const field of Object.keys(body)) { const missing = { ...body }; delete missing[field]; assert.equal((await fetch(`${r.route}/start`, post(missing))).status, 400); }
   assert.equal((await fetch(`${r.route}/inert/cancel`, post({ revision: body.revision }))).status, 400);
   for (const [suffix, options] of [['', post({})], ['/start', {}], ['/inert/cancel', {}], ['/inert/download', post({})]]) assert.ok([404, 405].includes((await fetch(r.route + suffix, options)).status));

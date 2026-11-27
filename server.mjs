@@ -543,7 +543,10 @@ export async function createApp(options = {}) {
           const identity = { projectId, runId };
           if (segments.length === 6 && method === 'GET') return respond(response, 200, await plannedExecutionService.list(identity));
           if (segments.length === 7 && segments[6] === 'start' && method === 'POST') {
-            const body = exactFields(await readJson(request), ['proposalId', 'revision', 'contractRevision']);
+            const body = await readJson(request);
+            const fields = ['proposalId', 'revision', 'contractRevision'];
+            if (Object.hasOwn(body, 'executionRecipeId')) fields.push('executionRecipeId');
+            exactFields(body, fields);
             return respond(response, 202, await plannedExecutionService.start({ ...identity, ...body }, { subject: teamAccess ? teamAccess.executionSubject(request.headers.cookie) : createLocalExecutionSubject() }));
           }
           if (segments.length === 8 && segments[7] === 'cancel' && method === 'POST') {
