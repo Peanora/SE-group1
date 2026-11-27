@@ -40,6 +40,12 @@ test('Edge实际页面：六节点、业务裁决、新规格重审、刷新联�
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.goto(`http://127.0.0.1:${app.server.address().port}`);
   const panel = page.locator('#specification-meeting-host');
+  const heading = panel.getByRole('heading', { name: '多 Agent 规格评审', exact: true });
+  await page.getByRole('button', { name: '处理规格', exact: true }).click();
+  assert.equal(await heading.evaluate(node => document.activeElement === node), true);
+  await page.locator('#delivery-workflow > summary').click();
+  await page.locator('[data-delivery-step="spec-approval"]').click();
+  assert.equal(await heading.evaluate(node => document.activeElement === node), true);
   const livePhase = panel.locator('[data-phase-live="true"]');
   await page.getByRole('button', { name: '启用本版离线评审', exact: true }).click();
   try {

@@ -429,7 +429,9 @@ function renderWorkspaceContext(steps = workflowSteps()) {
     title = '规划还有信息需要确认'; note = '逐题填写，提交后模型会自动核对是否还需要补充。'; action = '查看问题'; kind = 'review';
   } else if (run?.status === 'awaiting_spec') {
     title = specClarificationPending(run) ? '下一步：补充需求信息' : '下一步：核对并确认规格';
-    note = specClarificationPending(run) ? '回答当前问题并保存，再根据回答整理规格。已保存的回答会保留。' : '核对功能规则与验收，保存修订后再确认；确认前不会生成开发计划。';
+    note = specClarificationPending(run) ? '回答当前问题并保存，再根据回答整理规格。已保存的回答会保留。'
+      : $('#specification-meeting-host').hidden ? '核对功能规则与验收，保存修订后再确认；确认前不会生成开发计划。'
+      : '可先查看多 Agent 规格评审。确认规格后，系统才会生成开发计划。';
     action = '处理规格'; kind = 'review';
   } else if (run?.status === 'awaiting_review') {
     title = '下一步：核对开发计划'; note = '任务图和编辑放在“开发任务”。保存修订后仍需确认计划，才能导出文档。'; action = '核对计划'; kind = 'review';
@@ -503,6 +505,11 @@ function focusWorkspaceTarget(target) {
   target.scrollIntoView({ block: 'nearest' });
   target.focus({ preventScroll: true });
 }
+function focusPlanningReview(focusSpecification = false) {
+  const meeting = $('#specification-meeting-host');
+  const heading = focusSpecification && !specClarificationPending() && !meeting.hidden ? $('.sm-header h3', meeting) : null;
+  focusWorkspaceTarget(heading || $('#review-heading') || $('#stage-inspector'));
+}
 function openDeliveryStage(stage) {
   if (state.selectionPending) return;
   if (!state.project) {
@@ -518,7 +525,7 @@ function openDeliveryStage(stage) {
     workspaceLayout.show('plan');
     if (stage === 'spec-approval' && specClarificationPending() && planningIssue.open()) { renderControls(); return; }
     if (stage === 'spec-approval' && run?.approvals?.spec?.revision && run.status !== 'awaiting_spec') { showArtifact('spec.md'); focusWorkspaceTarget($('#records-body')); return; }
-    focusWorkspaceTarget($('#review-heading') || $('#stage-inspector'));
+    focusPlanningReview(stage === 'spec-approval' && run?.status === 'awaiting_spec');
     return;
   }
   workspaceLayout.show('execution');
@@ -575,7 +582,7 @@ function handleWorkspaceNext() {
   workspaceLayout.show('plan');
   if (kind === 'review' && state.run?.planningIssue) { locateWorkspaceProblem({ source: 'planning', stageId: state.run.planningIssue.stageId }); return; }
   if (kind === 'process') { $('#workflow-details').open = true; $('#stage-inspector').setAttribute('tabindex', '-1'); $('#stage-inspector').focus({ preventScroll: true }); }
-  else if (kind === 'review') { const heading = $('#review-heading'); heading?.setAttribute('tabindex', '-1'); heading?.scrollIntoView({ block: 'nearest' }); heading?.focus({ preventScroll: true }); }
+  else if (kind === 'review') focusPlanningReview(state.run?.status === 'awaiting_spec');
   else focusWorkspaceTarget($('#start-automatic').hidden || $('#start-automatic').disabled ? $('#start-run') : $('#start-automatic'));
 }
 async function prepareChecklistRevision(executionId) {
