@@ -14,6 +14,7 @@ import { loginContinuationDraft, loginRevisionNote, loginRevisionTask, previousL
 import { reconcileEndedPreviews } from './lib/preview-output-recovery.mjs';
 import { AGENT_ROLES, createAgentSettings } from './lib/agent-settings.mjs';
 import { createAgentPlanner } from './lib/agent-planner.mjs';
+import { createSpecificationMeetingModels, meetingModelReadiness } from './lib/specification-meeting-model.mjs';
 import { AUTOMATIC_BUDGET, createAutomaticDelivery } from './lib/automatic-delivery.mjs';
 import { repeatedCounterSteps } from './public/verification-draft.js';
 import { contentRevision } from './lib/planning-review.mjs';
@@ -129,6 +130,10 @@ export async function createApp(options = {}) {
     ...(options.specificationTimeoutMs === undefined ? {} : { specificationTimeoutMs: options.specificationTimeoutMs }) });
   orchestrator.specificationMeetingExecutor = options.specificationMeetingExecutor;
   orchestrator.specificationMeetingTimeoutMs = options.specificationMeetingTimeoutMs;
+  const resolveMeetingModel = role => agentSettings.resolve(role);
+  orchestrator.specificationMeetingModels = (callbacks = {}) => createSpecificationMeetingModels({
+    ...callbacks, resolve: resolveMeetingModel, fetchImpl: options.specificationMeetingModelFetch,
+  });
   const executionService = options.executionService === null ? null : options.executionService ?? await (await import('./lib/web-execution-service.mjs')).createWebExecutionService({
     rootDir: path.resolve(options.executionRootDir ?? path.join(store.directory, 'executions')),
     getPlanning: async (projectId, runId) => store.getPersistedRun(projectId, runId),
@@ -301,7 +306,8 @@ export async function createApp(options = {}) {
             agentSettings: { available: true, version: 1 },
             engineeringRouteContractRevision: { available: true, version: 1 },
             planningIssueConversation: { available: true, version: 3 },
-            specificationMeeting: { available: true, version: 2, adapter: 'offline_fixture' },
+            specificationMeeting: { available: true, version: 2, adapter: 'offline_fixture',
+              modelReview: meetingModelReadiness(resolveMeetingModel) },
             automaticDelivery: { available: automaticDelivery.available, ...automaticDelivery.readiness(), ...AUTOMATIC_BUDGET,
               developmentTimeoutMs: plannedExecutionService?.timeoutMs },
             modelPlanning: { engineeringMaxCalls: orchestrator.engineeringMaxCalls, engineeringCallLimit: orchestrator.engineeringMaxCalls !== null, engineeringTimeoutMs: orchestrator.engineeringTimeoutMs,

@@ -15,18 +15,20 @@
 
 ## 多 Agent 规格评审
 
-`GET /api/health` 增加 `specificationMeeting:{available:true,version:2,adapter:"offline_fixture"}`。不调用模型，不改变真实交付门禁。
+`GET /api/health` 提供 `specificationMeeting:{available:true,version:2,adapter:"offline_fixture",modelReview:{available,maxCalls,modelNames?}}`。健康检查只核对本地角色配置。就绪时 `maxCalls` 为单个规划运行的模型评审请求上限。
 
 复用 `POST /api/projects/:projectId/runs/:runId/action`，启用和推进仅在手动 v2 `awaiting_spec` 状态由负责人操作，联合确认沿用原审批权限：
 
-- 启用：`{action:"start_spec_meeting",revision:specRevision,scenario:"reservation"}`；另支持 `reject_review`、`late_review` 离线场景。相同基线不得原样新建轮次以清除阻塞。
-- 推进一步：`{action:"advance_spec_meeting",revision:specRevision,roundId}`。不接受客户端 `passed` 等结论字段。返回最新运行及 `planningIssue`，所有结论由后端产生和保存。
-- 裁决：复用 `answer_planning_issue`，`issueId` 取当前问题，`answers` 为议题ID到准确选项的映射，`continue:false` 保存草稿，`true` 要求全部阻塞已答。新答案生成新规格和新会议；离线问题不允许模型解释请求。
+- 启用使用 `{action:"start_spec_meeting",revision:specRevision,scenario:"reservation"}`。另有 `reject_review`、`late_review` 离线场景，以及可能计费的 `model_review`。显式选择模型模式授权后续提交当前项目材料至配置的服务。选择动作本身发出零次请求。同一基线已有会议时应继续原轮次。启用模型模式后，修订和裁决继续使用模型 Review。
+- 推进使用 `{action:"advance_spec_meeting",revision:specRevision,roundId}`，一次最多通过一个节点。返回最新运行及 `planningIssue`，结论和版本绑定由后端核验。模型请求先保存额度预留，再派发至配置服务。`round.modelRequests` 保存每轮额度、各次预留及角色回执摘要。用量未知表示为 `null`。中断后未结算的预留计入上限。
+- 裁决复用 `answer_planning_issue`。`issueId` 取当前问题，`answers` 为议题 ID 到列出的准确选项的映射，`continue:false` 保存草稿，`true` 要求全部阻塞已答。新答案生成新版规格和会议。
 - 联合确认：`{action:"approve_spec",revision:specRevision,meetingRevision:bundleRevision,feedback}`。已启用会议时缺失联合包版本、自测/必审未通过、旧版本、未关阻塞或包变化均返回409。成功才继续原架构/任务及计划确认。
 
-运行新增 `specReview:{required,currentRoundId,rounds}`。轮次包含 `binding`、`seats`、`coverage`、`proposals`、`issues`、`decisions`、`obligations`、`nodes`、`checklist`、`bundleRevision`、`confirmation`。节点状态为 `pending`、`passed`、`awaiting_review`、`awaiting_user`、`rejected`；轮次还包含 `in_progress`、`waiting`、`blocked`、`awaiting_decision`、`awaiting_confirmation`、`superseded`。缺席/超时返回持久等待，不伪造通过；重试仍用推进动作，退回须实际修订。项目并发操作继续返回409。
+运行包含 `specReview:{required,currentRoundId,rounds}`。新轮次增加 `reviewProtocol:2`、`featureReviews`，专业提案带 `requiredReviewers`、`artifactRevision`、`selfTest`、`reviews` 和 `blocking`。节点可等待、通过或退回，轮次也可等待人工裁决或联合确认。角色缺席、超时、无效回执进入持久等待。重试复用已签收的同版提案证据，退回须实际修订。项目并发操作继续返回 409。
 
-通过原产物接口读取 `spec-review-minutes.json` 和 `stage-review-checklist.json`，并随规划ZIP导出。纪要明确 `kind:offline_fixture`，清单标记 `definitionOnly:true`、逐规则 `executed:false`；确认类型为 `human_confirmation_of_offline_review`。它们不是源码、真实测试或软件交付证据。接口和版本限制见 [详细说明](SPECIFICATION_MEETING.md)。
+可通过现有规格修订保存每条需求的可选 `formatAcceptance`（1 至 20 项，每项至多 1200 字）。逐条定义同时记录当前规格版本、行为、格式、主责、独立席、提交证据、返工和后继。采用提案中的格式定义须绑定同版 Reviewer 通过的提案。缺少具体格式时显示待定义。
+
+通过原产物接口读取 `spec-review-minutes.json`、`stage-review-checklist.json` 和新轮次的 `reviewed-design-specification.json`。规格汇编产物记录权威规格、裁决及已放行专业提案的同版证据。随原规划 ZIP 导出。清单标记 `definitionOnly:true`、逐规则 `executed:false`。确认类型按模式为 `human_confirmation_of_offline_review` 或 `human_confirmation_of_model_review`。接口和版本限制见 [详细说明](SPECIFICATION_MEETING.md)。
 
 ## 自动交付入口
 

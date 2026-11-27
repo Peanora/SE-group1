@@ -59,6 +59,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
   function list(items) { return (items || []).length ? `<ul>${items.map((item) => `<li>${escape(item)}</li>`).join('')}</ul>` : '<p>无</p>'; }
   function specEditor(run, draft) {
     const spec = draft.spec;
+    const formatList = requirement => Array.isArray(requirement.formatAcceptance) ? requirement.formatAcceptance.join('\n') : '';
     const inheritedNote = run.inheritedFrom ? `<p class="review-help">已从上一版运行继承 ${run.inheritedFrom.answerCount} 条已保存回答；新版需求正文优先。带“继承自上一版”的问题已预填，可直接核对或修改。</p>` : '';
     const questionLabel = (q, fallback) => `${q.id}　${q.question}${q.inherited ? '（继承自上一版，可修改）' : fallback ? '（必须回答）' : ''}`;
     if (run.spec?.clarificationRequired) {
@@ -68,7 +69,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
       <section class="review-stack"><strong>${spec.platformDefaults ? '平台默认方案（无需填写）' : '旧版技术配置（请采用平台默认方案）'}</strong><p>${escape(spec.platformDefaults?.description || '当前仅支持平台统一的网页方案；采用后会重新生成规格版本并保留回答。')}</p><details><summary>查看技术配置</summary><p>前端：${escape(spec.stack?.frontend || '待确定')}；服务端：${escape(spec.stack?.backend || '待确定')}；存储：${escape(spec.stack?.storage || '待确定')}</p></details></section>
       <details class="review-context" data-review-details="context"><summary>目标、角色与其他规格内容（只读）</summary><div class="review-context-grid"><div><h4>项目目标</h4>${list(spec.goals)}<h4>用户角色</h4>${list(spec.roles)}</div><div><h4>约束</h4>${list(spec.constraints)}<h4>假设</h4>${list(spec.assumptions)}<h4>验收场景</h4>${list(spec.acceptanceScenarios)}</div></div></details>
       <div class="review-section-heading"><h4>需求与验收</h4><span>${spec.requirements?.length || 0} 项；原文引用保留</span></div>
-      <div class="review-item-list">${(spec.requirements || []).map((requirement, index) => `<details class="review-item" data-review-details="requirement-${index}" ${index === 0 ? 'open' : ''}><summary><span>${escape(requirement.id)}</span><strong>${escape(requirement.title)}</strong></summary><div class="review-item-body">${field('需求标题', `requirement.${index}.title`, requirement.title, { max: 200 })}${field('需求描述', `requirement.${index}.description`, requirement.description, { multiline: true, rows: 3 })}${field('验收条件', `requirement.${index}.acceptance`, (requirement.acceptance || []).join('\n'), { multiline: true, rows: 3, help: '每行一条可检查的条件。' })}<div class="review-source"><strong>原文引用（只读）</strong><blockquote>${escape(requirement.sourceQuote)}</blockquote></div></div></details>`).join('')}</div>
+      <div class="review-item-list">${(spec.requirements || []).map((requirement, index) => `<details class="review-item" data-review-details="requirement-${index}" ${index === 0 ? 'open' : ''}><summary><span>${escape(requirement.id)}</span><strong>${escape(requirement.title)}</strong></summary><div class="review-item-body">${field('需求标题', `requirement.${index}.title`, requirement.title, { max: 200 })}${field('需求描述', `requirement.${index}.description`, requirement.description, { multiline: true, rows: 3 })}${field('验收条件', `requirement.${index}.acceptance`, (requirement.acceptance || []).join('\n'), { multiline: true, rows: 3, help: '每行一条可检查的条件。' })}${run.specReview?.required ? field('格式验收', `requirement.${index}.formatAcceptance`, formatList(requirement), { multiline: true, rows: 2, help: '每行一项，填写需要核对的字段、状态值或界面反馈。' }) : ''}<div class="review-source"><strong>原文引用（只读）</strong><blockquote>${escape(requirement.sourceQuote)}</blockquote></div></div></details>`).join('')}</div>
       <section class="review-questions" aria-labelledby="review-questions-title"><div class="review-section-heading"><h4 id="review-questions-title">待确认问题</h4><span id="review-question-count"></span></div><p class="review-help">逐项写明决定，再点击“保存修订”。保存回答后，仍需单独确认规格。</p>${(run.specQuestions || []).length ? run.specQuestions.map((q, index) => `<div class="review-question">${field(questionLabel(q, q.blocking), `answer.${q.id}`, draft.answers[q.id] || '', { multiline: true, rows: 2, max: 4000 })}<button type="button" class="text-button" data-suggest-answer="${index}">填入推荐回答</button></div>`).join('') : '<p class="review-help">本版没有待确认问题。</p>'}<p class="review-help" id="review-suggestion-note" hidden>推荐回答来自本地规则，只是一项建议。请核对并修改，再自行保存和确认。</p></section>`;
   }
   function planEditor(run, draft) {
@@ -244,7 +245,14 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
       draft.dirty = true;
       if (group === 'spec') draft.spec[key] = value;
       if (group === 'stack') { draft.spec.stack ||= {}; draft.spec.stack[key] = value; }
-      if (group === 'requirement') draft.spec.requirements[Number(key)][property] = property === 'acceptance' ? lines(value) : value;
+      if (group === 'requirement') {
+        const requirement = draft.spec.requirements[Number(key)];
+        if (property === 'formatAcceptance') {
+          const entries = lines(value);
+          if (entries.length) requirement.formatAcceptance = entries;
+          else delete requirement.formatAcceptance;
+        } else requirement[property] = property === 'acceptance' ? lines(value) : value;
+      }
       if (group === 'task') draft.tasks[Number(key)][property] = ['acceptance', 'dependsOn', 'requirementIds', 'writePaths'].includes(property) ? lines(value) : value;
       if (group === 'module') {
         const task = draft.tasks[Number(key)];

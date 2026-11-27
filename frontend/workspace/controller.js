@@ -642,7 +642,8 @@ const planningIssue = createPlanningIssue({
 
 const specificationMeeting = createSpecificationMeeting({ container: $('#specification-meeting-host'),
   getState: () => ({ run: historicalRun() ? { ...state.run, sourceSuperseded: true } : state.run,
-    busy: state.busy || state.selectionPending, canEdit: !state.health?.teamAccess?.enabled || state.actorRole === 'owner' }),
+    busy: state.busy || state.selectionPending, canEdit: !state.health?.teamAccess?.enabled || state.actorRole === 'owner',
+    modelReview: state.health?.specificationMeeting?.modelReview }),
   submit: reviewAction, inspectIssue: () => { workspaceLayout.show('plan'); planningIssue.open(); }, showArtifact });
 
 function renderProjects() {
