@@ -725,11 +725,23 @@
   margin-block: 0 auto;
 }
 
-.task-fallback-checkpoint {
+.task-graph .task-fallback-card {
   position: absolute;
-  display: flex;
-  justify-content: center;
+  display: grid;
+  align-content: center;
+  overflow: hidden;
+  padding: 2px 8px;
+  border: 1px solid var(--task-line);
+  border-radius: 6px;
+  color: var(--task-ink);
+  background: white;
+  text-align: start;
 }
+
+.task-graph .task-fallback-card[data-flow-part="checkpoint"] { background: #e6f4ef; }
+.task-graph .task-fallback-card[data-flow-part="review"] { background: #f1edfa; }
+.task-graph .task-fallback-card:is([data-flow-part="fork"], [data-flow-part="join"]) { background: #ecf0fb; }
+.task-graph .task-fallback-card[aria-pressed="true"] { outline: 2px solid var(--task-accent); }
 
 .task-orchestration-root .task-graph-scroll[data-plan-canvas] .dev-task {
   --task-topology-mark: #a4b6d3;

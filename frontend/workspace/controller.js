@@ -31,6 +31,7 @@ let sourceReadyProject = '';
 let expandedAutomaticRun = '';
 let automaticRetryConsent = null;
 let taskExecutionSignature = '';
+let flowSelection;
 const notices = createWorkspaceNotices({ errorBanner: $('#error-banner'), errorText: $('#error-text'), dismissButton: $('#dismiss-error'), toast: $('#toast'),
   getContext: () => ({ projectId: state.project?.id || '', runId: state.run?.id || '' }), locate: locateWorkspaceProblem });
 const workspaceLayout = createWorkspaceLayout({ getContext: () => ({ projectId: state.selectionPending ? '' : state.project?.id || '', runId: state.run?.id || '', busy: state.busy, runStatus: state.run?.status, historical: historicalRun() }),
@@ -774,7 +775,7 @@ function currentTaskExecution() {
 function updateTaskExecutionView() {
   const execution = currentTaskExecution();
   const signature = execution ? JSON.stringify([execution.id, execution.status,
-    execution.tasks.map(task => [task.id, task.status])]) : '';
+    execution.tasks.map(task => [task.id, task.status, task.stage, task.candidateCommit, task.checks])]) : '';
   if (signature === taskExecutionSignature) return;
   taskExecutionSignature = signature;
   if (state.tab === 'tasks' && !$('#workspace-tasks').hidden) renderRecords();
@@ -806,6 +807,7 @@ function renderTaskWorkspace(simulation, preview, owner) {
   const key = JSON.stringify([run.id, version, simulation?.id]);
   const graph = taskOrchestration.render({ key, tasks, selected, simulation, preview, statusNames: SIM_STATUS,
     execution: simulation || preview ? null : currentTaskExecution(), editable: canEditTaskGraph(simulation),
+    selectedVisual: state.tab === 'tasks' && flowSelection?.key === key ? flowSelection.id : undefined,
     dependencyExecution: run.dependencyExecution === true, engineeringReady: Boolean(run.engineeringPlan) });
   const planConfirmed = Boolean(run.planRevision && run.approvals?.plan?.revision === run.planRevision
     && run.approvals.plan.specRevision === run.specRevision);
@@ -820,19 +822,27 @@ function renderTaskWorkspace(simulation, preview, owner) {
     .filter(([, values]) => Array.isArray(values) && values.length).map(([label, values]) => detailGroup(label, `<ul>${values.map(value => `<li>${escape(value)}</li>`).join('')}</ul>`)).join('');
   const files = (selected.suggestedFiles || []).map(file => `<span class="pill">${escape(file)}</span>`).join('');
   const sourceDetails = sources.map(source => `<div class="task-source-quote"><strong>${escape(source.id)} ${escape(source.title)}</strong><br>${escape(source.sourceQuote || source.description)}</div>`).join('');
+  const part = graph.inspected;
+  const partTitle = { agent: '编码智能体', self: '自检工具', http: '接口验收工具', browser: '浏览器验收工具', review: '审查智能体', checkpoint: '验收检查点', fork: '工作流分支', join: '工作流汇合' };
+  const isAgent = part.kind === 'agent';
+  const checks = ['generating', 'proposal_rejected'].includes(graph.observed?.stage) ? undefined : graph.observed?.checks?.[part.step];
+  const checkDetails = Array.isArray(checks) && checks.length
+    ? detailGroup('已记录的检查', `<ul>${checks.map(check => `<li>${check.passed === true ? '通过' : check.passed === false ? '未通过' : '待核对'} · ${escape(check.name || check.id || check.testId || '用例')}</li>`).join('')}</ul>`) : '';
   return `${renderTaskHandoff(run, simulation, preview, owner)}
     <div class="task-workspace">
       ${taskView}
-      <aside class="task-detail" aria-label="所选任务详情">
+      <aside class="task-detail" aria-label="所选任务详情" data-inspected-step="${escape(part.step)}">
         <div class="task-detail-summary">
-          <p class="task-detail-id">${escape(selected.id)} / ${escape(selected.category || '开发任务')}</p>
-          <h3>${escape(selected.title)}</h3><p>${escape(selected.description)}</p>
-          ${simulatedTasks.detail(selected.id)}
+          <p class="task-detail-id">${escape(partTitle[part.step] || part.label)} · ${escape(selected.id)}</p>
+          <h3>${escape(isAgent ? selected.title : part.title)}</h3><p>${escape(isAgent ? selected.description : part.roleHelp)}</p>
+          ${isAgent ? simulatedTasks.detail(selected.id) : ''}
         </div>
+        ${!isAgent ? detailGroup('所属任务', taskLinks([selected.id], '')) : ''}
+        ${!isAgent && graph.observed ? detailGroup('当前状态', `<p>${escape(part.gateLabel)}</p>`) + checkDetails : ''}
         ${detailGroup('前置任务', '<div>' + taskLinks(selected.dependsOn || [], '无前置任务') + '</div>')}
         ${detailGroup('后续任务', '<div>' + taskLinks(graph.nextIds, '无后续任务') + '</div>')}
         ${detailGroup('验收条件', '<ul>' + (selected.acceptance || []).map(item => '<li>' + escape(item) + '</li>').join('') + '</ul>')}
-        ${files ? detailGroup('建议文件', '<div>' + files + '</div>') : ''}${boundary}
+        ${isAgent && files ? detailGroup('建议文件', '<div>' + files + '</div>') : ''}${isAgent ? boundary : ''}
         ${detailGroup('需求来源', sourceDetails || '<p>基础工程或集成验证任务</p>')}
       </aside>
     </div>`;
@@ -1265,10 +1275,14 @@ document.addEventListener('click', (event) => {
   const stage = event.target.closest('[data-stage]'); if (stage) { state.stageId = stage.dataset.stage; renderWorkflow(); renderInspector(); }
   const handoff = event.target.closest('[data-task-handoff]');
   if (handoff) { openDeliveryStage(handoff.dataset.taskHandoff); return; }
-  const task = event.target.closest('[data-task]');
+  const task = event.target.closest('[data-task],[data-flow-node]');
   if (task) {
-    state.taskId = task.dataset.task; renderRecords(); rememberSelection();
-    if (!task.classList.contains('dev-task') && !task.hasAttribute('data-task-schedule')) taskOrchestration.revealSelected();
+    state.taskId = task.dataset.ownerTask ?? task.dataset.task;
+    const simulation = simulatedTasks.selection();
+    flowSelection = task.dataset.flowNode ? { id: task.dataset.flowNode,
+      key: JSON.stringify([state.run.id, simulation?.planRevision ?? state.run.planRevision, simulation?.id]) } : null;
+    renderRecords(); rememberSelection();
+    if (!task.hasAttribute('data-flow-node') && !task.hasAttribute('data-task-schedule')) taskOrchestration.revealSelected();
   }
   const artifact = event.target.closest('[data-artifact]'); if (artifact) showArtifact(artifact.dataset.artifact);
   const tab = event.target.closest('[data-tab]'); if (tab) { state.tab = tab.dataset.tab; renderRecords(); }

@@ -1,9 +1,6 @@
-const NODE_HEIGHT = 100;
-const CHECKPOINT_HEIGHT = 36;
-const ROW_STEP = 204;
-const PADDING = 46;
-const TOP_PADDING = 32;
-const POSITION_KEY = 'taskflow.canvas.positions';
+import { projectWorkflow } from './task-workflow-layout.js';
+
+const ORDER_KEY = 'taskflow.workflow.slotOrder.v1';
 const zoomLabel = zoom => `${Number((zoom * 100).toFixed(zoom < .01 ? 2 : zoom < .1 ? 1 : 0))}%`;
 const sizerStyle = (width, height, zoom) => `width:${Math.ceil(width * zoom)}px;height:${Math.ceil(height * zoom)}px`;
 
@@ -33,76 +30,26 @@ function reached(graph, root) {
   return ids;
 }
 
-function placeTasks(tasks, { dependencies, dependants }, narrow) {
-  const nodeWidth = narrow ? 216 : 228;
-  const laneStep = nodeWidth + (narrow ? 48 : 66);
-  const pending = new Map(tasks.map(task => [task.id, dependencies.get(task.id).length]));
-  const levels = new Map();
-  const queue = [...pending].filter(([, count]) => !count).map(([id]) => id);
-  for (let index = 0; index < queue.length; index++) {
-    const id = queue[index];
-    for (const next of dependants.get(id)) {
-      levels.set(next, Math.max(levels.get(next) ?? 0, (levels.get(id) ?? 0) + 1));
-      pending.set(next, pending.get(next) - 1);
-      if (pending.get(next) === 0) queue.push(next);
-    }
-  }
-  const columns = [];
-  for (const task of tasks) {
-    // Imported or draft graphs can contain cycles. Keep those nodes visible for inspection.
-    const level = pending.get(task.id) ? 0 : levels.get(task.id) ?? 0;
-    (columns[level] ??= []).push(task.id);
-  }
-  const rows = Math.max(...columns.map(column => column.length));
-  const width = Math.max(narrow ? 318 : 524, PADDING * 2 + nodeWidth + (rows - 1) * laneStep);
-  const height = Math.max(348, TOP_PADDING + (columns.length - 1) * ROW_STEP + NODE_HEIGHT + CHECKPOINT_HEIGHT + TOP_PADDING);
-  const lanes = new Map();
-  for (const column of columns) {
-    // Keep branches near their immediate parents and use the input order to break ties.
-    const rank = new Map(column.map(id => {
-      const parents = dependencies.get(id).map(parent => lanes.get(parent)).filter(Number.isFinite);
-      return [id, parents.length ? parents.reduce((sum, lane) => sum + lane, 0) / parents.length : 0];
-    }));
-    column.sort((a, b) => rank.get(a) - rank.get(b));
-    column.forEach((id, index) => lanes.set(id, index - (column.length - 1) / 2));
-  }
-  const ranks = new Map();
-  const positions = new Map(columns.flatMap((column, level) => column.map((id, row) => {
-    const x = (width - nodeWidth) / 2 + (row - (column.length - 1) / 2) * laneStep;
-    const y = TOP_PADDING + level * ROW_STEP;
-    ranks.set(id, level);
-    return [id, { x, y }];
-  })));
-  return { positions, ranks, width, height, nodeWidth };
-}
-
-function fallbackCanvas({ nodes, edges, width, height, nodeWidth, zoom }, escape) {
-  const positions = new Map(nodes.map(node => [node.id, node.position]));
-  const paths = edges.map(({ source, target, relation }) => {
-    const from = positions.get(source), to = positions.get(target);
-    const x1 = from.x + nodeWidth / 2, x2 = to.x + nodeWidth / 2;
-    const y1 = from.y + NODE_HEIGHT + CHECKPOINT_HEIGHT, y2 = to.y;
-    const middle = (y1 + y2) / 2;
-    return `<path class="task-edge relation-${relation}" d="M${x1} ${y1}V${middle}H${x2}V${y2}" marker-end="url(#task-arrow-${relation})"/>`;
+function fallbackCanvas(model, escape) {
+  const byId = new Map(model.nodes.map(node => [node.id, node]));
+  const paths = model.edges.map(edge => {
+    const from = byId.get(edge.source), to = byId.get(edge.target);
+    const x1 = from.position.x + from.width / 2, x2 = to.position.x + to.width / 2;
+    const y1 = from.position.y + from.height, y2 = to.position.y;
+    const route = edge.channel == null ? `V${(y1 + y2) / 2} H${x2}` : `v8 H${edge.channel} V${y2 - 8} H${x2}`;
+    return `<path d="M${x1} ${y1} ${route} V${y2}" fill="none" stroke="currentColor" marker-end="url(#taskflow-end)"/>`;
   });
-  const buttons = nodes.map(({ id, title, position: { x, y }, selected, className, label, meta, topology }) =>
-    `<button type="button" class="dev-task ${escape(className)}" style="left:${x}px;top:${y}px;width:${nodeWidth}px;height:${NODE_HEIGHT}px" data-task="${escape(id)}" data-topology="${topology}" data-focus-key="task-${escape(id)}" aria-pressed="${selected}" title="${escape(title)}"><span class="dev-task-top"><span>${escape(id)}</span><span>${escape(label)}</span></span><span class="dev-task-title">${escape(title)}</span><span class="dev-task-meta">${escape(meta)}</span></button>`);
-  const checkpoints = nodes.map(({ position: { x, y }, gateState, gateLabel }) =>
-    `<div class="task-fallback-checkpoint" style="left:${x}px;top:${y + NODE_HEIGHT}px;width:${nodeWidth}px"><span class="task-checkpoint" data-gate-state="${gateState}">验收检查点<span class="task-checkpoint-status">${escape(gateLabel)}</span></span></div>`);
-  const markers = ['muted', 'upstream', 'downstream'].map(relation =>
-    `<marker id="task-arrow-${relation}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L8 4L0 8Z"/></marker>`);
-  return `<div class="task-graph" style="width:${width}px;height:${height}px;transform:scale(${zoom})">
-    <svg class="task-edges" width="${width}" height="${height}" aria-hidden="true"><defs>${markers.join('')}</defs>${paths.join('')}</svg>
-    ${buttons.join('')}
-    ${checkpoints.join('')}
-  </div>`;
+  const cards = model.nodes.map(node => {
+    const { x, y } = node.position;
+    const agent = node.kind === 'agent';
+    return `<button type="button" class="task-fallback-card ${agent ? 'dev-task' : ''} ${escape(node.className)}" style="left:${x}px;top:${y}px;width:${node.width}px;height:${node.height}px" data-focus-key="task-${escape(node.id)}" data-flow-node="${escape(node.id)}" data-flow-part="${node.kind}" data-owner-task="${escape(node.taskId)}" ${agent ? `data-task="${escape(node.taskId)}"` : ''} aria-pressed="${node.selected}"><small>${escape(agent ? '编码智能体' : node.label)}</small><strong>${escape(node.title)}</strong></button>`;
+  });
+  return `<div class="task-graph" style="width:${model.width}px;height:${model.height}px;transform:scale(${model.zoom})"><svg class="task-edges" width="${model.width}" height="${model.height}" aria-hidden="true"><defs><marker id="taskflow-end" viewBox="0 0 8 8" refX="7" refY="4" orient="auto" markerWidth="6" markerHeight="6"><path d="M0 0L8 4L0 8Z" fill="currentColor"/></marker></defs>${paths.join('')}</svg>${cards.join('')}</div>`;
 }
 
-function loadPositions() {
-  try {
-    const saved = JSON.parse(sessionStorage.getItem(POSITION_KEY));
-    return new Map(Array.isArray(saved) ? saved : []);
-  } catch { return new Map(); }
+function loadOrder() {
+  try { return new Map(JSON.parse(sessionStorage.getItem(ORDER_KEY)) ?? []); }
+  catch { return new Map(); }
 }
 
 export function createTaskOrchestration(host, { escape, onLayoutChange, onChangeDependency, onSaveGraph, onError }) {
@@ -114,8 +61,9 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
   let manualZoom = false;
   let centerPending = false;
   let editingKey = '', editing = false;
-  let model, focusedTaskKey, defaultPositions;
-  const savedPositions = loadPositions();
+  let orderKey;
+  let model, focusedTaskKey;
+  const savedOrder = loadOrder();
   let surface, canvas, observedViewport;
   let navigatorFrame, navigatorMap, navigatorNodes;
   const viewportObserver = typeof ResizeObserver === 'function'
@@ -125,15 +73,14 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
       scheduleNavigator();
     }) : null;
 
-  function render({ key, tasks, selected, simulation, preview, statusNames, execution, editable, dependencyExecution, engineeringReady }) {
+  function render({ key, tasks, selected, simulation, preview, statusNames, execution, editable, dependencyExecution, engineeringReady, selectedVisual }) {
     if (key !== editingKey) { editingKey = key; editing = false; }
     const editingGraph = editable && editing;
     const graph = buildGraph(tasks);
-    const { positions, ranks, width, height, nodeWidth } = placeTasks(tasks, graph, narrow.matches);
     const layoutKey = `${key}/${narrow.matches ? 'narrow' : 'wide'}/${preview ? 'draft' : 'saved'}`;
-    defaultPositions = positions;
+    orderKey = `${key}/${preview ? 'draft' : 'saved'}`;
     const activeElement = document.activeElement;
-    focusedTaskKey = layoutKey === contextKey && host.contains(activeElement) && activeElement.matches('.dev-task')
+    focusedTaskKey = layoutKey === contextKey && host.contains(activeElement) && activeElement.matches('[data-flow-node]')
       ? activeElement.dataset.focusKey : null;
     if (layoutKey !== contextKey) {
       contextKey = layoutKey;
@@ -148,12 +95,9 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
     const affected = new Set(preview?.downstreamIds);
     const simulated = new Map((simulation?.tasks ?? []).map(task => [task.id, task.status]));
     const activeTasks = new Map((execution?.tasks ?? []).map(task => [task.id, task]));
-    const overrides = savedPositions.get(layoutKey) ?? {};
-    const edges = tasks.flatMap(task => graph.dependencies.get(task.id).map((id, index) => ({
+    const edges = tasks.flatMap(task => graph.dependencies.get(task.id).map(id => ({
       source: id,
       target: task.id,
-      channel: ranks.get(task.id) - ranks.get(id) === 1 ? null
-        : (positions.get(id).x + positions.get(task.id).x + nodeWidth < width ? 20 + index % 3 * 6 : width - 20 - index % 3 * 6),
       relation: upstream.has(id) && upstream.has(task.id) ? 'upstream'
         : downstream.has(id) && downstream.has(task.id) ? 'downstream' : 'muted',
     })));
@@ -162,7 +106,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
       const relation = active ? '' : upstream.has(task.id) ? 'relation-upstream' : downstream.has(task.id) ? 'relation-downstream' : 'relation-muted';
       const simulationStatus = simulated.get(task.id);
       const draftStatus = changed.has(task.id) ? 'draft-changed' : affected.has(task.id) ? 'draft-downstream' : '';
-      const label = simulationStatus ? statusNames[simulationStatus] : changed.has(task.id) ? '未保存改动' : affected.has(task.id) ? '下游待核对' : task.category || '开发';
+      const label = simulationStatus ? statusNames[simulationStatus] : changed.has(task.id) ? '未保存改动' : affected.has(task.id) ? '下游待核对' : '';
       const style = simulationStatus ? `sim-${simulationStatus}` : draftStatus;
       const parents = graph.dependencies.get(task.id).length, children = graph.dependants.get(task.id).length;
       const topology = parents > 1 ? 'join' : parents === 0 ? 'root' : children === 0 ? 'finish' : 'task';
@@ -181,23 +125,27 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
             : status === 'verified' || status === 'accepted' ? '已有候选 · 待集成'
               : gateState === 'checking' ? '任务执行或验收中'
                 : gateState === 'waiting' ? blocked.length ? `等待 ${blocked.join('、')} 通过` : '等待派发' : '验收通过后放行';
-      const override = Object.hasOwn(overrides, task.id) ? overrides[task.id] : null;
-      const position = Number.isFinite(override?.x) && Number.isFinite(override?.y)
-        ? { x: Math.max(12, Math.min(width - nodeWidth - 12, override.x)), y: Math.max(12, Math.min(height - NODE_HEIGHT - CHECKPOINT_HEIGHT - 12, override.y)) }
-        : positions.get(task.id);
-      return { id: task.id, title: task.title, position, label, meta, topology, selected: active, gateState, gateLabel,
-        className: [style, relation, active && 'selected'].filter(Boolean).join(' ') };
+      return { id: task.id, title: task.title, label, meta, topology, selected: active, gateState, gateLabel, observed,
+        className: [style, relation].filter(Boolean).join(' ') };
     });
-    model = { key: layoutKey, nodes, edges, width, height, vertical: true, nodeWidth, nodeHeight: NODE_HEIGHT, zoom,
-      editing: editingGraph, onNodeMove: (id, position) => savePosition(layoutKey, id, position),
+    const layout = projectWorkflow({ tasks, graph, nodes, edges, narrow: narrow.matches, order: savedOrder.get(orderKey) });
+    const inspected = layout.nodes.find(node => node.id === selectedVisual && node.taskId === selected.id)
+      ?? layout.nodes.find(node => node.id === selected.id);
+    for (const node of layout.nodes) {
+      node.selected = node === inspected;
+      if (node.selected) node.className += ' selected';
+    }
+    const { width, height } = layout;
+    model = { ...layout, key: layoutKey, vertical: true, zoom,
+      editing: editingGraph, onNodeMove: (id, position) => reorderByPosition(layoutKey, id, position.x),
       onConnect: (from, to) => { if (layoutKey === contextKey) changeLink(from, to); } };
     const enhanced = typeof window.taskflowTaskCanvas === 'function';
     const diagram = enhanced ? '<div class="task-flow-slot"></div>' : fallbackCanvas(model, escape);
     return {
-      nextIds: graph.dependants.get(selected.id),
+      inspected, observed: activeTasks.get(selected.id), nextIds: graph.dependants.get(selected.id),
       html: `<div class="task-graph-zone" data-focus-relations="${focusRelations}">
         <div class="task-orchestration-bar">
-          <div class="task-orchestration-heading"><h3>开发任务依赖图</h3><p>${tasks.length} 项任务 · ${edges.length} 条依赖${simulation ? ' · 模拟运行，非真实验收' : execution ? ' · 真实逐任务执行' : dependencyExecution ? engineeringReady ? ' · 按图运行' : ' · 按图计划，待工程契约' : ' · 编排设计'}</p></div>
+          <div class="task-orchestration-heading"><h3>开发工作流</h3><p>${tasks.length} 项任务 · ${edges.length} 条依赖${simulation ? ' · 模拟运行，非真实验收' : execution ? ' · 真实逐任务执行' : dependencyExecution ? engineeringReady ? ' · 按图运行' : ' · 按图计划，待工程契约' : ' · 编排设计'}</p></div>
           ${editable ? `<button type="button" class="task-canvas-relations" data-task-canvas="edit-links" data-focus-key="task-canvas-edit-links" aria-pressed="${editingGraph}">编辑连线</button>` : ''}
           <button type="button" class="task-canvas-relations" data-task-canvas="relations" data-focus-key="task-canvas-relations" aria-pressed="${focusRelations}">突出关联</button>
           <div class="task-orchestration-tools" role="group" aria-label="画布缩放">
@@ -225,7 +173,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
           <div class="task-canvas-legend" aria-label="任务图图例">
             <span class="task-legend-selected">当前任务</span><span class="task-legend-upstream">前置路径</span><span class="task-legend-downstream">后续路径</span>
           </div>
-          ${enhanced ? '<span class="task-canvas-note">直接前置通过才放行。拖动任务调整位置，拖动空白平移。</span>' : ''}
+          ${enhanced ? '<span class="task-canvas-note">拖动同层智能体可换位，也可按 Alt + ← / →。拖动空白平移。</span>' : ''}
         </div>
       </div>`,
     };
@@ -262,19 +210,35 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
     changeLink(form.get('source'), form.get('target'));
   });
 
-  function persistPositions() {
-    while (savedPositions.size > 12) savedPositions.delete(savedPositions.keys().next().value);
-    try { sessionStorage.setItem(POSITION_KEY, JSON.stringify([...savedPositions])); } catch { /* In-memory positions remain usable. */ }
+  function persistOrder() {
+    while (savedOrder.size > 12) savedOrder.delete(savedOrder.keys().next().value);
+    try { sessionStorage.setItem(ORDER_KEY, JSON.stringify([...savedOrder])); } catch { /* Session storage is optional. */ }
   }
 
-  function savePosition(key, id, position) {
-    if (key !== contextKey) return;
-    const current = savedPositions.get(key) ?? {};
-    savedPositions.delete(key);
-    savedPositions.set(key, { ...current, [id]: position });
-    persistPositions();
-    model = { ...model, nodes: model.nodes.map(node => node.id === id ? { ...node, position } : node) };
-    scheduleNavigator();
+  function moveToSlot(id, targetIndex) {
+    if (!model.nodes.some(node => node.id === id && node.movable)) return;
+    const rank = model.ranks.get(id), slots = model.orders[rank];
+    const index = slots?.indexOf(id) ?? -1;
+    if (index < 0 || targetIndex < 0 || targetIndex >= slots.length || targetIndex === index) return;
+    const next = model.orders.map(row => [...row]);
+    [next[rank][index], next[rank][targetIndex]] = [next[rank][targetIndex], id];
+    savedOrder.delete(orderKey);
+    savedOrder.set(orderKey, next);
+    persistOrder();
+  }
+
+  function reorderByPosition(key, id, x) {
+    if (key !== contextKey || !Number.isFinite(x)) return;
+    const slots = model.orders[model.ranks.get(id)];
+    if (!slots?.includes(id)) return;
+    const byId = new Map(model.nodes.map(node => [node.id, node.position.x]));
+    let nearest = slots.indexOf(id);
+    slots.forEach((other, index) => {
+      if (Math.abs(byId.get(other) - x) < Math.abs(byId.get(slots[nearest]) - x)) nearest = index;
+    });
+    moveToSlot(id, nearest);
+    // Re-render even when a drop must snap back into its original slot.
+    onLayoutChange();
   }
 
   function viewportGeometry(viewport) {
@@ -287,7 +251,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
     const viewport = observedViewport;
     if (!viewport?.isConnected || !viewport.clientWidth) return;
     const map = viewport.parentElement.querySelector('.task-navigator-map');
-    const { width, height, nodes, nodeWidth, nodeHeight } = model;
+    const { width, height, nodes } = model;
     if (map !== navigatorMap || nodes !== navigatorNodes) {
       navigatorMap = map;
       navigatorNodes = nodes;
@@ -295,7 +259,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
         const { x, y } = node.position;
         const state = node.selected ? 'selected' : node.className.includes('relation-upstream') ? 'upstream'
           : node.className.includes('relation-downstream') ? 'downstream' : 'other';
-        return `<rect data-map-task="${escape(node.id)}" data-relation="${state}" x="${x}" y="${y}" width="${nodeWidth}" height="${nodeHeight}" rx="14"></rect>`;
+        return `<rect ${node.kind === 'agent' ? 'data-map-task' : 'data-map-flow'}="${escape(node.id)}" data-kind="${node.kind}" data-relation="${state}" x="${x}" y="${y}" width="${node.width}" height="${node.height}" rx="5"></rect>`;
       }).join('');
     }
     const visible = viewportGeometry(viewport);
@@ -345,7 +309,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
     canvas.render(model);
     fitWidth(viewport);
     if (focusedTaskKey) {
-      Array.from(surface.querySelectorAll('.dev-task')).find(node => node.dataset.focusKey === focusedTaskKey)?.focus({ preventScroll: true });
+      Array.from(surface.querySelectorAll('[data-flow-node]')).find(node => node.dataset.focusKey === focusedTaskKey)?.focus({ preventScroll: true });
       focusedTaskKey = null;
     }
   }
@@ -419,11 +383,9 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
       viewport.closest('.task-graph-zone').dataset.focusRelations = String(focusRelations);
       action.setAttribute('aria-pressed', String(focusRelations));
     } else if (action.dataset.taskCanvas === 'reset') {
-      savedPositions.delete(contextKey);
-      persistPositions();
-      model = { ...model, nodes: model.nodes.map(node => ({ ...node, position: defaultPositions.get(node.id) })) };
-      canvas?.render(model);
-      scheduleNavigator();
+      savedOrder.delete(orderKey);
+      persistOrder();
+      onLayoutChange();
     } else if (action.dataset.taskCanvas === 'fit') {
       manualZoom = true;
       const fit = Math.min(viewport.clientWidth / Number(viewport.dataset.graphWidth), viewport.clientHeight / Number(viewport.dataset.graphHeight), 1);
@@ -469,6 +431,14 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
       return;
     }
     const node = event.target.closest('.dev-task');
+    if (node && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && ['ArrowLeft', 'ArrowRight'].includes(event.key)) {
+      event.preventDefault();
+      const id = node.dataset.task;
+      const index = model.orders[model.ranks.get(id)].indexOf(id);
+      moveToSlot(id, index + (event.key === 'ArrowLeft' ? -1 : 1));
+      onLayoutChange();
+      return;
+    }
     if (!node || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     const nodes = Array.from(node.closest('.task-graph-scroll').querySelectorAll('.dev-task'));
     let index = nodes.indexOf(node);

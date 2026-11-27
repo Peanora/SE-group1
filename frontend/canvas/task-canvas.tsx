@@ -1,7 +1,9 @@
 import { memo, useId, useMemo, useState, type PointerEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
-import { CircleCheck, CircleDot, CircleX, Clock3, Grip, Shield } from 'lucide-react';
+import {
+  Bot, CircleCheck, CircleDot, CircleX, ClipboardCheck, Clock3, GitBranch, GitMerge, Globe, Grip, Monitor, Shield, Wrench,
+} from 'lucide-react';
 import {
   BaseEdge, getBezierPath, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow,
   type Connection, type Edge, type EdgeProps, type Node, type NodeProps, type OnNodesChange, type XYPosition,
@@ -11,8 +13,10 @@ import './task-canvas.css';
 
 type Relation = 'muted' | 'upstream' | 'downstream';
 type GateState = 'planned' | 'waiting' | 'checking' | 'passed' | 'failed';
-
-const CHECKPOINT_HEIGHT = 36;
+type PlanKind = 'agent' | 'tool' | 'review' | 'checkpoint' | 'fork' | 'join';
+type PlanRole = 'coding' | 'self' | 'http' | 'browser' | 'review' | 'checkpoint' | 'fork' | 'join';
+type Side = 'bottom' | 'top' | 'left' | 'right';
+type EdgeMotion = 'selected' | 'active';
 
 type NodeIdentity = {
   id: string;
@@ -22,17 +26,27 @@ type NodeIdentity = {
 };
 
 type PlanNode = NodeIdentity & {
+  taskId: string;
+  kind: PlanKind;
+  role?: PlanRole;
+  roleHelp?: string;
   label: string;
   className: string;
   meta: string;
-  topology: 'root' | 'task' | 'join' | 'finish';
+  width?: number;
+  height?: number;
+  rank: number;
+  movable: boolean;
   gateState?: GateState;
   gateLabel?: string;
-  inputs?: number;
-  outputs?: number;
 };
 
-type PlanTask = PlanNode & { editing: boolean; parents: string[]; children: number };
+type PlanTask = PlanNode & {
+  editing: boolean;
+  inputs: Side[];
+  outputs: Side[];
+  parents: string[];
+};
 
 type ExecutionNode = NodeIdentity & {
   status: string;
@@ -41,9 +55,19 @@ type ExecutionNode = NodeIdentity & {
   focused: boolean;
 };
 
-type PlanDependency = { relation: Relation; channel: number | null };
-type DependencyData = (PlanDependency & { gateState: GateState; motion?: 'selected' | 'active' }) | { focused: boolean; vertical: boolean };
-type CanvasEdge = { source: string; target: string } & (PlanDependency | { focused: boolean });
+type PlanDependency = {
+  relation: Relation;
+  channel?: number | null;
+  fromTask?: string;
+  toTask?: string;
+  caption?: string;
+  internal: boolean;
+  sourceSide?: Side;
+  targetSide?: Side;
+};
+type DependencyData = (PlanDependency & { gateState: GateState; motion?: EdgeMotion }) | { focused: boolean; vertical: boolean };
+type CanvasEdge = { id?: string; source: string; target: string } & (PlanDependency | { focused: boolean });
+type PlanGroup = { rank: number; title: string; top: number; height: number; left: number; width: number; count: number };
 
 type CanvasModel = {
   nodes: (PlanNode | ExecutionNode)[];
@@ -54,6 +78,7 @@ type CanvasModel = {
   nodeWidth: number;
   nodeHeight: number;
   zoom: number;
+  groups?: PlanGroup[];
   variant?: 'execution';
   key?: string;
   onNodeMove?: (id: string, position: XYPosition) => void;
@@ -63,13 +88,29 @@ type CanvasModel = {
 
 type TaskNode = Node<PlanTask | ExecutionNode, 'task'>;
 type DependencyEdge = Edge<DependencyData, 'dependency'>;
+type Move = { model: CanvasModel; taskId: string; dx: number; dragging: boolean };
 
+const sidePositions: Record<Side, Position> = {
+  top: Position.Top, bottom: Position.Bottom, left: Position.Left, right: Position.Right,
+};
 const markerColors: Record<Relation, string> = {
-  muted: '#7e8eae',
+  muted: '#7685a1',
   upstream: '#197d79',
   downstream: '#3846ce',
 };
-
+const roles = {
+  agent: { kicker: '编码智能体', icon: Bot },
+  tool: { kicker: '工具步骤', icon: Wrench },
+  review: { kicker: '审查智能体', icon: ClipboardCheck },
+  checkpoint: { kicker: '验收检查点', icon: Shield },
+  fork: { kicker: '分叉', icon: GitBranch },
+  join: { kicker: '汇合', icon: GitMerge },
+};
+const toolRoles = {
+  self: { kicker: '本地工具', icon: Wrench },
+  http: { kicker: '接口工具', icon: Globe },
+  browser: { kicker: '网页工具', icon: Monitor },
+};
 const gatePresentation = {
   planned: { label: '待验收', icon: Shield },
   waiting: { label: '待检查', icon: Clock3 },
@@ -77,11 +118,12 @@ const gatePresentation = {
   passed: { label: '通过并集成', icon: CircleCheck },
   failed: { label: '失败，后续阻断', icon: CircleX },
 };
+const gateHelp = '同一代码版本的自检、独立 HTTP、Edge 和 Review 均通过且完成代码集成后，才释放后续任务。';
 
 const stopCanvasPan = (event: PointerEvent) => event.stopPropagation();
 
 const TaskCard = memo(function TaskCard({ data, sourcePosition, targetPosition }: NodeProps<TaskNode>) {
-  if (!('status' in data)) return <PlanCard data={data} />;
+  if ('kind' in data) return <PlanCard data={data} />;
   return (
     <>
       <Handle type="target" position={targetPosition ?? Position.Left} isConnectable={false} />
@@ -92,40 +134,62 @@ const TaskCard = memo(function TaskCard({ data, sourcePosition, targetPosition }
 });
 
 function PlanCard({ data }: { data: PlanTask }) {
-  const checkpointId = useId();
-  const gateState = data.gateState ?? 'planned';
-  const { icon: GateIcon, label } = gatePresentation[gateState];
-  const gateLabel = data.gateLabel || label;
-  const inputs = data.inputs ?? data.parents.length;
-  const outputs = data.outputs ?? data.children;
-  const branch = [inputs > 1 ? `汇合 ${inputs} 项` : '', outputs > 1 ? `分叉 ${outputs} 路` : ''].filter(Boolean).join(' / ');
-  const prerequisites = inputs ? `直接前置：${data.parents.join('、') || inputs}` : '无直接前置任务';
-  const gateHelp = '确认同一代码版本的自检、独立 HTTP、Edge 和 Review 均通过且完成代码集成后，才释放后续任务。';
+  const { kind, taskId, selected, editing, movable, gateState = 'planned' } = data;
+  const tool = data.role === 'self' || data.role === 'http' || data.role === 'browser' ? toolRoles[data.role] : null;
+  const role = tool ?? roles[kind];
+  const agent = kind === 'agent';
+  const checkpoint = kind === 'checkpoint';
+  const junction = kind === 'fork' || kind === 'join';
+  const status = checkpoint ? data.gateLabel || gatePresentation[gateState].label
+    : agent ? data.label || (gateState !== 'planned' ? data.gateLabel : '') : gateState !== 'planned' ? data.label : '';
+  const PartIcon = checkpoint ? gatePresentation[gateState].icon : role.icon;
+  const cardTitle = checkpoint ? '' : junction ? data.label : kind === 'review' ? '同版本代码审查' : data.title;
+  const detail = agent ? data.meta : '';
+  const explanation = checkpoint ? `直接前置：${data.parents.join('、') || '无'}。${gateHelp}` : data.roleHelp;
+  const title = [role.kicker, cardTitle, status, data.meta, explanation].filter(Boolean).join(' · ');
+
   return (
-    <div className="plan-task-node" data-editing={data.editing} style={{ gridTemplateRows: `minmax(0, 1fr) ${CHECKPOINT_HEIGHT}px` }}>
-      <button type="button" className={`dev-task ${data.className}`} data-task={data.id}
-        data-topology={data.topology} data-focus-key={`task-${data.id}`} aria-pressed={data.selected}
-        aria-describedby={checkpointId} title={data.title}>
-        <span className="dev-task-top"><span><Grip className="dev-task-grip" aria-hidden="true" />{data.id}</span><span>{data.label}</span></span>
-        <span className="dev-task-title">{data.title}</span>
-        <span className="dev-task-meta">
-          {branch && <span className="dev-task-topology" title={prerequisites}>{branch}</span>}
-          <span className="dev-task-context" title={data.meta}>{data.meta}</span>
+    <div className="plan-task-node" data-movable={agent && movable} data-editing={editing}>
+      <button
+        type="button"
+        className={`task-flow-card ${agent ? 'dev-task ' : ''}${data.className ?? ''}`}
+        data-flow-node={data.id}
+        data-flow-part={kind}
+        data-flow-role={data.role}
+        data-owner-task={taskId}
+        data-flow-rank={data.rank}
+        data-task={agent ? taskId : undefined}
+        data-gate-state={gateState}
+        data-focus-key={agent ? `task-${taskId}` : `task-flow-${data.id}`}
+        aria-pressed={selected}
+        aria-description={explanation}
+        title={title}
+      >
+        <span className="task-flow-card-kicker">
+          <PartIcon aria-hidden="true" />
+          <span>{role.kicker}{agent && <small>{taskId}</small>}</span>
+          {agent && movable && <Grip className="dev-task-grip" aria-hidden="true" />}
         </span>
+        {cardTitle && <span className={`task-flow-card-title${agent ? ' dev-task-title' : ''}`}>{cardTitle}</span>}
+        {(status || detail) && <span className="task-flow-card-meta">
+          {status && <span className="task-flow-card-status">{status}</span>}
+          {detail && <span className="task-flow-card-detail">{detail}</span>}
+        </span>}
       </button>
-      <div className="task-checkpoint" data-gate-state={gateState} id={checkpointId}
-        title={`验收检查点：${gateLabel}。${prerequisites}。${gateHelp}`}>
-        <GateIcon aria-hidden="true" />
-        <span>验收检查点</span>
-        <span className="task-checkpoint-status"> {gateLabel}</span>
-        <span className="visually-hidden">。{prerequisites}。{gateHelp}</span>
-      </div>
-      <Handle id="input-top" type="target" position={Position.Top} isConnectable={data.editing}
-        isConnectableStart={false} data-task-connector="input" onPointerDown={stopCanvasPan} />
-      <Handle id="output-bottom" type="source" position={Position.Bottom} isConnectable={data.editing}
-        isConnectableEnd={false} data-task-connector="output" onPointerDown={stopCanvasPan} />
-      <Handle id="input-left" type="target" position={Position.Left} isConnectable={false} />
-      <Handle id="input-right" type="target" position={Position.Right} isConnectable={false} />
+      {data.inputs.map(side => {
+        const eligible = agent && side === 'top';
+        return <Handle key={side} id={`input-${side}`} type="target" position={sidePositions[side]}
+          isConnectable={eligible && editing} isConnectableStart={false}
+          data-task-connector={eligible ? 'input' : undefined} data-owner-task={eligible ? taskId : undefined}
+          onPointerDown={eligible ? stopCanvasPan : undefined} />;
+      })}
+      {data.outputs.map(side => {
+        const eligible = checkpoint && side === 'bottom';
+        return <Handle key={side} id={`output-${side}`} type="source" position={sidePositions[side]}
+          isConnectable={eligible && editing} isConnectableEnd={false}
+          data-task-connector={eligible ? 'output' : undefined} data-owner-task={eligible ? taskId : undefined}
+          onPointerDown={eligible ? stopCanvasPan : undefined} />;
+      })}
     </div>
   );
 }
@@ -156,31 +220,56 @@ function roundedPath(points: XYPosition[]) {
     + `L${pointAt(points[points.length - 1])}`;
 }
 
+function outsideHandle(x: number, y: number, position: Position) {
+  const offset = 14;
+  return {
+    x: x + (position === Position.Left ? -offset : position === Position.Right ? offset : 0),
+    y: y + (position === Position.Top ? -offset : position === Position.Bottom ? offset : 0),
+  };
+}
+
 const Dependency = memo(function Dependency(props: EdgeProps<DependencyEdge>) {
   const { data, source, target, markerEnd } = props;
   const execution = data && 'focused' in data ? data : null;
   const plan = data && 'relation' in data ? data : null;
-  // Handle measurements can differ by a fraction of a pixel when a zoomed chart remounts.
+  // Handle coordinates can differ fractionally when the zoomed chart remounts.
   const coordinate = (value: number) => plan ? Math.round(value * 10) / 10 : value;
   const [sourceX, sourceY, targetX, targetY] = [props.sourceX, props.sourceY, props.targetX, props.targetY].map(coordinate);
-  // Route the narrow execution graph through a left gutter to keep dependencies clear of cards.
-  const channel = plan?.channel;
-  const path = typeof channel === 'number' ? roundedPath([
-    { x: sourceX, y: sourceY }, { x: sourceX, y: sourceY + 15 },
-    { x: channel, y: sourceY + 15 }, { x: channel, y: targetY - 15 },
-    { x: targetX, y: targetY - 15 }, { x: targetX, y: targetY },
-  ]) : plan ? getSmoothStepPath({ ...props, sourceX, sourceY, targetX, targetY, borderRadius: 9, offset: 14 })[0]
-    : execution?.vertical ? `M${sourceX},${sourceY} H10 V${targetY} H${targetX}` : getBezierPath(props)[0];
+  let path: string;
+  let labelX: number | undefined;
+  let labelY: number | undefined;
+  if (plan && typeof plan.channel === 'number') {
+    const sourceExit = outsideHandle(sourceX, sourceY, props.sourcePosition);
+    const targetEntry = outsideHandle(targetX, targetY, props.targetPosition);
+    path = roundedPath([{ x: sourceX, y: sourceY }, sourceExit, { x: plan.channel, y: sourceExit.y },
+      { x: plan.channel, y: targetEntry.y }, targetEntry, { x: targetX, y: targetY }]);
+    labelX = plan.channel;
+    labelY = (sourceExit.y + targetEntry.y) / 2;
+  } else if (plan) {
+    [path, labelX, labelY] = getSmoothStepPath({ ...props, sourceX, sourceY, targetX, targetY, borderRadius: 9, offset: 12 });
+  } else {
+    path = execution?.vertical ? `M${sourceX},${sourceY} H10 V${targetY} H${targetX}` : getBezierPath(props)[0];
+  }
+
   return (
     <BaseEdge
-      className={execution ? 'pe-flow-edge' : `task-edge relation-${plan?.relation ?? 'muted'}`}
+      className={execution ? 'pe-flow-edge' : plan?.internal ? 'task-flow-internal-edge' : `task-edge relation-${plan?.relation ?? 'muted'}`}
       interactionWidth={0}
       markerEnd={markerEnd}
       data-focus={execution?.focused}
-      data-gate-state={plan?.gateState}
+      data-gate-state={plan?.internal ? undefined : plan?.gateState}
       data-flow-motion={plan?.motion}
-      data-from={source}
-      data-to={target}
+      data-from={execution ? source : plan?.fromTask}
+      data-to={execution ? target : plan?.toTask}
+      data-visual-from={plan ? source : undefined}
+      data-visual-to={plan ? target : undefined}
+      data-flow-internal={plan ? plan.internal : undefined}
+      label={plan?.caption}
+      labelX={labelX}
+      labelY={labelY}
+      labelShowBg={Boolean(plan?.caption)}
+      labelBgPadding={[5, 3]}
+      labelBgBorderRadius={4}
       path={path}
     />
   );
@@ -190,83 +279,136 @@ const nodeTypes = { task: TaskCard };
 const edgeTypes = { dependency: Dependency };
 const proOptions = { hideAttribution: true };
 
-function canConnect({ source, target, sourceHandle, targetHandle }: Connection | DependencyEdge) {
-  return source !== target && sourceHandle === 'output-bottom' && targetHandle === 'input-top';
+function getPlanningData(nodes: CanvasModel['nodes'], edges: CanvasEdge[]) {
+  const planNodes = new Map<string, PlanNode>();
+  const inputs = new Map<string, Set<Side>>();
+  const outputs = new Map<string, Set<Side>>();
+  const byTask = new Map<string, PlanNode[]>();
+  const parents = new Map<string, Set<string>>();
+
+  for (const node of nodes) {
+    if (!('kind' in node)) continue;
+    planNodes.set(node.id, node);
+    inputs.set(node.id, new Set(node.kind === 'agent' ? ['top'] : []));
+    outputs.set(node.id, new Set(node.kind === 'checkpoint' ? ['bottom'] : []));
+    const parts = byTask.get(node.taskId);
+    if (parts) parts.push(node);
+    else byTask.set(node.taskId, [node]);
+  }
+  for (const edge of edges) {
+    if ('focused' in edge) continue;
+    outputs.get(edge.source)?.add(edge.sourceSide ?? 'bottom');
+    inputs.get(edge.target)?.add(edge.targetSide ?? 'top');
+    if (edge.internal) continue;
+    const from = edge.fromTask ?? planNodes.get(edge.source)?.taskId;
+    const to = edge.toTask ?? planNodes.get(edge.target)?.taskId;
+    if (!from || !to) continue;
+    const direct = parents.get(to);
+    if (direct) direct.add(from);
+    else parents.set(to, new Set([from]));
+  }
+  return { planNodes, inputs, outputs, byTask, parents };
 }
 
 function TaskCanvas({ model }: { model: CanvasModel }) {
   const id = useId();
-  const { nodes, edges, width, height, nodeWidth, nodeHeight, vertical, zoom, variant } = model;
+  const { nodes, edges, width, height, nodeWidth, nodeHeight, vertical, zoom, variant, groups } = model;
   const planning = variant !== 'execution';
   const editing = planning && model.editing === true && Boolean(model.onConnect);
-  const taskLinks = useMemo(() => {
-    const parents = new Map<string, string[]>();
-    const children = new Map<string, number>();
-    if (planning) for (const { source, target } of edges) {
-      const direct = parents.get(target);
-      if (direct) direct.push(source);
-      else parents.set(target, [source]);
-      children.set(source, (children.get(source) ?? 0) + 1);
-    }
-    return { parents, children };
-  }, [edges, planning]);
-  const [moved, setMoved] = useState<{ model: CanvasModel; id: string; position: XYPosition; dragging: boolean }>();
+  const { planNodes, inputs, outputs, byTask, parents } = useMemo(() => getPlanningData(nodes, edges), [nodes, edges]);
+  const [moved, setMoved] = useState<Move>();
   const moving = moved && (moved.model === model || moved.dragging && moved.model.key === model.key) ? moved : undefined;
-  const flowNodes = useMemo<TaskNode[]>(() => nodes.map(node => ({
-    id: node.id,
-    type: 'task',
-    data: 'status' in node ? node : { ...node, editing, parents: taskLinks.parents.get(node.id) ?? [], children: taskLinks.children.get(node.id) ?? 0 },
-    position: moving?.id === node.id ? moving.position : node.position,
-    width: nodeWidth,
-    height: nodeHeight + (planning ? CHECKPOINT_HEIGHT : 0),
-    dragHandle: planning ? '.dev-task' : undefined,
-    zIndex: planning ? (moving?.id === node.id && moving.dragging ? 2 : node.selected ? 1 : 0) : undefined,
-    sourcePosition: vertical ? variant === 'execution' ? Position.Left : Position.Bottom : Position.Right,
-    targetPosition: vertical && variant !== 'execution' ? Position.Top : Position.Left,
-  })), [nodes, nodeWidth, nodeHeight, vertical, variant, planning, editing, taskLinks, moving]);
+
+  const flowNodes = useMemo<TaskNode[]>(() => nodes.map(node => {
+    const plan = 'kind' in node ? node : null;
+    const canMove = Boolean(plan?.movable && plan.kind === 'agent');
+    const movingPart = plan && moving?.taskId === plan.taskId ? moving : undefined;
+    return {
+      id: node.id,
+      type: 'task',
+      data: plan ? { ...plan, editing, inputs: [...(inputs.get(node.id) ?? [])],
+        outputs: [...(outputs.get(node.id) ?? [])], parents: [...(parents.get(plan.taskId) ?? [])] } : node as ExecutionNode,
+      position: movingPart ? { x: node.position.x + movingPart.dx, y: node.position.y } : node.position,
+      width: plan?.width ?? nodeWidth,
+      height: plan?.height ?? nodeHeight,
+      draggable: canMove,
+      dragHandle: canMove ? '.dev-task' : undefined,
+      zIndex: plan ? movingPart?.dragging ? canMove ? 5 : 4 : plan.selected ? 3 : plan.kind === 'agent' ? 2 : 1 : undefined,
+      sourcePosition: vertical ? variant === 'execution' ? Position.Left : Position.Bottom : Position.Right,
+      targetPosition: vertical && variant !== 'execution' ? Position.Top : Position.Left,
+    };
+  }), [nodes, nodeWidth, nodeHeight, vertical, variant, editing, inputs, outputs, parents, moving]);
+
   const flowEdges = useMemo<DependencyEdge[]>(() => {
-    const nodesById = new Map(flowNodes.map(node => [node.id, node]));
+    const gateByTask = new Map<string, GateState>();
+    const selectedTask = nodes.find(node => 'kind' in node && node.selected) as PlanNode | undefined;
+    for (const node of planNodes.values()) {
+      if (node.gateState && (node.kind === 'checkpoint' || !gateByTask.has(node.taskId))) gateByTask.set(node.taskId, node.gateState);
+    }
     return edges.map(edge => {
       const { source, target } = edge;
-      const from = nodesById.get(source), to = nodesById.get(target);
-      const sourceTask = from?.data, targetTask = to?.data;
-      const gateState = sourceTask && !('status' in sourceTask) ? sourceTask.gateState ?? 'planned' : 'planned';
-      const targetChecking = targetTask && !('status' in targetTask) && targetTask.gateState === 'checking';
-      const motion: 'selected' | 'active' | undefined = gateState === 'planned' && (sourceTask?.selected || targetTask?.selected) ? 'selected'
-        : gateState === 'passed' && targetChecking ? 'active' : undefined;
       const execution = 'focused' in edge;
-      const data = execution ? { focused: edge.focused, vertical } : { relation: edge.relation, channel: edge.channel, gateState, motion };
-      const color = execution ? edge.focused ? markerColors.downstream : '#aab5cf'
-        : gateState === 'passed' ? '#19734f' : markerColors[edge.relation];
-      let targetHandle;
-      if (!execution) {
-        const dx = (to?.position.x ?? 0) - (from?.position.x ?? 0);
-        const dy = (to?.position.y ?? 0) - (from?.position.y ?? 0);
-        const sideways = edge.channel === null && Math.abs(dy) < nodeHeight * .6 && Math.abs(dx) > nodeWidth;
-        targetHandle = sideways ? dx > 0 ? 'input-left' : 'input-right' : 'input-top';
-      }
+      const id = edge.id ?? JSON.stringify([source, target]);
+      if (execution) return {
+        id, type: 'dependency', source, target, data: { focused: edge.focused, vertical },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: edge.focused ? markerColors.downstream : '#aab5cf' },
+      };
+      const fromTask = edge.internal ? undefined : edge.fromTask ?? planNodes.get(source)?.taskId;
+      const toTask = edge.internal ? undefined : edge.toTask ?? planNodes.get(target)?.taskId;
+      const gateState = fromTask ? gateByTask.get(fromTask) ?? 'planned' : 'planned';
+      const targetGate = toTask ? gateByTask.get(toTask) : undefined;
+      const related = selectedTask && (selectedTask.taskId === fromTask || selectedTask.taskId === toTask);
+      const motion: EdgeMotion | undefined = gateState === 'planned' && related ? 'selected'
+        : gateState === 'passed' && targetGate === 'checking' ? 'active' : undefined;
+      const color = edge.internal ? '#92a0bb' : gateState === 'passed' ? '#19734f' : markerColors[edge.relation];
       return {
-        id: JSON.stringify([source, target]), type: 'dependency', source, target,
-        sourceHandle: execution ? undefined : 'output-bottom', targetHandle, data,
-        markerEnd: execution || gateState === 'planned' || gateState === 'passed'
-          ? { type: MarkerType.ArrowClosed, width: 12, height: 12, color } : undefined,
+        id, type: 'dependency', source, target,
+        sourceHandle: `output-${edge.sourceSide ?? 'bottom'}`, targetHandle: `input-${edge.targetSide ?? 'top'}`,
+        data: { ...edge, fromTask, toTask, gateState, motion },
+        markerEnd: edge.internal || gateState === 'planned' || gateState === 'passed'
+          ? { type: MarkerType.ArrowClosed, width: 11, height: 11, color } : undefined,
       };
     });
-  }, [edges, vertical, flowNodes, nodeHeight, nodeWidth]);
-  const viewport = useMemo(() => ({ x: 0, y: 0, zoom }), [zoom]);
+  }, [edges, nodes, planNodes, vertical]);
+
+  function clampMotion(node: PlanNode, x: number) {
+    const parts = byTask.get(node.taskId) ?? [node];
+    const left = Math.min(...parts.map(part => part.position.x));
+    const right = Math.max(...parts.map(part => part.position.x + (part.width ?? nodeWidth)));
+    return Math.max(12 - left, Math.min(width - 12 - right, x - node.position.x));
+  }
+
   const onNodesChange: OnNodesChange<TaskNode> = changes => {
     for (const change of changes) {
-      if (change.type === 'position' && change.position) {
-        setMoved({ model, id: change.id, position: change.position, dragging: change.dragging === true });
-      }
+      if (change.type !== 'position' || !change.position) continue;
+      const node = planNodes.get(change.id);
+      if (node?.kind !== 'agent' || !node.movable) continue;
+      setMoved({ model, taskId: node.taskId, dx: clampMotion(node, change.position.x), dragging: change.dragging === true });
     }
   };
 
-  // Use the real React Flow zoom for draggable nodes. Outer native scroll still owns panning.
+  function canConnect({ source, target, sourceHandle, targetHandle }: Connection | DependencyEdge) {
+    const from = planNodes.get(source), to = planNodes.get(target);
+    return from?.kind === 'checkpoint' && to?.kind === 'agent' && from.taskId !== to.taskId
+      && sourceHandle === 'output-bottom' && targetHandle === 'input-top';
+  }
+
+  const viewport = useMemo(() => ({ x: 0, y: 0, zoom }), [zoom]);
+  // React Flow owns node interaction and zoom. Native scroll owns panning.
   return (
     <div className="task-flow-extent" style={planning
       ? { width: Math.ceil(width * zoom), height: Math.ceil(height * zoom) }
       : { width, height, transform: `scale(${zoom})` }}>
+      {planning && groups?.length && (
+        <div className="task-flow-groups" style={{ width, height, transform: `scale(${zoom})` }}>
+          {groups.map(group => (
+            <div className="task-flow-group" data-flow-group={group.rank} key={group.rank}
+              style={{ left: group.left, width: group.width, top: group.top, height: group.height }}>
+              <div className="task-flow-group-heading"><strong>{group.title}</strong><span>{group.count} 项任务</span></div>
+            </div>
+          ))}
+        </div>
+      )}
       <ReactFlow<TaskNode, DependencyEdge>
         id={id}
         nodes={flowNodes}
@@ -275,7 +417,12 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
         edgeTypes={edgeTypes}
         nodesDraggable={planning}
         onNodesChange={planning ? onNodesChange : undefined}
-        onNodeDragStop={planning ? (_event, node) => model.onNodeMove?.(node.id, node.position) : undefined}
+        onNodeDragStop={planning ? (_event, node) => {
+          const original = planNodes.get(node.id);
+          if (original?.kind !== 'agent' || !original.movable) return;
+          const dx = clampMotion(original, node.position.x);
+          model.onNodeMove?.(original.taskId, { x: original.position.x + dx, y: original.position.y });
+        } : undefined}
         nodeDragThreshold={5}
         nodeExtent={planning ? [[12, 12], [width - 12, height - 12]] : undefined}
         viewport={planning ? viewport : undefined}
@@ -284,7 +431,7 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
         nodesConnectable={editing}
         isValidConnection={editing ? canConnect : undefined}
         onConnect={editing ? connection => {
-          if (canConnect(connection)) model.onConnect?.(connection.source, connection.target);
+          if (canConnect(connection)) model.onConnect?.(planNodes.get(connection.source)!.taskId, planNodes.get(connection.target)!.taskId);
         } : undefined}
         nodesFocusable={false}
         edgesFocusable={false}

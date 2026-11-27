@@ -41,47 +41,293 @@
   pointer-events: auto;
 }
 
+.task-flow-surface[data-plan-canvas] {
+  --flow-ink: #203149;
+  --flow-muted: #4d617c;
+  --flow-focus: #3846ce;
+}
+
 .task-flow-surface[data-plan-canvas] .task-flow-extent > .react-flow {
   position: relative;
   z-index: 1;
   background: transparent;
 }
 
-.task-flow-surface[data-plan-canvas] .dev-task-grip {
-  display: inline-block;
-  flex: none;
-  inline-size: 15px;
-  block-size: 15px;
-  margin-inline-end: 3px;
-  vertical-align: -3px;
-  color: #596c90;
-  cursor: grab;
+.task-flow-surface[data-plan-canvas] .task-flow-groups {
+  position: absolute;
+  inset: 0 auto auto 0;
+  transform-origin: top left;
+  pointer-events: none;
 }
 
-.task-flow-surface[data-plan-canvas] .dev-task-grip svg {
-  display: block;
-  inline-size: 100%;
-  block-size: 100%;
+.task-flow-surface[data-plan-canvas] .task-flow-group {
+  position: absolute;
+  border: 1px solid #d5dfee;
+  border-radius: 10px;
+  background: #ffffffbf;
 }
 
-.task-flow-surface[data-plan-canvas] .react-flow__node.dragging {
-  z-index: 3 !important;
+.task-flow-surface[data-plan-canvas] .task-flow-group:nth-child(even) {
+  background: #eef4fbcc;
 }
 
-.task-flow-surface[data-plan-canvas] .react-flow__node.dragging :is(.dev-task, .dev-task-grip) {
-  cursor: grabbing;
+.task-flow-surface[data-plan-canvas] .task-flow-group-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin: 7px 12px;
+  color: #536781;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
 }
 
-.task-orchestration-root .task-flow-surface[data-plan-canvas] .react-flow__node.dragging .dev-task {
-  border-color: var(--task-accent);
-  box-shadow: 0 5px 14px #2433602b;
+.task-flow-surface[data-plan-canvas] .task-flow-group-heading strong {
+  color: #354b69;
+  font-weight: 710;
 }
 
 .task-flow-surface[data-plan-canvas] .plan-task-node {
   position: relative;
-  display: grid;
   inline-size: 100%;
   block-size: 100%;
+}
+
+.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card {
+  --flow-card-accent: #5269ac;
+  --flow-card-surface: #fff;
+  --flow-card-border: #b9c6dd;
+  position: relative;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) minmax(0, max-content);
+  grid-template-rows: none;
+  align-content: center;
+  align-items: center;
+  gap: 1px 6px;
+  inline-size: 100%;
+  block-size: 100%;
+  margin: 0;
+  padding: 4px 7px;
+  overflow: hidden;
+  border: 1px solid var(--flow-card-border);
+  border-inline-start: 3px solid var(--flow-card-accent);
+  border-radius: 6px;
+  background: var(--flow-card-surface);
+  color: var(--flow-ink);
+  box-shadow: 0 2px 5px #23375910;
+  font: inherit;
+  line-height: 1.3;
+  text-align: start;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card[aria-pressed="true"] {
+  border-color: var(--flow-focus);
+  box-shadow: 0 0 0 2px #5d70da36;
+}
+
+.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card:focus-visible {
+  outline: 2px solid var(--flow-focus);
+  outline-offset: 2px;
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-card-kicker {
+  display: flex;
+  min-inline-size: 0;
+  align-items: center;
+  gap: 4px;
+  color: var(--flow-card-accent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-card-kicker > svg {
+  flex: none;
+  inline-size: 13px;
+  block-size: 13px;
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-card-kicker small {
+  margin-inline-start: 5px;
+  color: var(--flow-muted);
+  font-family: var(--mono-type, Consolas, monospace);
+  font-size: 10px;
+  font-weight: 630;
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-card .task-flow-card-title {
+  display: block;
+  min-inline-size: 0;
+  overflow: hidden;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 670;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-card-meta {
+  display: flex;
+  min-inline-size: 0;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  color: var(--flow-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-card-meta > span {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-card-status {
+  color: var(--flow-card-accent);
+}
+
+.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card.dev-task {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 14px minmax(0, 1fr) 13px;
+  gap: 3px;
+  padding: 7px 10px;
+  border-radius: 8px;
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-card.dev-task .task-flow-card-title {
+  font-size: 14px;
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-card.dev-task .task-flow-card-status {
+  flex: none;
+  max-inline-size: 54%;
+  padding-inline: 4px;
+  border-radius: 3px;
+  background: #edf1fb;
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-card-kicker .dev-task-grip {
+  flex: none;
+  inline-size: 15px;
+  block-size: 15px;
+  margin: 0 0 0 auto;
+  color: #677a97;
+  cursor: ew-resize;
+}
+
+.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node[data-movable="true"] .task-flow-card {
+  cursor: ew-resize;
+}
+
+.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .react-flow__node.dragging .task-flow-card {
+  border-color: var(--flow-focus);
+  box-shadow: 0 5px 14px #2433602b;
+  cursor: grabbing;
+}
+
+.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card[data-flow-part="tool"] {
+  --flow-card-accent: #1d6571;
+  --flow-card-surface: #f1f8f9;
+  --flow-card-border: #b6d5dc;
+}
+
+.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card:is([data-flow-role="http"], [data-flow-role="browser"]) {
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+  column-gap: 3px;
+  padding-inline: 5px;
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-card:is([data-flow-role="http"], [data-flow-role="browser"]) .task-flow-card-kicker {
+  grid-column: 1;
+  grid-row: 1;
+  gap: 3px;
+  overflow: hidden;
+  font-size: 9px;
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-card:is([data-flow-role="http"], [data-flow-role="browser"]) .task-flow-card-meta {
+  grid-column: 2;
+  grid-row: 1;
+  max-inline-size: 32px;
+  font-size: 9px;
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-card:is([data-flow-role="http"], [data-flow-role="browser"]) .task-flow-card-title {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card[data-flow-part="review"] {
+  --flow-card-accent: #634a96;
+  --flow-card-surface: #f7f3fe;
+  --flow-card-border: #d6c8ec;
+}
+
+.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card[data-flow-part="checkpoint"] {
+  --flow-card-accent: #6a501e;
+  --flow-card-surface: #fff9eb;
+  --flow-card-border: #dfca9f;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-card[data-flow-part="checkpoint"] .task-flow-card-kicker {
+  font-size: 11px;
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-card[data-flow-part="checkpoint"] .task-flow-card-meta {
+  justify-content: flex-end;
+  font-weight: 700;
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-card[data-gate-state="passed"] .task-flow-card-status { color: #176345; }
+.task-flow-surface[data-plan-canvas] .task-flow-card[data-gate-state="checking"] .task-flow-card-status { color: #84531b; }
+.task-flow-surface[data-plan-canvas] .task-flow-card[data-gate-state="failed"] .task-flow-card-status { color: #962c3d; }
+
+.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card[data-flow-part="checkpoint"][data-gate-state="waiting"] {
+  --flow-card-accent: #52617a;
+  --flow-card-surface: #f1f5fa;
+  --flow-card-border: #bac9dd;
+}
+
+.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card[data-flow-part="checkpoint"][data-gate-state="checking"] {
+  --flow-card-accent: #84531b;
+  --flow-card-surface: #fff3d8;
+  --flow-card-border: #e1be76;
+}
+
+.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card[data-flow-part="checkpoint"][data-gate-state="passed"] {
+  --flow-card-accent: #176345;
+  --flow-card-surface: #edf8f1;
+  --flow-card-border: #80b099;
+}
+
+.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card[data-flow-part="checkpoint"][data-gate-state="failed"] {
+  --flow-card-accent: #962c3d;
+  --flow-card-surface: #fff0f0;
+  --flow-card-border: #d99ca6;
+}
+
+.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card:is([data-flow-part="fork"], [data-flow-part="join"]) {
+  --flow-card-accent: #4255a0;
+  --flow-card-surface: #edf0fe;
+  --flow-card-border: #bcc7e9;
+  border-style: dashed;
+  border-radius: 14px;
+  padding-inline: 7px;
+}
+
+.task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card[data-flow-part="join"] {
+  --flow-card-accent: #176b63;
+  --flow-card-surface: #edf8f4;
+  --flow-card-border: #acd3c6;
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-card:is([data-flow-part="fork"], [data-flow-part="join"]) .task-flow-card-title {
+  font-size: 10px;
 }
 
 .task-flow-surface[data-plan-canvas] .react-flow__handle-top { background: #7390b6; }
@@ -91,21 +337,42 @@
   inline-size: 16px;
   block-size: 16px;
   z-index: 2;
-  border: 2px solid var(--task-accent);
-  background: var(--task-paper);
+  border: 2px solid var(--flow-focus);
+  background: #fff;
   cursor: crosshair;
   pointer-events: auto;
   touch-action: none;
 }
 
 .task-flow-surface[data-plan-canvas] .plan-task-node[data-editing="true"] > [data-task-connector]:is(:hover, .valid) {
-  background: var(--task-accent);
+  background: var(--flow-focus);
 }
 
 .task-flow-surface[data-plan-canvas] .react-flow__connection-path {
-  stroke: var(--task-accent);
+  stroke: var(--flow-focus);
   stroke-width: 2;
   stroke-dasharray: 4 3;
+}
+
+.task-flow-surface[data-plan-canvas] .task-flow-internal-edge {
+  fill: none;
+  stroke: #91a1bf;
+  stroke-width: 1.35;
+}
+
+.task-flow-surface[data-plan-canvas] .react-flow__edge-textwrapper {
+  pointer-events: none;
+}
+
+.task-flow-surface[data-plan-canvas] .react-flow__edge-text {
+  fill: #435775;
+  font-size: 10px;
+  font-weight: 630;
+}
+
+.task-flow-surface[data-plan-canvas] .react-flow__edge-textbg {
+  fill: #f7faff;
+  opacity: .97;
 }
 
 section.planned-execution .pe-process .pe-graph-canvas[data-renderer="react-flow"] {
