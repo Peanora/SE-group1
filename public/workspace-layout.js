@@ -1,32 +1,31 @@
-const VIEWS = ['plan', 'tasks', 'source', 'execution'];
+export const WORKSPACE_VIEWS = ['overview', 'source', 'plan', 'tasks', 'execution', 'trace'];
 
 // Views keep their actual DOM; changing views never recreates an input draft.
 export function createWorkspaceLayout({ getContext, onViewChange = () => {}, isViewReady = () => true }) {
   // This controller owns restoration; native reload restoration must not race it.
   if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
-  const panels = new Map(VIEWS.map(view => [view, document.querySelector(`[data-workspace-panel="${view}"]`)]));
+  const panels = new Map(WORKSPACE_VIEWS.map(view => [view, document.querySelector(`[data-workspace-panel="${view}"]`)]));
   const nav = document.querySelector('#workspace-nav');
   const tabs = [...nav.querySelectorAll('[data-workspace-view]')];
   const dialog = document.querySelector('#task-edit-dialog');
   const review = document.querySelector('#review-banner');
   const reviewHome = document.querySelector('#review-home');
   const editorHost = document.querySelector('#task-edit-host');
-  let key = '', view = 'plan', previous = 'plan', saved = {}, editorReturn = null, restoreEditorFocus = true;
+  let key = '', view = 'overview', previous = 'overview', saved = {}, editorReturn = null, restoreEditorFocus = true;
   let editorStatus = '';
   let persistFrame = null, pendingScroll = false;
   const storageKey = () => `taskflow.workspace:${key}`;
 
   function persist() {
     if (!key) return;
-    saved = { ...saved, layout: 'document-v1', view, scroll: pendingScroll ? saved.scroll : { ...saved.scroll, [view]: { top: window.scrollY, left: window.scrollX } } };
+    saved = { ...saved, layout: 'studio-v1', view, scroll: pendingScroll ? saved.scroll : { ...saved.scroll, [view]: { top: window.scrollY, left: window.scrollX } } };
     try { sessionStorage.setItem(storageKey(), JSON.stringify(saved)); } catch { /* Current drafts and navigation remain in memory. */ }
   }
   function read() {
     try {
       const value = JSON.parse(sessionStorage.getItem(storageKey()));
-      if (!value || typeof value !== 'object' || !VIEWS.includes(value.view)) return {};
-      // Earlier builds stored panel-relative coordinates, not page coordinates.
-      return value.layout === 'document-v1' ? value : { view: value.view };
+      if (value?.layout !== 'studio-v1' || !WORKSPACE_VIEWS.includes(value.view)) return {};
+      return value;
     } catch { return {}; }
   }
   function restoreScroll() {
@@ -38,6 +37,7 @@ export function createWorkspaceLayout({ getContext, onViewChange = () => {}, isV
     if (isViewReady(view) && position.top <= document.documentElement.scrollHeight - window.innerHeight + 1) pendingScroll = false;
   }
   function paint() {
+    document.body.dataset.studioView = view;
     for (const [name, panel] of panels) panel.hidden = name !== view;
     for (const tab of tabs) {
       const selected = tab.dataset.workspaceView === view;
@@ -46,7 +46,7 @@ export function createWorkspaceLayout({ getContext, onViewChange = () => {}, isV
     restoreScroll();
   }
   function show(next, { focus = false } = {}) {
-    if (!VIEWS.includes(next) || !getContext().projectId) return false;
+    if (!WORKSPACE_VIEWS.includes(next) || !getContext().projectId) return false;
     if (dialog.open) closeEditor({ restoreFocus: false });
     if (next !== view) { persist(); previous = view; view = next; pendingScroll = true; }
     paint(); onViewChange(view);
@@ -58,13 +58,15 @@ export function createWorkspaceLayout({ getContext, onViewChange = () => {}, isV
     const context = getContext(), nextKey = context.projectId ? `${context.projectId}:${context.runId || 'new'}` : '';
     if (nextKey !== key) {
       persist(); closeEditor({ restoreFocus: false }); key = nextKey; saved = read();
-      view = VIEWS.includes(saved.view) ? saved.view : 'plan'; previous = 'plan'; pendingScroll = true;
+      view = saved.view || 'overview'; previous = 'overview'; pendingScroll = true;
       document.querySelector('#workflow-details').open = true;
       paint(); onViewChange(view); restoreScroll();
     }
     const visible = Boolean(context.projectId);
     nav.hidden = !visible; document.querySelector('#workspace-context').hidden = !visible;
-    document.querySelector('#workspace-panels').hidden = !visible;
+    document.querySelector('#workspace-panels').hidden = false;
+    document.body.dataset.studioView = view;
+    document.body.dataset.studioProject = visible ? 'selected' : 'empty';
     for (const tab of tabs) tab.disabled = !visible || context.busy === true;
     if (dialog.open && (context.runStatus === 'awaiting_spec' || context.runStatus === 'succeeded' && editorStatus !== 'succeeded' || context.historical)) {
       closeEditor({ restoreFocus: false });

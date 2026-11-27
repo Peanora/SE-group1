@@ -1,4 +1,5 @@
 import { renderTaskSchedule, wireTaskSchedule } from './task-schedule.js';
+import { renderRunTrace } from './run-trace.tsx';
 import { clearEventEvidence, renderEventEvidence, renderStageEvidence, renderWorkflowEvidence } from './run-evidence.tsx';
 import { showDeliveryOverview, showExecutionTimeline, showProjects, showRunHistory, showRunTimeline } from './projections.tsx';
 import { canEditPlanTasks, createPlanningReview } from '../../public/planning-review.js';
@@ -11,7 +12,7 @@ import { createPlannedExecutionPanel, executionRoleProgress } from '../../public
 import { createProjectEvolution } from '../../public/project-evolution.js';
 import { createSourceChanges } from '../../public/source-changes.js';
 import { createSimulatedTasks, SIM_STATUS } from '../../public/simulated-tasks.js';
-import { createWorkspaceLayout } from '../../public/workspace-layout.js';
+import { createWorkspaceLayout, WORKSPACE_VIEWS } from '../../public/workspace-layout.js';
 import { createWorkspaceNotices } from '../../public/workspace-notices.js';
 import { deliverySteps } from '../../public/delivery-workflow.js';
 import { createTaskOrchestration } from '../../public/task-orchestration-view.js';
@@ -38,6 +39,8 @@ const workspaceLayout = createWorkspaceLayout({ getContext: () => ({ projectId: 
   onViewChange: view => {
     if (view === 'tasks') { state.tab = 'tasks'; renderRecords(); }
     if (view === 'execution') selectDeliverySurface('overview');
+    if (view === 'trace') renderTrace();
+    if (state.project && !state.selectionPending) rememberSelection(view);
   } });
 let executionContextKey = '';
 let sourceContextKey = '';
@@ -264,7 +267,7 @@ const SAMPLE = `# 工单协作系统需求
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...options.headers } });
   const data = await response.json().catch(() => ({}));
-  if (response.status === 401 && state.health?.teamAccess?.enabled) window.location.replace('/team.html');
+  if (response.status === 401 && state.health?.teamAccess?.enabled) window.location.replace(teamUrl(addressedRun()));
   if (!response.ok) throw new Error(data.error || `服务请求失败（${response.status}）`);
   return data;
 }
@@ -309,19 +312,33 @@ function workflowSteps() {
 }
 function renderDeliveryProgress() {
   const steps = workflowSteps();
+  const applicable = steps.filter(step => step.state !== 'unavailable');
+  const legacy = applicable.length !== steps.length;
   const automatic = automaticStatus();
-  const upcoming = (automatic && automatic.status !== 'completed' ? steps.find(step => step.id === automatic.stage) : null)
-    ?? steps.find(step => step.state === 'failed') ?? steps.find(step => step.state === 'working')
-    ?? steps.find(step => step.state !== 'done');
-  const current = upcoming ?? steps.at(-1);
+  const upcoming = (!legacy && automatic && automatic.status !== 'completed' ? applicable.find(step => step.id === automatic.stage) : null)
+    ?? applicable.find(step => step.state === 'failed') ?? applicable.find(step => step.state === 'working')
+    ?? applicable.find(step => step.state !== 'done');
+  const current = upcoming ?? applicable.at(-1);
+  $('#studio-workflow-scope').hidden = !legacy;
   $('#delivery-current-title').textContent = current.title;
   if ($('#delivery-current-state').textContent !== current.text) $('#delivery-current-state').textContent = current.text;
   $('#delivery-current-state').dataset.state = current.state;
-  $('#delivery-done-count').textContent = `${steps.filter(step => step.state === 'done').length} / ${steps.length} 完成`;
+  $('#delivery-done-count').textContent = `${applicable.filter(step => step.state === 'done').length} / ${applicable.length} 完成`;
   if (automatic && expandedAutomaticRun !== state.run.id) { expandedAutomaticRun = state.run.id; $('#delivery-workflow').open = true; }
   showRunTimeline($('#delivery-steps'), steps, upcoming?.id, state.selectionPending, Boolean(state.project));
   renderExecutionFlow(steps);
   renderWorkspaceContext(steps);
+  if (workspaceLayout.view() === 'trace') renderTrace();
+}
+function renderTrace() {
+  renderRunTrace($('#studio-trace-host'), {
+    projectId: state.selectionPending ? '' : state.project?.id || '',
+    run: state.selectionPending ? null : state.run,
+    historical: historicalRun(),
+    executions: plannedPanel?.traceExecutions(),
+    executionAvailable: Boolean(plannedPanel),
+    stageTitle, formatTime,
+  });
 }
 function nextExecutionStep(steps) {
   const [preparation, coding, testing, delivery] = steps.slice(-4);
@@ -345,9 +362,10 @@ function selectDeliverySurface(surface, focus = false) {
 function currentDeliveryOverview(steps, next, hint) {
   const run = state.selectionPending ? null : state.run;
   const historical = historicalRun(run);
-  const specApproved = steps.find(step => step.id === 'spec-approval').state === 'done';
-  const planApproved = steps.find(step => step.id === 'plan-approval').state === 'done';
-  const execution = !historical && run ? plannedPanel?.workflowProgress().execution : null;
+  const legacy = Boolean(run && run.workflowVersion !== 2);
+  const specApproved = !legacy && steps.find(step => step.id === 'spec-approval').state === 'done';
+  const planApproved = !legacy && steps.find(step => step.id === 'plan-approval').state === 'done';
+  const execution = !historical && !legacy && run ? plannedPanel?.workflowProgress().execution : null;
   const writingIntegration = execution?.executionMode === 'task_dag' && execution.active && execution.workflow?.stage === 'coding';
   const fixedCommit = execution && !writingIntegration ? executionRoleProgress(execution).commit : null;
   const candidate = fixedCommit && fixedCommit === execution.candidateCommit ? execution : null;
@@ -372,33 +390,40 @@ function currentDeliveryOverview(steps, next, hint) {
     delivery: '当前已验收的候选可在交付记录中预览和下载。',
   })[next.id];
   let action = { label: stageAction[next.id], stage: next.id };
-  if (!planApproved || historical) {
+  if (legacy) {
+    title = '旧版规划记录';
+    note = '这次运行以规划文档导出为终点，可回查本次规格、开发计划和审阅记录。';
+    action = { label: '查看规划过程', stage: 'planning' };
+  } else if (!planApproved || historical) {
     title = historical ? '历史运行' : run?.status === 'awaiting_review' ? '请先确认开发计划' : '等待规格与计划';
     note = historical ? '此运行的需求版本已归档。可回查规划与证据；交付操作以当前需求版本为准。'
       : '确认规格与开发计划后，可为同一版本准备验收清单。';
-    action = { label: historical ? '查看历史规划' : '打开规划与确认', stage: 'planning' };
+    action = { label: historical ? '查看历史规划' : '打开规格与计划', stage: 'planning' };
   }
-  return { state: historical ? 'idle' : next.state, status: historical ? '历史版本' : next.text, title, note, action,
+  return { state: historical || legacy ? 'idle' : next.state, status: legacy ? '旧版规划' : historical ? '历史版本' : next.text, title, note, action,
     busy: state.busy || state.selectionPending,
     versions: [
       { kind: '需求快照', reference: run?.sourceRevision || '', status: run?.sourceRevision ? '已关联' : '尚未固定' },
-      { kind: '设计规格', reference: run?.specRevision || '', status: specApproved ? '已确认' : run?.specRevision ? '待确认' : '尚未生成' },
-      { kind: '开发计划', reference: run?.planRevision || '', status: planApproved ? '已确认' : run?.planRevision ? '待确认' : '尚未生成' },
-      { kind: '源码候选', reference: candidate?.candidateCommit || '', status: candidate?.candidateCommit ? '已记录提交' : '尚未固定' },
+      { kind: '设计规格', reference: run?.specRevision || '', status: legacy ? steps.find(step => step.id === 'spec').text : specApproved ? '已确认' : run?.specRevision ? '待确认' : '尚未生成' },
+      { kind: '开发计划', reference: run?.planRevision || '', status: legacy ? steps.find(step => step.id === 'plan').text : planApproved ? '已确认' : run?.planRevision ? '待确认' : '尚未生成' },
+      { kind: '源码候选', reference: candidate?.candidateCommit || '', status: legacy ? '不适用' : candidate?.candidateCommit ? '已记录提交' : '尚未固定' },
     ],
     evidence: [
-      { label: 'HTTP 接口', value: summary(candidate?.checks?.http) },
-      { label: 'Edge 浏览器', value: summary(candidate?.checks?.browser) },
-      { label: '独立代码审查', value: reviewSummary },
+      { label: 'HTTP 接口', value: legacy ? '不适用' : summary(candidate?.checks?.http) },
+      { label: 'Edge 浏览器', value: legacy ? '不适用' : summary(candidate?.checks?.browser) },
+      { label: '独立代码审查', value: legacy ? '不适用' : reviewSummary },
     ],
   };
 }
 
 function renderExecutionFlow(steps) {
   const next = nextExecutionStep(steps);
-  showExecutionTimeline($('#execution-workspace-steps'), steps.slice(-4), next.id, state.selectionPending);
+  const executionSteps = $('#execution-workspace-steps');
+  const legacy = next.state === 'unavailable';
+  executionSteps.hidden = legacy;
+  showExecutionTimeline(executionSteps, steps.slice(-4), legacy ? '' : next.id, state.selectionPending);
   const failure = next.state === 'failed' && next.id !== 'verification' && plannedPanel?.workflowProgress().failureHelp;
-  const hint = historicalRun() ? '所选规划属于历史需求版本。切换到当前规划可继续开发。'
+  const hint = legacy ? '' : historicalRun() ? '所选规划属于历史需求版本。切换到当前规划可继续开发。'
     : next.id === 'delivery' ? '当前候选已通过独立验收。打开交付可查看预览与源码。'
       : next.state === 'failed' ? failure?.nextStep || next.detail || '打开当前步骤查看原因和可用操作。'
         : next.detail || '';
@@ -434,7 +459,7 @@ function renderWorkspaceContext(steps = workflowSteps()) {
       : '可先查看多 Agent 规格评审。确认规格后，系统才会生成开发计划。';
     action = '处理规格'; kind = 'review';
   } else if (run?.status === 'awaiting_review') {
-    title = '下一步：核对开发计划'; note = '任务图和编辑放在“开发任务”。保存修订后仍需确认计划，才能导出文档。'; action = '核对计划'; kind = 'review';
+    title = '下一步：核对开发计划'; note = '在「任务编排」核对模块和依赖。确认当前计划后即可导出规划文档。'; action = '核对计划'; kind = 'review';
   } else if (run?.status === 'failed') {
     const failed = run.stages?.find(stage => stage.status === 'failed');
     const failure = failed?.id === 'spec' ? run.specificationFailure : ['tasks', 'architecture'].includes(failed?.id) ? run.engineeringFailure : null;
@@ -442,7 +467,10 @@ function renderWorkspaceContext(steps = workflowSteps()) {
     note = String(failure?.message || failed?.error || '查看失败原因，已有输入与历史会保留。').slice(0, 180);
     action = run.planningIssue ? '查看问题' : '查看失败与处理'; kind = 'failure';
   } else if (run?.status === 'succeeded') {
-    title = '规划文档已生成'; note = '可以查看任务与文档。真实代码执行和验收在独立工作区，规划完成不代表业务软件已验收。'; action = '查看文档'; kind = 'artifacts';
+    title = '规划文档已生成'; note = run.workflowVersion === 2
+      ? '可以查看任务与文档。真实代码执行和验收在独立工作区，规划完成不代表业务软件已验收。'
+      : '旧版运行保留本次规格、任务和导出的规划文档。';
+    action = '查看文档'; kind = 'artifacts';
     if (run.engineeringPlan && plannedPanel && executionContext().planningStatus === 'confirmed') {
       const next = nextExecutionStep(steps);
       kind = `delivery:${next.id}`;
@@ -517,10 +545,25 @@ function openDeliveryStage(stage) {
     return;
   }
   const run = state.run;
-  if (stage === 'source') { $('#source-button').click(); return; }
+  if (stage === 'source') {
+    if (historicalRun()) $('#source-button').click();
+    else workspaceLayout.show('source', { focus: true });
+    return;
+  }
   if (stage === 'spec') { locateWorkspaceProblem({ source: 'planning', stageId: 'spec', target: '#stage-inspector' }); return; }
   if (stage === 'plan' && run?.tasks?.length) { simulatedTasks.showPlan(); workspaceLayout.show('tasks'); focusWorkspaceTarget($('#records-body')); return; }
   if (stage === 'plan') { locateWorkspaceProblem({ source: 'planning', stageId: run?.stages?.find(item => ['architecture', 'tasks', 'review'].includes(item.id) && item.status === 'failed')?.id || 'tasks', target: '#stage-inspector' }); return; }
+  if (stage === 'plan-approval' && run && run.workflowVersion !== 2 && run.status !== 'awaiting_review') {
+    const exported = run.stages?.find(item => item.id === 'export');
+    if (exported?.status === 'succeeded' && run.artifacts?.some(item => item.name === 'handoff.md')) {
+      showArtifact('handoff.md');
+      focusWorkspaceTarget($('#records-body'));
+      return;
+    }
+    const stageId = (exported && exported.status !== 'pending') || run.approvedAt ? 'export' : 'review';
+    locateWorkspaceProblem({ source: 'planning', stageId, target: '#stage-inspector' });
+    return;
+  }
   if (stage === 'spec-approval' || stage === 'plan-approval') {
     workspaceLayout.show('plan');
     if (stage === 'spec-approval' && specClarificationPending() && planningIssue.open()) { renderControls(); return; }
@@ -579,11 +622,15 @@ function handleWorkspaceNext() {
   if (kind === 'source') { workspaceLayout.show('source'); return; }
   if (kind === 'artifacts') { showArtifact('task.md'); return; }
   if (kind === 'failure') { locateWorkspaceProblem({ source: 'planning', stageId: state.run?.stages.find(stage => stage.status === 'failed')?.id }); return; }
+  if (kind === 'start') {
+    workspaceLayout.show('overview');
+    focusWorkspaceTarget($('#start-automatic').hidden || $('#start-automatic').disabled ? $('#start-run') : $('#start-automatic'));
+    return;
+  }
   workspaceLayout.show('plan');
   if (kind === 'review' && state.run?.planningIssue) { locateWorkspaceProblem({ source: 'planning', stageId: state.run.planningIssue.stageId }); return; }
   if (kind === 'process') { $('#workflow-details').open = true; $('#stage-inspector').setAttribute('tabindex', '-1'); $('#stage-inspector').focus({ preventScroll: true }); }
   else if (kind === 'review') focusPlanningReview(state.run?.status === 'awaiting_spec');
-  else focusWorkspaceTarget($('#start-automatic').hidden || $('#start-automatic').disabled ? $('#start-run') : $('#start-automatic'));
 }
 async function prepareChecklistRevision(executionId) {
   if (!state.run || historicalRun() || state.busy || state.selectionPending || !/^[A-Za-z0-9_-]{1,128}$/u.test(executionId)) return;
@@ -665,12 +712,12 @@ function renderProjects() {
   }), state.project?.id);
 }
 function renderHeader() {
-  $('#project-title').textContent = state.project?.name || '需求编排工作台';
+  $('#project-title').textContent = state.project?.name || '工作流总览';
   $('#breadcrumb-project').textContent = state.project?.name || '新项目';
   const source = selectedSource();
   $('#project-description').textContent = source
     ? (source.filename || '需求文档') + '　' + (source.content?.length?.toLocaleString('zh-CN') || 0) + ' 字'
-    : '从需求规划到开发验收。';
+    : '尚未选择项目';
   $('#source-button').disabled = !state.project;
   const factoryLink = $('#factory-workbench-link');
   const mcpLink = $('#workspace-mcp-settings');
@@ -983,13 +1030,15 @@ function renderRun() { renderControls(); renderWorkflow(); renderInspector(); re
 function renderAll() { renderProjects(); renderHeader(); renderRun(); }
 
 function setBusy(value) { state.busy = value; renderControls(); workspaceLayout.sync(); renderWorkspaceContext(); $('#create-project-button').disabled = value; $('#create-project-button').textContent = value ? '正在创建…' : '创建项目'; $$('[data-close-dialog]', $('#project-dialog')).forEach((button) => { button.disabled = value; }); }
-function rememberSelection() {
+function rememberSelection(view = workspaceLayout.view()) {
   const address = new URL(window.location.href);
-  if (address.searchParams.has('project') && state.project?.id) {
+  if (state.project?.id) {
     address.searchParams.set('project', state.project.id);
     if (state.run) address.searchParams.set('run', state.run.id);
     else address.searchParams.delete('run');
+    address.searchParams.set('view', view);
     if (address.href !== window.location.href) history.replaceState(null, '', address);
+    $('#team-link').href = teamUrl({ projectId: state.project.id, runId: state.run?.id, view });
   }
   try { sessionStorage.setItem('taskflow-selection', JSON.stringify({ projectId: state.project?.id, runId: state.run?.id, taskId: state.taskId })); } catch { /* The current view remains usable without session storage. */ }
 }
@@ -1040,39 +1089,62 @@ async function deleteProject(id) {
       }
     } catch { /* Server deletion succeeds even if browser storage is unavailable. */ }
     state.projects=state.projects.filter(p=>p.id!==id);
-    if(state.project?.id===id){state.project=null;state.run=null;state.taskId=null;try{sessionStorage.removeItem('taskflow-selection');}catch{}renderAll();if(state.projects.length)await selectProject(state.projects[0].id);}
-    else renderProjects();
+    if (state.project?.id === id) {
+      state.project = null;
+      state.run = null;
+      state.taskId = null;
+      const address = new URL(location.href);
+      for (const key of ['project', 'run', 'view']) address.searchParams.delete(key);
+      history.replaceState(null, '', address);
+      $('#team-link').href = '/team.html';
+      try { sessionStorage.removeItem('taskflow-selection'); } catch { /* Storage may be unavailable. */ }
+      renderAll();
+      if (state.projects.length) await selectProject(state.projects[0].id);
+    } else renderProjects();
     $('#project-title').setAttribute('tabindex','-1');$('#project-title').focus();
     toast('项目已删除，本机恢复记录已保留');
   } catch(error) {showError(error);}
   finally {setBusy(false);schedulePoll();}
 }
 
-async function selectProject(id, { runId } = {}) {
+async function selectProject(id, { runId, selection } = {}) {
+  const previous = selection ?? { projectId: state.project?.id, runId: state.run?.id, taskId: state.taskId };
   clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   state.selectionPending = true; renderControls(); syncExecutionPanel();
+  if (workspaceLayout.view() === 'trace') renderTrace();
   try {
     const { project } = await api(`/api/projects/${encodeURIComponent(id)}`);
     if (epoch !== state.epoch) return;
     state.selectionPending = false; state.automatic = null;
     state.project = { ...project, runs: project.runs || [] }; state.run = state.project.runs.find((run) => run.id === runId) || sortedRuns()[0] || null;
+    const sameRun = previous.projectId === id && previous.runId === state.run?.id;
+    state.taskId = sameRun && state.run?.tasks?.some(task => task.id === previous.taskId) ? previous.taskId : null;
     rememberSelection();
     state.stageId = state.run?.status === 'failed' ? state.run.stages.find((stage) => stage.status === 'failed')?.id || 'spec' : 'spec';
-    state.taskId = null; state.artifactName = 'task.md'; clearError(); renderAll(); schedulePoll();
+    state.artifactName = 'task.md'; clearError(); renderAll(); schedulePoll();
   } catch (error) { if (epoch === state.epoch) showError(error); }
-  finally { if (epoch === state.epoch) { state.selectionPending = false; renderHeader(); renderControls(); syncExecutionPanel(); schedulePoll(); } }
+  finally { if (epoch === state.epoch) { state.selectionPending = false; renderHeader(); renderControls(); syncExecutionPanel(); renderDeliveryProgress(); schedulePoll(); } }
 }
 async function selectRun(id) {
+  const fromTrace = workspaceLayout.view() === 'trace';
   clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   state.selectionPending = true; renderControls(); syncExecutionPanel();
-  try { const { run } = await api(`/api/projects/${encodeURIComponent(state.project.id)}/runs/${encodeURIComponent(id)}`); if (epoch !== state.epoch) return; state.selectionPending = false; state.automatic = null; state.artifactName = 'task.md'; state.taskId = null; updateRun(run); renderHeader(); schedulePoll(); }
+  if (fromTrace) renderTrace();
+  try {
+    const { run } = await api(`/api/projects/${encodeURIComponent(state.project.id)}/runs/${encodeURIComponent(id)}`);
+    if (epoch !== state.epoch) return;
+    state.selectionPending = false; state.automatic = null; state.artifactName = 'task.md'; state.taskId = null;
+    updateRun(run);
+    if (fromTrace) workspaceLayout.show('trace');
+    renderHeader(); schedulePoll();
+  }
   catch (error) { if (epoch === state.epoch) showError(error); }
-  finally { if (epoch === state.epoch) { state.selectionPending = false; renderHeader(); renderControls(); syncExecutionPanel(); schedulePoll(); } }
+  finally { if (epoch === state.epoch) { state.selectionPending = false; renderHeader(); renderControls(); syncExecutionPanel(); renderDeliveryProgress(); schedulePoll(); } }
 }
 async function startRun(expectedSource, { automatic = false } = {}) {
   if (!state.project || state.busy || state.selectionPending || (!historicalRun() && ACTIVE.has(state.run?.status))) return;
   if ($(automatic ? '#start-automatic' : '#start-run').disabled) return;
-  workspaceLayout.show('plan');
+  workspaceLayout.show(automatic ? 'overview' : 'plan');
   clearError(); setBusy(true); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   state.selectionPending = true; syncExecutionPanel();
   try {
@@ -1084,7 +1156,8 @@ async function startRun(expectedSource, { automatic = false } = {}) {
     if (epoch !== state.epoch) return;
     state.selectionPending = false;
     state.stageId = 'intake'; state.taskId = null; state.artifactName = 'task.md'; state.tab = 'events';
-    updateRun(run); renderHeader(); schedulePoll(); toast(automatic ? '已启动自动交付，正在处理需求。' : '编排已启动，可以点击节点查看过程');
+    updateRun(run); workspaceLayout.show(automatic ? 'overview' : 'plan');
+    renderHeader(); schedulePoll(); toast(automatic ? '已启动自动交付，正在处理需求。' : '编排已启动，可以点击节点查看过程');
   } catch (error) { if (epoch === state.epoch) showError(error); }
   finally { if (epoch === state.epoch) { state.selectionPending = false; syncExecutionPanel(); schedulePoll(); } setBusy(false); }
 }
@@ -1247,6 +1320,25 @@ $('#automatic-delivery-form').addEventListener('submit', event => {
   void startRun(undefined, { automatic: true });
 });
 $('[data-workspace-next]').addEventListener('click', handleWorkspaceNext);
+$('#studio-trace-host').addEventListener('click', event => {
+  if (state.selectionPending || !state.run || state.busy) return;
+  const stage = event.target.closest('[data-trace-stage]')?.dataset.traceStage;
+  if (stage && state.run.stages?.some(item => item.id === stage)) {
+    workspaceLayout.show('plan');
+    $('#workflow-details').open = true;
+    state.stageId = stage;
+    renderWorkflow(); renderInspector(); focusWorkspaceTarget($('#stage-inspector'));
+    return;
+  }
+  const target = event.target.closest('[data-trace-candidates]');
+  const execution = target?.dataset.traceCandidates;
+  if (execution && plannedPanel?.traceExecutions()?.some(item => item.id === execution)) {
+    workspaceLayout.show('execution');
+    selectDeliverySurface('candidates');
+    const { traceCommit: commit, traceTask: taskId, traceAttempt: attemptId } = target.dataset;
+    focusWorkspaceTarget(plannedPanel.focusTraceExecution(execution, commit ? { commit, taskId, attemptId } : undefined));
+  }
+});
 $('#delivery-station-tabs').addEventListener('click', event => {
   const button = event.target.closest('[data-delivery-surface]');
   if (button) selectDeliverySurface(button.dataset.deliverySurface);
@@ -1341,7 +1433,15 @@ function addressedRun() {
   const safeId = value => /^[\w-]{1,128}$/u.test(value || '') ? value : null;
   const view = params.get('view');
   return { projectId: safeId(params.get('project')), runId: safeId(params.get('run')),
-    view: ['source', 'plan', 'tasks', 'execution'].includes(view) ? view : null };
+    view: view === 'details' ? 'plan' : WORKSPACE_VIEWS.includes(view) ? view : null };
+}
+
+function teamUrl({ projectId, runId, view }) {
+  if (!projectId) return '/team.html';
+  const query = new URLSearchParams({ project: projectId });
+  if (runId) query.set('run', runId);
+  if (view) query.set('view', view);
+  return '/team.html?' + query;
 }
 
 async function initialize() {
@@ -1354,10 +1454,7 @@ async function initialize() {
     if (health.teamAccess?.enabled) {
       const session = await api('/api/team/session');
       if (!session.user) {
-        const query = new URLSearchParams();
-        if (destination.projectId) query.set('project', destination.projectId);
-        if (destination.projectId && destination.runId) query.set('run', destination.runId);
-        window.location.replace(query.size ? '/team.html?' + query : '/team.html');
+        window.location.replace(teamUrl(destination));
         return;
       }
       state.actorRole = session.user.role;
@@ -1374,9 +1471,8 @@ async function initialize() {
       try { selection = JSON.parse(sessionStorage.getItem('taskflow-selection')); } catch { /* Start with the most recently updated project. */ }
       const addressed = projects.find(item => item.id === destination.projectId);
       const project = addressed || projects.find(item => item.id === selection?.projectId) || projects[0];
-      await selectProject(project.id, { runId: addressed ? destination.runId : selection?.runId });
+      await selectProject(project.id, { runId: addressed ? destination.runId : selection?.runId, selection });
       if (destination.view && (!destination.projectId || addressed) && state.project?.id === project.id) workspaceLayout.show(destination.view);
-      if (!addressed && state.project?.id === selection?.projectId && state.run?.id === selection?.runId && state.run?.tasks?.some(task => task.id === selection?.taskId)) { state.taskId = selection.taskId; renderRecords(); rememberSelection(); }
       if (destination.projectId && (!addressed || destination.runId && state.run?.id !== destination.runId)) {
         showError(new Error('链接指定的项目或运行当前不可用，已显示可访问的记录。'));
       }

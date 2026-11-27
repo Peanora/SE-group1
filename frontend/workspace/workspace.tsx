@@ -1,55 +1,112 @@
-import { Cable, RefreshCw } from 'lucide-react';
+import {
+  Activity, Cable, ChevronDown, CircleHelp, ClipboardCheck, FileText, FolderOpen,
+  GitBranch, LayoutGrid, Plus, RefreshCw, Settings2, ShieldCheck, Workflow,
+} from 'lucide-react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { WorkspaceDialogs } from './dialogs';
-import { ProjectHeading, ProjectLaunch, RunOverview } from './overview';
+import { ProjectHeading, RunInspector, RunOverview } from './overview';
 import { DeliveryPanel, PlanningPanel, RequirementsPanel, TaskPanel } from './panels';
+
+const views = [
+  { id: 'overview', label: '流程总览', icon: LayoutGrid },
+  { id: 'source', label: '需求版本', icon: FileText },
+  { id: 'plan', label: '规格与计划', icon: ClipboardCheck },
+  { id: 'tasks', label: '任务编排', icon: GitBranch },
+  { id: 'execution', label: '执行验收', icon: ShieldCheck },
+  { id: 'trace', label: '运行复盘', icon: Activity },
+];
 
 function WorkAreaNavigation() {
   return (
-    <nav id="workspace-nav" className="workspace-nav" role="tablist" aria-label="项目工作区" hidden>
-      <button type="button" id="workspace-tab-plan" role="tab" data-workspace-view="plan"
-        aria-controls="workspace-plan" aria-selected="true">规划与确认</button>
-      <button type="button" id="tab-tasks" role="tab" data-workspace-view="tasks"
-        aria-controls="workspace-tasks" aria-selected="false">开发任务 <span id="task-count">0</span></button>
-      <button type="button" id="workspace-tab-source" role="tab" data-workspace-view="source"
-        aria-controls="workspace-source" aria-selected="false">需求与功能</button>
-      <button type="button" id="workspace-tab-execution" role="tab" data-workspace-view="execution"
-        aria-controls="workspace-execution" aria-selected="false">代码与验收</button>
+    <nav id="workspace-nav" className="workspace-nav studio-views" role="tablist" aria-label="项目工作区" hidden>
+      {views.map(({ id, label, icon: Icon }) => (
+        <button key={id} type="button" id={id === 'tasks' ? 'tab-tasks' : 'workspace-tab-' + id}
+          role="tab" data-workspace-view={id} aria-controls={'workspace-' + id}
+          aria-selected={id === 'overview'} tabIndex={id === 'overview' ? 0 : -1}>
+          <Icon size={16} aria-hidden="true" />
+          {label}
+          {id === 'tasks' && <span id="task-count">0</span>}
+        </button>
+      ))}
     </nav>
   );
 }
 
-function ProjectSidebar() {
+type TopMenuProps = {
+  triggerId: string;
+  className: string;
+  label: ReactNode;
+  ariaLabel?: string;
+  children: ReactNode;
+};
+
+function TopMenu({ triggerId, className, label, ariaLabel, children }: TopMenuProps) {
+  const menu = useRef<HTMLDetailsElement>(null);
+  const trigger = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    function dismissOutside(event: PointerEvent) {
+      if (menu.current?.open && !menu.current.contains(event.target as Node)) menu.current.open = false;
+    }
+    document.addEventListener('pointerdown', dismissOutside);
+    return () => document.removeEventListener('pointerdown', dismissOutside);
+  }, []);
+
   return (
-    <aside className="sidebar" aria-label="项目导航">
-      <a className="brand" href="/" aria-label="Taskflow 需求编排台首页">
-        <span className="tf-brand-mark" aria-hidden="true"><i /><i /><i /></span>
-        <span><strong>Taskflow</strong><small>研发工作台</small></span>
-      </a>
-      <button type="button" className="new-project-button" id="new-project"><span aria-hidden="true">＋</span> 新建项目</button>
-      <div className="sidebar-section-title"><span>项目</span><span id="project-count">0</span></div>
-      <nav id="project-list" className="project-list" aria-label="项目列表" />
-      <div className="sidebar-bottom tf-sidebar-bottom">
-        <nav className="tf-settings-links" aria-label="设置">
-          <a id="workspace-agent-settings" href="/agent-settings.html" className="sidebar-help"><span className="tf-nav-icon tf-icon-roles" aria-hidden="true" />Agent 角色</a>
-          <a id="workspace-api-settings" href="/api-settings.html" className="sidebar-help"><span className="tf-nav-icon tf-icon-api" aria-hidden="true" />API 服务</a>
-          <a id="workspace-mcp-settings" href="/factory.html?view=mcp" className="sidebar-help" hidden><Cable aria-hidden="true" size={16} />MCP 工具</a>
-        </nav>
-        <button type="button" id="help-button" className="sidebar-help"><span className="tf-nav-icon tf-icon-help" aria-hidden="true">?</span>使用说明</button>
-      </div>
-    </aside>
+    <details ref={menu} className={'studio-menu ' + className} onKeyDown={event => {
+      if (event.key !== 'Escape' || !event.currentTarget.open) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.currentTarget.open = false;
+      trigger.current?.focus();
+    }}>
+      <summary ref={trigger} id={triggerId} aria-label={ariaLabel}>{label}</summary>
+      <div className="studio-popover" onClick={event => {
+        const selected = (event.target as Element).closest('a[href], button:not([data-delete-project])');
+        if (!selected || !menu.current) return;
+        menu.current.open = false;
+        if (selected.hasAttribute('data-project')) trigger.current?.focus();
+      }}>{children}</div>
+    </details>
   );
 }
 
 function ProjectTopbar() {
   return (
-    <header className="topbar">
-      <div className="breadcrumb"><span>工作台</span><span aria-hidden="true">/</span><strong id="breadcrumb-project">新项目</strong></div>
-      <div className="topbar-right">
-        <a id="team-link" href="/team.html" hidden>团队账号</a>
-        <span className="connection-status" id="connection-status" role="status"><span />正在连接服务</span>
-        <button type="button" className="icon-button" id="refresh-button" aria-label="刷新工作区" title="刷新工作区">
-          <RefreshCw aria-hidden="true" />
+    <header className="studio-appbar">
+      <div className="studio-appbar-inner">
+        <a className="studio-brand" href="/" aria-label="Taskflow 研发工作台首页">
+          <span className="studio-brand-mark"><Workflow size={17} aria-hidden="true" /></span>
+          <strong>Taskflow</strong>
+        </a>
+        <TopMenu triggerId="project-menu-trigger" className="studio-project-menu" label={<>
+          <FolderOpen size={17} aria-hidden="true" />
+          <strong id="breadcrumb-project">新项目</strong>
+          <ChevronDown size={14} aria-hidden="true" />
+        </>}>
+          <div className="studio-popover-heading">项目 <span id="project-count">0</span></div>
+          <nav id="project-list" className="project-list" aria-label="项目列表" />
+        </TopMenu>
+        <button type="button" className="studio-new-project" id="new-project">
+          <Plus size={17} aria-hidden="true" /><span>新建项目</span>
         </button>
+        <div className="studio-appbar-tools">
+          <span className="connection-status studio-connection" id="connection-status" role="status"><span />正在连接服务</span>
+          <a id="team-link" className="studio-account" href="/team.html" hidden>团队账号</a>
+          <button type="button" className="studio-tool-button" id="refresh-button" aria-label="刷新工作区" title="刷新工作区">
+            <RefreshCw size={17} aria-hidden="true" />
+          </button>
+          <TopMenu triggerId="settings-menu-trigger" className="studio-settings-menu" ariaLabel="设置" label={<>
+            <Settings2 size={17} aria-hidden="true" /><span>设置</span>
+          </>}>
+            <nav className="studio-settings-links" aria-label="设置">
+              <a id="workspace-agent-settings" href="/agent-settings.html"><GitBranch size={16} aria-hidden="true" />Agent 角色</a>
+              <a id="workspace-api-settings" href="/api-settings.html"><Settings2 size={16} aria-hidden="true" />API 服务</a>
+              <a id="workspace-mcp-settings" href="/factory.html?view=mcp" hidden><Cable size={16} aria-hidden="true" />MCP 工具</a>
+              <button type="button" id="help-button"><CircleHelp size={16} aria-hidden="true" />使用说明</button>
+            </nav>
+          </TopMenu>
+        </div>
       </div>
     </header>
   );
@@ -57,11 +114,17 @@ function ProjectTopbar() {
 
 function WorkAreas() {
   return (
-    <div id="workspace-panels" className="workspace-panels" hidden>
+    <div id="workspace-panels" className="workspace-panels studio-panels">
+      <RunInspector />
+      <RunOverview />
+      <RequirementsPanel />
       <PlanningPanel />
       <TaskPanel />
-      <RequirementsPanel />
       <DeliveryPanel />
+      <section id="workspace-trace" className="workspace-panel studio-trace" data-workspace-panel="trace"
+        role="tabpanel" aria-labelledby="workspace-tab-trace" tabIndex={-1} hidden>
+        <div id="studio-trace-host" />
+      </section>
     </div>
   );
 }
@@ -70,20 +133,17 @@ export function Workspace() {
   return (
     <>
       <a className="skip-link" href="#main">跳到工作区</a>
-      <ProjectSidebar />
-      <div className="app-shell">
+      <div className="app-shell studio-app">
         <ProjectTopbar />
-        <main id="main" className="workspace">
+        <main id="main" className="workspace studio-main" tabIndex={-1}>
           <div id="error-banner" className="error-banner" role="alert" hidden>
             <span id="error-text" />
             <button type="button" id="dismiss-error" aria-label="关闭错误提示">×</button>
           </div>
           <ProjectHeading />
-          <ProjectLaunch />
-          <RunOverview />
           <WorkAreaNavigation />
           <WorkAreas />
-          <details className="workspace-scope">
+          <details className="workspace-scope studio-scope">
             <summary>平台范围</summary>
             <p className="field-note" id="platform-default-notice">统一按浏览器网页应用规划。平台提供技术方案，无需填写。</p>
           </details>

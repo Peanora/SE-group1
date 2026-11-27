@@ -323,6 +323,27 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     return { execution, failureHelp: failureHelp(execution), canReviseChecklist: mayReviseChecklist(execution), accepted: Boolean(accepted(execution)), hasDefinition: definitions().length > 0,
       canStart: Boolean(data?.capabilities?.canStart), reason: data?.capabilities?.reason || '' };
   }
+  function traceExecutions() {
+    if (!fresh || keyOf(contextOf(getContext())) !== key) return undefined;
+    // Historical rows remain readable here. Only currentRow can authorize operations.
+    return rows().filter(scoped);
+  }
+  function focusTraceExecution(id, candidate) {
+    const item = traceExecutions()?.find(item => item.id === id);
+    if (!refs || action || pending || !item) return null;
+    if (selectedId !== id) {
+      selectedId = id; selectionEdits++; previewRead = null; remember(); render(); void refresh();
+    }
+    const version = candidate && executionVersionEvidence(item).find(version => version.candidateCommit === candidate.commit
+      && version.taskId === (candidate.taskId ?? '') && version.attemptId === (candidate.attemptId ?? ''));
+    if (version) {
+      selectedVersion = version.key;
+      if ((item.tasks ?? []).some(task => task.id === version.taskId)) selectedTask = version.taskId;
+      renderProcess(item);
+      return refs.inspectorTitle;
+    }
+    return refs.detail.hidden ? refs.executionSelect : refs.processTitle;
+  }
   function reviseCurrentChecklist() {
     const { execution, canReviseChecklist } = workflowProgress();
     if (canReviseChecklist) return reviseChecklist(execution.id);
@@ -873,6 +894,6 @@ export function createPlannedExecutionPanel({ api, getContext, onError = () => {
     } catch (failure) { if (currentToken(token) && action === token) { fresh = false; report(failure); notice = '操作结果未确认，选择已保留。请刷新核对后再决定下一步；不会自动重复收费请求。'; } }
     finally { if (currentToken(token) && action === token) { action = null; render(); onUpdate(); schedule(); } else if (!destroyed && syncContext()) { render(); void refresh(); } }
   }
-  return { async mount(host) { if (destroyed || mounted || !host?.append) throw new Error('规划开发面板只能挂载一次。'); mounted = true; build(host); return refresh(); }, refresh, workflowProgress, focusStage, reviseCurrentChecklist,
+  return { async mount(host) { if (destroyed || mounted || !host?.append) throw new Error('规划开发面板只能挂载一次。'); mounted = true; build(host); return refresh(); }, refresh, workflowProgress, traceExecutions, focusTraceExecution, focusStage, reviseCurrentChecklist,
     destroy() { if (destroyed) return; remember(); destroyed = true; mounted = false; epoch++; readSerial++; action = null; pending = null; previewRead = null; clearTimeout(timer); resizeObserver?.disconnect(); if (refs) clearGraph(); root?.remove(); refs = null; eventNodes.clear(); taskNodes.clear(); versionNodes.clear(); processSelections.clear(); savedSelections.clear(); notified.clear(); } };
 }

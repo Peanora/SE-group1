@@ -1,315 +1,164 @@
+import { BookOpenCheck, ChevronLeft, FileInput, FileStack, GitPullRequest, ListTree, Network, ScrollText, Workflow } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { DeliveryStationTabs } from './delivery-station';
 
-export function PlanningPanel() {
+function SurfaceHeader({ title, titleId, icon: Icon, children }: {
+  title: string; titleId?: string; icon: LucideIcon; children?: ReactNode;
+}) {
   return (
-    <>
-      <section
-        id="workspace-plan"
-        className="workspace-panel"
-        data-workspace-panel="plan"
-        role="tabpanel"
-        aria-labelledby="workspace-tab-plan"
-        tabIndex={-1}
-      >
-        <section className="flow-panel" aria-labelledby="workflow-heading">
-          <header className="panel-toolbar">
-            <div className="panel-title">
-              <span className="section-symbol" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <rect x="2" y="8" width="6" height="8" rx="2" />
-                  <rect x="16" y="2" width="6" height="7" rx="2" />
-                  <rect x="16" y="15" width="6" height="7" rx="2" />
-                  <path d="M8 12h4V6h4M12 12v7h4" />
-                </svg>
-              </span>
-              <div>
-                <h2 id="workflow-heading">流程编排</h2>
-                <span id="workflow-subtitle">
-                  六个阶段，一份可追踪的开发计划
-                </span>
-              </div>
-            </div>
-          </header>
-          <p
-            id="source-history-notice"
-            role="status"
-            hidden
-            style={{
-              margin: "0",
-              padding: "0 24px 12px",
-              color: "var(--muted)",
-            }}
-          >
-            此运行保留历史需求与审批记录，已停止推进。请基于当前需求重新编排并确认规格和计划；历史检查不会自动用于新版本。
-          </p>
-          <details id="workflow-details" className="workspace-process" open>
-            <summary>查看规划过程与阶段详情</summary>
-            <div className="flow-workspace">
-              <div className="flow-canvas">
-                <div className="canvas-label">
-                  工作流依赖图 <span>点击节点查看详情</span>
-                </div>
-                <div className="workflow-graph-scroll">
-                  <div
-                    id="workflow-graph"
-                    className="workflow-graph"
-                    aria-label="规划工作流"
-                  ></div>
-                </div>
-                <div className="canvas-footer">
-                  <span>
-                    <i className="legend-dot legend-parallel"></i>
-                    规格确认后，架构与任务可并行生成
-                  </span>
-                  <span>
-                    <i className="legend-dot legend-review"></i>
-                    <span id="workflow-confirmation-legend">
-                      先确认规格，再确认计划
-                    </span>
-                  </span>
-                </div>
-              </div>
-              <aside
-                id="stage-inspector"
-                className="stage-inspector"
-                aria-label="阶段详情"
-              />
-            </div>
-            <details className="demo-options">
-              <summary>演示选项</summary>
-              <div className="demo-options-content">
-                <label htmlFor="failure-select">注入一次性故障</label>
-                <select id="failure-select">
-                  <option value="">关闭</option>
-                  <option value="tasks">任务拆解阶段</option>
-                  <option value="architecture">架构设计阶段</option>
-                  <option value="review">计划校验阶段</option>
-                </select>
-                <p>仅用于展示失败与重试。再次尝试该阶段时恢复正常。</p>
-              </div>
-            </details>
-          </details>
-          <section
-            id="planning-issue-host"
-            className="planning-issue"
-            aria-labelledby="planning-issue-heading"
-            hidden
-          >
-            <h3 id="planning-issue-heading" tabIndex={-1}>
-              查看问题
-            </h3>
-            <p data-issue-message></p>
-            <div className="planning-issue-draft" data-issue-draft hidden>
-              <h4 data-issue-draft-title></h4>
-              <p data-issue-draft-description></p>
-              <p data-issue-draft-quote-row>
-                模型尝试引用 <q data-issue-draft-quote></q>
-              </p>
-            </div>
-            <div className="planning-issue-explanation">
-              <p data-issue-explanation hidden></p>
-              <button
-                type="button"
-                className="button button-outline"
-                data-issue-retry
-                hidden
-              >
-                重试生成问题
-              </button>
-            </div>
-            <details hidden>
-              <summary>上次保存的补充</summary>
-              <p data-issue-previous></p>
-            </details>
-            <form hidden>
-              <ol data-issue-fields></ol>
-              <div className="spec-repair-actions">
-                <button
-                  type="button"
-                  className="button button-outline"
-                  data-issue-save
-                >
-                  保存草稿
-                </button>
-                <button
-                  type="submit"
-                  className="button button-primary"
-                  data-issue-continue
-                >
-                  提交本轮回答
-                </button>
-              </div>
-            </form>
-            <button
-              type="button"
-              className="button button-primary"
-              data-issue-recover
-              hidden
-            >
-              用已保存的回答重新整理
-            </button>
-            <p data-issue-status role="status"></p>
-          </section>
-          <div id="review-home">
-            <section
-              id="specification-meeting-host"
-              className="specification-meeting"
-              hidden
-            ></section>
-            <section
-              id="review-banner"
-              className="review-banner"
-              aria-labelledby="review-heading"
-              hidden
-            ></section>
-          </div>
-          <section
-            id="spec-repair-host"
-            className="spec-repair"
-            aria-labelledby="spec-repair-heading"
-            hidden
-          ></section>
-        </section>
-      </section>
-    </>
+    <header className="studio-surface-header">
+      <Icon aria-hidden="true" />
+      <h2 id={titleId}>{title}</h2>
+      {children}
+    </header>
   );
 }
 
+function PlanningStages() {
+  return (
+    <details id="workflow-details" className="studio-stage-details" open>
+      <summary><Workflow aria-hidden="true" />规划阶段与产物</summary>
+      <div className="studio-stage-columns">
+        <div>
+          <div id="workflow-graph" className="studio-stage-index" aria-label="规划工作流" />
+          <p className="studio-stage-legend" id="workflow-confirmation-legend">先确认规格，再确认计划</p>
+        </div>
+        <aside id="stage-inspector" className="studio-stage-inspector" tabIndex={-1} aria-label="阶段详情" />
+      </div>
+      <details className="studio-demo-control">
+        <summary>演示选项</summary>
+        <label htmlFor="failure-select">注入一次性故障</label>
+        <select id="failure-select">
+          <option value="">关闭</option><option value="tasks">任务拆解阶段</option>
+          <option value="architecture">架构设计阶段</option><option value="review">计划校验阶段</option>
+        </select>
+        <p>重试该阶段时恢复正常。</p>
+      </details>
+    </details>
+  );
+}
+
+function PlanningIssues() {
+  return (
+    <section id="planning-issue-host" className="planning-issue" aria-labelledby="planning-issue-heading" hidden>
+      <h3 id="planning-issue-heading" tabIndex={-1}>查看问题</h3>
+      <p data-issue-message />
+      <div className="planning-issue-draft" data-issue-draft hidden>
+        <h4 data-issue-draft-title /><p data-issue-draft-description />
+        <p data-issue-draft-quote-row>模型尝试引用 <q data-issue-draft-quote /></p>
+      </div>
+      <div className="planning-issue-explanation">
+        <p data-issue-explanation hidden />
+        <button type="button" className="button button-outline" data-issue-retry hidden>重试生成问题</button>
+      </div>
+      <details hidden><summary>上次保存的补充</summary><p data-issue-previous /></details>
+      <form hidden>
+        <ol data-issue-fields />
+        <div className="spec-repair-actions">
+          <button type="button" className="button button-outline" data-issue-save>保存草稿</button>
+          <button type="submit" className="button button-primary" data-issue-continue>提交本轮回答</button>
+        </div>
+      </form>
+      <button type="button" className="button button-primary" data-issue-recover hidden>用已保存的回答重新整理</button>
+      <p data-issue-status role="status" />
+    </section>
+  );
+}
+
+export function PlanningPanel() {
+  return (
+    <section id="workspace-plan" className="workspace-panel studio-surface" data-workspace-panel="plan"
+      role="tabpanel" aria-labelledby="workspace-tab-plan" tabIndex={-1} hidden>
+      <SurfaceHeader title="规格与计划审阅" titleId="workflow-heading" icon={BookOpenCheck}>
+        <span id="workflow-subtitle" />
+      </SurfaceHeader>
+      <p id="source-history-notice" className="studio-history-notice" role="status" hidden>
+        此运行属于历史需求版本。请在当前需求版本重新编排并确认规格和计划。
+      </p>
+      <PlanningIssues />
+      <section id="spec-repair-host" className="spec-repair" aria-labelledby="spec-repair-heading" hidden />
+      <div id="review-home">
+        <section id="specification-meeting-host" className="specification-meeting" hidden />
+        <section id="review-banner" className="review-banner" aria-labelledby="review-heading" hidden />
+      </div>
+      <PlanningStages />
+    </section>
+  );
+}
+
+const taskViews = [
+  { id: 'tasks', tabId: 'records-tab-tasks', title: '模块依赖图', icon: Network },
+  { id: 'schedule', tabId: 'tab-schedule', title: '计划清单', icon: ListTree },
+  { id: 'artifacts', tabId: 'tab-artifacts', title: '规划文档', icon: FileStack, countId: 'artifact-count' },
+  { id: 'events', tabId: 'tab-events', title: '规划事件', icon: ScrollText, countId: 'event-count' },
+];
+
 export function TaskPanel() {
   return (
-    <>
-      <section
-        id="workspace-tasks"
-        className="workspace-panel"
-        data-workspace-panel="tasks"
-        role="tabpanel"
-        aria-labelledby="tab-tasks"
-        tabIndex={-1}
-        hidden
-      >
-        <section className="records-panel" aria-label="运行详情">
-          <header className="records-toolbar">
-            <div className="tabs" role="tablist" aria-label="查看运行内容">
-              <button
-                role="tab"
-                id="records-tab-tasks"
-                data-tab="tasks"
-                aria-selected="true"
-                aria-controls="records-body"
-              >
-                任务图
-              </button>
-              <button
-                role="tab"
-                id="tab-schedule"
-                data-tab="schedule"
-                aria-selected="false"
-                aria-controls="records-body"
-              >
-                计划清单
-              </button>
-              <button
-                role="tab"
-                id="tab-artifacts"
-                data-tab="artifacts"
-                aria-selected="false"
-                aria-controls="records-body"
-              >
-                生成文档 <span id="artifact-count">0</span>
-              </button>
-              <button
-                role="tab"
-                id="tab-events"
-                data-tab="events"
-                aria-selected="false"
-                aria-controls="records-body"
-              >
-                执行记录 <span id="event-count">0</span>
-              </button>
-            </div>
-            <span className="records-hint" id="records-hint">
-              任务、文档与运行依据
-            </span>
-          </header>
-          <div
-            id="records-body"
-            className="records-body"
-            role="tabpanel"
-            aria-labelledby="records-tab-tasks"
-          ></div>
-        </section>
-        <details id="simulation-tools" className="workspace-secondary">
-          <summary>模拟编排（可选）</summary>
-          <div
-            id="simulation-panel-host"
-            className="simulation-panel"
-            hidden
-          ></div>
-        </details>
-      </section>
-    </>
+    <section id="workspace-tasks" className="workspace-panel studio-surface" data-workspace-panel="tasks"
+      role="tabpanel" aria-labelledby="tab-tasks" tabIndex={-1} hidden>
+      <SurfaceHeader title="开发任务编排" icon={Network}><span id="records-hint">任务依赖与详情</span></SurfaceHeader>
+      <nav className="tabs studio-subnav" role="tablist" aria-label="查看运行内容">
+        {taskViews.map(({ id, tabId, title, icon: Icon, countId }) => (
+          <button key={id} type="button" role="tab" id={tabId} data-tab={id}
+            aria-selected={id === 'tasks'} aria-controls="records-body">
+            <Icon aria-hidden="true" />{title}{countId && <span id={countId}>0</span>}
+          </button>
+        ))}
+      </nav>
+      <div id="records-body" className="records-body studio-records" role="tabpanel" aria-labelledby="records-tab-tasks" />
+      <details id="simulation-tools" className="studio-simulation">
+        <summary>模拟调度实验</summary><div id="simulation-panel-host" className="simulation-panel" hidden />
+      </details>
+    </section>
   );
 }
 
 export function RequirementsPanel() {
   return (
-    <>
-      <section
-        id="workspace-source"
-        className="workspace-panel"
-        data-workspace-panel="source"
-        role="tabpanel"
-        aria-labelledby="workspace-tab-source"
-        tabIndex={-1}
-        hidden
-      >
-        <div className="workspace-section-heading">
-          <h2>需求与功能</h2>
-          <button type="button" className="text-button" data-workspace-back>
-            返回上一工作区
-          </button>
-        </div>
-        <section id="source-changes-section" aria-label="需求变更工作区" hidden>
-          <div id="source-changes-host"></div>
-        </section>
-      </section>
-    </>
+    <section id="workspace-source" className="workspace-panel studio-surface" data-workspace-panel="source"
+      role="tabpanel" aria-labelledby="workspace-tab-source" tabIndex={-1} hidden>
+      <SurfaceHeader title="需求输入与版本" icon={FileInput}>
+        <button type="button" className="studio-back" data-workspace-back><ChevronLeft aria-hidden="true" />返回上一工作区</button>
+      </SurfaceHeader>
+      <section id="source-changes-section" aria-label="需求变更工作区" hidden><div id="source-changes-host" /></section>
+    </section>
   );
 }
 
 export function DeliveryPanel() {
   return (
-    <section id="workspace-execution" className="workspace-panel delivery-station"
-      data-workspace-panel="execution" role="tabpanel" aria-labelledby="workspace-tab-execution"
-      tabIndex={-1} hidden>
-      <DeliveryStationTabs />
-      <div id="delivery-pane-overview" data-delivery-pane="overview" role="tabpanel" aria-labelledby="delivery-tab-overview">
-        <div id="delivery-overview-host" />
-        <nav className="execution-workspace-flow" aria-label="从验收清单到交付">
-          <ol id="execution-workspace-steps" />
-          <p id="execution-next-hint" hidden />
-        </nav>
-      </div>
-      <div id="delivery-pane-checklist" data-delivery-pane="checklist" role="tabpanel" aria-labelledby="delivery-tab-checklist" hidden>
-        <details id="verification-plans-section" className="workspace-secondary" hidden>
-          <summary>准备验收清单</summary>
-          <div id="verification-plans-host" />
-        </details>
-        <p id="verification-plans-unavailable" className="delivery-empty" hidden>当前服务未开放验收清单。</p>
-      </div>
-      <div id="delivery-pane-candidates" data-delivery-pane="candidates" role="tabpanel" aria-labelledby="delivery-tab-candidates" hidden>
-        <section id="planned-execution-section" hidden><div id="planned-execution-host" /></section>
-        <p id="planned-execution-unavailable" className="delivery-empty" hidden>当前服务未开放研发执行记录。</p>
-      </div>
-      <div id="delivery-pane-releases" data-delivery-pane="releases" role="tabpanel" aria-labelledby="delivery-tab-releases" hidden>
-        <section id="project-evolution-section" hidden><div id="project-evolution-host" /></section>
-        <p id="local-delivery-unavailable" className="delivery-empty" hidden>当前服务未开放本机版本与需求演进。</p>
-      </div>
-      <div id="delivery-pane-reference" data-delivery-pane="reference" role="tabpanel" aria-labelledby="delivery-tab-reference" hidden>
-        <details id="execution-tools" className="workspace-secondary">
-          <summary>固定参考执行</summary>
-          <div id="execution-panel-host" />
-        </details>
+    <section id="workspace-execution" className="workspace-panel studio-surface delivery-station"
+      data-workspace-panel="execution" role="tabpanel" aria-labelledby="workspace-tab-execution" tabIndex={-1} hidden>
+      <SurfaceHeader title="执行与验收" icon={GitPullRequest} />
+      <div className="studio-delivery-layout">
+        <DeliveryStationTabs />
+        <div id="delivery-pane-overview" data-delivery-pane="overview" role="tabpanel" aria-labelledby="delivery-tab-overview">
+          <div id="delivery-overview-host" />
+          <nav className="execution-workspace-flow" aria-label="从验收清单到交付">
+            <ol id="execution-workspace-steps" /><p id="execution-next-hint" hidden />
+          </nav>
+        </div>
+        <div id="delivery-pane-checklist" data-delivery-pane="checklist" role="tabpanel" aria-labelledby="delivery-tab-checklist" hidden>
+          <details id="verification-plans-section" className="workspace-secondary" hidden>
+            <summary>准备验收清单</summary><div id="verification-plans-host" />
+          </details>
+          <p id="verification-plans-unavailable" className="delivery-empty" hidden>当前服务未开放验收清单。</p>
+        </div>
+        <div id="delivery-pane-candidates" data-delivery-pane="candidates" role="tabpanel" aria-labelledby="delivery-tab-candidates" hidden>
+          <section id="planned-execution-section" hidden><div id="planned-execution-host" /></section>
+          <p id="planned-execution-unavailable" className="delivery-empty" hidden>当前服务未开放研发执行记录。</p>
+        </div>
+        <div id="delivery-pane-releases" data-delivery-pane="releases" role="tabpanel" aria-labelledby="delivery-tab-releases" hidden>
+          <section id="project-evolution-section" hidden><div id="project-evolution-host" /></section>
+          <p id="local-delivery-unavailable" className="delivery-empty" hidden>当前服务未开放本机版本与需求演进。</p>
+        </div>
+        <div id="delivery-pane-reference" data-delivery-pane="reference" role="tabpanel" aria-labelledby="delivery-tab-reference" hidden>
+          <details id="execution-tools" className="workspace-secondary">
+            <summary>固定参考执行</summary><div id="execution-panel-host" />
+          </details>
+        </div>
       </div>
     </section>
   );

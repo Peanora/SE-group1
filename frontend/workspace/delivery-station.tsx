@@ -1,4 +1,4 @@
-import { ArrowRight, CheckCircle2, ClipboardCheck, Code2, FlaskConical, GitFork, Layers3, PackageCheck } from 'lucide-react';
+import { ArrowRight, ClipboardCheck, Code2, FlaskConical, GitCommitHorizontal, GitFork, Layers3, ListChecks, PackageCheck } from 'lucide-react';
 import { Button } from '../components/button';
 
 export const deliverySurfaces = [
@@ -46,45 +46,41 @@ export interface DeliveryOverviewProps {
 
 export function DeliveryOverview({ state, status, title, note, action, versions, evidence, busy }: DeliveryOverviewProps) {
   return (
-    <div className="delivery-instrument">
-      <section className="delivery-present" aria-labelledby="delivery-now-title">
-        <header className="delivery-paper-bar">
-          <span><PackageCheck aria-hidden="true" />当前交付</span>
-          <span className="delivery-now-status" data-state={state} role="status">{status}</span>
-        </header>
-        <div className="delivery-decision">
-          <div>
-            <h3 id="delivery-now-title">{title}</h3>
-            <p>{note}</p>
-          </div>
-          {action && (
-            <Button type="button" data-delivery-jump={action.stage} disabled={busy}>
-              {action.label}<ArrowRight aria-hidden="true" />
-            </Button>
-          )}
+    <div className="studio-delivery-overview">
+      <section className="studio-delivery-decision" aria-labelledby="delivery-now-title">
+        <PackageCheck aria-hidden="true" />
+        <div>
+          <span className="studio-decision-status" data-state={state} role="status">{status}</span>
+          <h3 id="delivery-now-title">{title}</h3>
+          <p>{note}</p>
         </div>
-        <section className="delivery-evidence-summary" aria-label="检查概览">
-          <h4><CheckCircle2 aria-hidden="true" />本次检查证据</h4>
-          <dl>
+        {action && (
+          <Button type="button" data-delivery-jump={action.stage} disabled={busy}>
+            {action.label}<ArrowRight aria-hidden="true" />
+          </Button>
+        )}
+      </section>
+      <div className="studio-delivery-evidence">
+        <section aria-label="检查概览">
+          <h4><ListChecks aria-hidden="true" />候选验收证据</h4>
+          <dl className="studio-checks-list">
             {evidence.map(item => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}
           </dl>
         </section>
-      </section>
-      <aside className="delivery-chain" aria-label="运行版本链">
-        <h4>版本链</h4>
-        <ol>
-          {versions.map(version => (
-            <li key={version.kind}>
-              <span aria-hidden="true" />
-              <div>
-                <strong>{version.kind}</strong>
-                <small>{version.status}</small>
-                {version.reference && <code title={version.reference}>{version.reference.slice(0, 12)}</code>}
-              </div>
-            </li>
-          ))}
-        </ol>
-      </aside>
+        <aside aria-label="运行版本链">
+          <h4><GitCommitHorizontal aria-hidden="true" />本次运行的版本</h4>
+          <table className="studio-version-table">
+            <thead><tr><th scope="col">产物</th><th scope="col">状态</th><th scope="col">版本</th></tr></thead>
+            <tbody>{versions.map(version => (
+              <tr key={version.kind}>
+                <th scope="row">{version.kind}</th>
+                <td>{version.status}</td>
+                <td>{version.reference ? <code title={version.reference}>{version.reference.slice(0, 12)}</code> : '—'}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </aside>
+      </div>
     </div>
   );
 }

@@ -12,7 +12,7 @@ const content = '用户可以查看资源列表。';
 const specification = text => ({ title: '资源工作台', summary: text, goals: ['查看资源'], roles: ['用户'], questions: [], constraints: [], assumptions: [], acceptanceScenarios: ['展示资源列表'],
   stack: { frontend: 'HTML/CSS/JavaScript', backend: 'Node.js', storage: 'SQLite' }, sourceMode: 'local',
   requirements: [{ id: 'R-001', title: '查看资源', description: text, sourceQuote: text, acceptance: ['展示资源列表'] }] });
-const views = ['plan', 'tasks', 'source', 'execution'];
+const views = ['overview', 'source', 'plan', 'tasks', 'execution', 'trace'];
 const nav = (page, view) => page.locator(`[data-workspace-view="${view}"]`);
 const pane = (page, view) => page.locator(`#workspace-${view}`);
 
@@ -217,9 +217,11 @@ for (const height of [667, 844]) test(`短屏 390×${height}：长错误可滚�
   await page.setViewportSize({ width: 390, height });
   const modeProject = await app.store.create({ name: `预算展示入口${height}`, source: { filename: 'requirements.md', content } });
   await page.locator('#refresh-button').click();
+  await page.locator('#project-menu-trigger').click();
   await page.locator(`[data-project="${modeProject.id}"]`).click();
   await page.waitForFunction(name => document.querySelector('#project-title').textContent === name, modeProject.name);
   await page.locator('#mode-select').selectOption('model');
+  await page.locator('#project-menu-trigger').click();
   await page.locator(`[data-project="${project.id}"]`).click();
   await page.locator('#approve-button').waitFor();
   assert.equal(await page.locator('#planning-charge-notice').isVisible(), true);
@@ -264,7 +266,7 @@ for (const height of [667, 844]) test(`短屏 390×${height}：长错误可滚�
   await page.screenshot({ path: path.join(shots, `short-error-recovered-${height}.png`) });
 });
 
-for (const width of [1440, 390]) test(`统一工作台 ${width}px：四工作面、草稿阅读位置与就地任务编辑`, { timeout: 90000 }, async t => {
+for (const width of [1440, 390]) test(`统一工作台 ${width}px：六个工作面、草稿阅读位置与就地任务编辑`, { timeout: 90000 }, async t => {
   const { app, project, run, page, modelCalls } = await fixture(t, width);
   await assertOnlyView(page, 'plan');
   for (const view of views) { await nav(page, view).click(); await assertOnlyView(page, view); }

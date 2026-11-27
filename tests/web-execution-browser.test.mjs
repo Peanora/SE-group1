@@ -87,7 +87,7 @@ test('real workbench confirms both planning versions before its execution panel 
   await page.keyboard.press('End');
   assert.equal(await page.getByRole('tab', { name: '参考实验', exact: true }).getAttribute('aria-selected'), 'true');
   await page.keyboard.press('Home');
-  await overview.getByRole('button', { name: '打开规划与确认' }).click();
+  await overview.getByRole('button', { name: '打开规格与计划', exact: true }).click();
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.execution-panel .ep-body').textContent.includes('编码模型：界面连接替身'));
   const run = app.store.get(project.id).runs.at(-1);
@@ -162,11 +162,12 @@ test('real workbench confirms both planning versions before its execution panel 
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).waitFor();
   const { project: other } = await request('/api/projects', { name: '切换目标项目', filename: 'other.md', content: source });
   await page.locator('#refresh-button').click();
-  await page.locator(`[data-project="${other.id}"]`).waitFor();
+  await page.locator(`[data-project="${other.id}"]`).waitFor({ state: 'attached' });
   await page.waitForFunction(() => !document.querySelector('#approve-button')?.disabled);
   let releaseProject;
   const projectGate = new Promise(resolve => { releaseProject = resolve; });
   await page.route(`**/api/projects/${other.id}`, async route => { await projectGate; await route.continue(); });
+  await page.locator('#project-menu-trigger').click();
   await page.locator(`[data-project="${other.id}"]`).click();
   await page.waitForFunction(() => document.querySelector('.execution-panel .ep-notice').textContent.includes('选择一个已确认'));
   assert.equal(await page.locator('#approve-button').isDisabled(), true);
@@ -174,6 +175,7 @@ test('real workbench confirms both planning versions before its execution panel 
   await page.locator('#approve-button').evaluate(button => button.click());
   assert.equal(app.store.getRun(project.id, next.id).run.approvals.plan, null);
   releaseProject(); await page.getByRole('heading', { name: other.name, exact: true }).waitFor();
+  await page.locator('#project-menu-trigger').click();
   await page.locator(`[data-project="${project.id}"]`).click();
   await page.locator('[data-workspace-view="plan"]').click();
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).click();

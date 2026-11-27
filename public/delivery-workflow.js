@@ -29,26 +29,47 @@ function usageDetail(stage) {
 export function deliverySteps({ project, run, historical, verification, development, automatic }) {
   const step = (id, title, state, text, detail = '') => ({ id, title, state, text, detail });
   const waiting = (id, title, text = '尚未开始') => step(id, title, 'idle', text);
+  const unavailable = (id, title) => step(id, title, 'unavailable', '旧版流程未纳入');
   const stage = id => run?.stages?.find(item => item.id === id);
   const spec = stage('spec');
-  const specApproved = !!run?.specRevision && run.approvals?.spec?.revision === run.specRevision;
+  const legacy = Boolean(run && run.workflowVersion !== 2);
+  const specApproved = !legacy && !!run?.specRevision && run.approvals?.spec?.revision === run.specRevision;
   const planApproved = !!run?.planRevision && run.approvals?.plan?.revision === run.planRevision && run.approvals?.plan?.specRevision === run.specRevision && specApproved;
   const unanswered = (run?.specQuestions ?? []).filter(question => question.blocking && !question.answer?.trim()).length;
-  const clarifying = run?.status === 'awaiting_spec' && (unanswered > 0 || run.spec?.clarificationRequired);
-  const planStages = ['architecture', 'tasks', 'review'].map(stage);
+  const clarifying = !legacy && run?.status === 'awaiting_spec' && (unanswered > 0 || run.spec?.clarificationRequired);
+  const planStages = (legacy ? ['architecture', 'tasks'] : ['architecture', 'tasks', 'review']).map(stage);
   const failedPlan = planStages.find(item => item?.status === 'failed');
   const activePlan = planStages.filter(item => item?.status === 'running');
+  const planGenerated = legacy ? planStages.every(item => item?.status === 'succeeded')
+    : run?.planRevision && stage('review')?.status === 'succeeded';
   const steps = [project ? step('source', '需求输入', 'done', '已导入', run?.sourceSnapshot?.filename || project.source?.filename) : waiting('source', '需求输入')];
   steps.push(clarifying ? step('spec', '设计规格', 'waiting', '等待补充需求', run?.planningIssue?.qa?.length ? `${run.planningIssue.qa.length} 个问题` : '查看待处理内容')
     : spec?.status === 'failed' ? step('spec', '设计规格', 'failed', '整理失败', '查看原因')
-      : spec?.status === 'succeeded' ? step('spec', '设计规格', 'done', '草案已生成', `${run.spec?.requirements?.length ?? 0} 条需求`)
+      : spec?.status === 'succeeded' ? step('spec', '设计规格', 'done', legacy ? '已生成' : '草案已生成', `${run.spec?.requirements?.length ?? 0} 条需求`)
         : spec?.status === 'running' ? step('spec', '设计规格', 'working', '正在整理') : waiting('spec', '设计规格'));
-  steps.push(specApproved ? step('spec-approval', '确认规格', 'done', '已确认')
+  steps.push(legacy ? unavailable('spec-approval', '确认规格')
+    : specApproved ? step('spec-approval', '确认规格', 'done', '已确认')
     : run?.status === 'awaiting_spec' && !clarifying ? step('spec-approval', '确认规格', 'waiting', '待你确认') : waiting('spec-approval', '确认规格', '等待规格草案'));
   steps.push(failedPlan ? step('plan', '开发计划', 'failed', '生成失败', failedPlan.title)
     : activePlan.length ? step('plan', '开发计划', 'working', '正在规划', activePlan.map(item => item.title).join('、'))
-      : run?.planRevision && stage('review')?.status === 'succeeded' ? step('plan', '开发计划', 'done', '已生成', `${run.tasks?.length ?? 0} 个任务`)
-        : specApproved && run?.status === 'running' ? step('plan', '开发计划', 'working', '正在检查依赖') : waiting('plan', '开发计划', '等待规格确认'));
+      : planGenerated ? step('plan', '开发计划', 'done', '已生成', `${run.tasks?.length ?? 0} 个任务`)
+        : specApproved && run?.status === 'running' ? step('plan', '开发计划', 'working', '正在检查依赖') : waiting('plan', '开发计划', legacy ? '等待规格与任务拆解' : '等待规格确认'));
+  if (legacy) {
+    const review = stage('review');
+    const exported = stage('export');
+    const reviewAndExport = (state, text, detail) => step('plan-approval', '审阅与导出', state, text, detail);
+    steps.push(exported?.status === 'succeeded' ? reviewAndExport('done', '规划文档已导出')
+      : exported?.status === 'failed' ? reviewAndExport('failed', '文档导出失败', exported.error)
+        : review?.status === 'failed' ? reviewAndExport('failed', '计划检查未通过', review.error)
+          : exported?.status === 'running' ? reviewAndExport('working', '正在导出文档')
+            : review?.status === 'running' ? reviewAndExport('working', '正在检查计划')
+              : run.status === 'awaiting_review' ? reviewAndExport('waiting', '等待审阅', historical ? '历史需求只读' : '确认后导出规划文档')
+                : run.approvedAt ? reviewAndExport('waiting', '已审阅，等待导出')
+                  : reviewAndExport('idle', '等待计划检查'));
+    steps.push(unavailable('verification', '验收准备'), unavailable('coding', '编写代码'),
+      unavailable('testing', '测试与审查'), unavailable('delivery', '交付'));
+    return steps;
+  }
   steps.push(planApproved ? step('plan-approval', '确认计划', 'done', '已确认')
     : run?.status === 'awaiting_review' && run.workflowVersion === 2 ? step('plan-approval', '确认计划', 'waiting', '待你确认') : waiting('plan-approval', '确认计划', '等待计划草案'));
   const item = development?.execution;

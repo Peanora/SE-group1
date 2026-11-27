@@ -27,7 +27,7 @@ test('真实Edge页面确认计划、模拟失败重试、暂停/继续、刷新
   await page.goto(`http://127.0.0.1:${app.server.address().port}/?view=details`);
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).click();
   await until(() => plan.status === 'succeeded');
-  await page.getByRole('tab', { name: /开发任务/ }).click();
+await page.getByRole('tab', { name: /任务编排/ }).click();
   await page.locator('#simulation-tools').evaluate(element => { element.open = true; });
   await page.getByRole('button', { name: '启动模拟编排', exact: true }).waitFor();
   await page.waitForFunction(() => !document.querySelector('[data-simulation-action="start"]').disabled);
@@ -45,7 +45,7 @@ test('真实Edge页面确认计划、模拟失败重试、暂停/继续、刷新
   await page.getByRole('button', { name: '重试此模拟任务', exact: true }).click();
   await until(() => current()?.status === 'awaiting_confirmation');
   const id = current().id;
-  await page.reload(); await page.getByRole('tab', { name: /开发任务/ }).click();
+  await page.reload(); await page.getByRole('tab', { name: /任务编排/ }).click();
   await page.locator('#simulation-tools').evaluate(element => { element.open = true; });
   await page.locator('.dev-task[data-task="D"]').click();
   await page.getByRole('button', { name: '确认此模拟结果', exact: true }).waitFor();

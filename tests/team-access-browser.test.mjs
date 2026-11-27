@@ -35,7 +35,7 @@ async function fixture(t, enabled = true) {
   };
   return { app, origin, directory, page };
 }
-async function workbench(page, f) { await page.waitForURL(f.origin + '/'); await page.waitForFunction(() => document.querySelector('#connection-status')?.textContent.includes('服务已连接')); }
+async function workbench(page, f) { await page.waitForURL(url => url.origin === f.origin && url.pathname === '/'); await page.waitForFunction(() => document.querySelector('#connection-status')?.textContent.includes('服务已连接')); }
 async function openLogin(page, f) { await page.goto(f.origin + '/'); await page.waitForURL(f.origin + '/team.html'); await page.locator('#team-login').waitFor({ state: 'visible' }); }
 async function login(page, f, name, value = password) { await page.locator('#login-name').fill(name); await page.locator('#login-password').fill(value); await page.locator('#login-password').press('Enter'); await workbench(page, f); }
 async function teamPage(page) { await page.locator('#team-link').click(); await page.locator('#account-name').waitFor({ state: 'visible' }); }
@@ -113,7 +113,10 @@ test('wrong password remains masked, errors are text and keyboard focus stays in
 test('disabled team mode preserves the unauthenticated workbench and local project creation', async t => {
   const f = await fixture(t, false), page = await f.page(390); await page.goto(f.origin + '/'); await workbench(page, f); assert.equal(await page.locator('#team-link').isVisible(), false);
   await page.locator('#new-project').click(); await page.locator('#project-name-input').fill('本地模式项目'); await page.locator('#source-input').fill('用户可以查看资源列表。'); await page.locator('#create-project-button').click();
-  await page.waitForFunction(() => !document.querySelector('#project-dialog').open); assert.equal(f.app.store.list().length, 1); assert.equal(page.url(), f.origin + '/');
+  await page.waitForFunction(() => !document.querySelector('#project-dialog').open);
+  const projects = f.app.store.list();
+  assert.equal(projects.length, 1);
+  await page.waitForURL(f.origin + '/?' + new URLSearchParams({ project: projects[0].id, view: 'overview' }));
   await page.goto(f.origin + '/team.html'); await page.waitForFunction(() => document.querySelector('#team-description')?.textContent.includes('本地单人模式')); assert.equal(await page.locator('#team-login').isVisible(), false); assert.equal(await page.locator('#team-account').isVisible(), false); await noCredentialStorage(page);
   await page.getByRole('link', { name: '返回工作台', exact: true }).click(); await workbench(page, f);
 });

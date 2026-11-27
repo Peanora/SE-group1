@@ -52,7 +52,7 @@ async function fixture(t, { width, planner = modulePlanner, teamEnabled = false,
 
 async function openTasks(page, origin) {
   await page.goto(`${origin}/?view=details`);
-  await page.getByRole('tab', { name: /开发任务/ }).click();
+await page.getByRole('tab', { name: /任务编排/ }).click();
   const root = page.locator('.task-orchestration-root');
   await root.getByText('计划待确认', { exact: true }).waitFor();
   return root;
@@ -135,14 +135,15 @@ for (const width of [1440, 390]) test(`真实 Edge ${width}px：开发任务依�
   });
   const root = await openTasks(page, origin);
   const shell = await page.evaluate(() => {
-    const sidebar = document.querySelector('aside.sidebar').getBoundingClientRect();
-    const main = document.querySelector('.app-shell').getBoundingClientRect();
-    const nav = document.querySelector('#workspace-nav');
-    return { sidebarRight: sidebar.right, sidebarBottom: sidebar.bottom, mainLeft: main.left, mainTop: main.top,
-      tabsInWorkspace: nav.parentElement.id === 'main', runInHeading: !!document.querySelector('.workspace-heading #run-select') };
+    const toolbar = document.querySelector('.studio-appbar');
+    return {
+      views: [...document.querySelectorAll('#workspace-nav [data-workspace-view]')].map(tab => tab.dataset.workspaceView),
+      projectInToolbar: toolbar.contains(document.querySelector('#project-menu-trigger')),
+      runInHeading: !!document.querySelector('.workspace-heading #run-select'),
+    };
   });
-  assert.equal(shell.tabsInWorkspace && shell.runInHeading, true, '工作区标签和运行选择位于原工作台主体');
-  assert.ok(width === 1440 ? shell.sidebarRight <= shell.mainLeft + 1 : shell.sidebarBottom <= shell.mainTop + 1);
+  assert.equal(shell.projectInToolbar && shell.runInHeading, true);
+  assert.deepEqual(shell.views, ['overview', 'source', 'plan', 'tasks', 'execution', 'trace']);
   const control = name => root.getByRole('button', { name, exact: true });
   const task = taskCard(root, 'B');
   const noPageOverflow = () => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1);
@@ -256,7 +257,7 @@ for (const width of [1440, 390]) test(`真实 Edge ${width}px：开发任务依�
   await page.locator('#records-tab-tasks').click();
   await waitForBranchOrder(page, 'C', 'B');
   await page.reload();
-  await page.getByRole('tab', { name: /开发任务/ }).click();
+  await page.getByRole('tab', { name: /任务编排/ }).click();
   await waitForBranchOrder(page, 'C', 'B');
   await control('适应画布').click();
   assertSameSlot(await layoutOf(task), other);
@@ -286,7 +287,7 @@ for (const width of [1440, 390]) test(`真实 Edge ${width}px：开发任务依�
 
   await approve.click();
   await until(() => settled('succeeded'), '计划确认并导出');
-  await page.getByRole('tab', { name: /开发任务/ }).click();
+  await page.getByRole('tab', { name: /任务编排/ }).click();
   await root.getByText('计划已确认', { exact: true }).waitFor();
   await control('准备验收与开发').click();
   await page.locator('#workspace-execution').waitFor();
@@ -340,7 +341,7 @@ test('真实 Edge 390px：画布修改直接依赖，保存并重新确认按图
 
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.goto(origin + '/?view=details');
-  const tasksTab = page.getByRole('tab', { name: /开发任务/ });
+  const tasksTab = page.getByRole('tab', { name: /任务编排/ });
   await tasksTab.click();
   const root = page.locator('.task-orchestration-root');
   await root.getByText('计划已确认', { exact: true }).waitFor();
@@ -488,7 +489,7 @@ test('真实 Edge：旧计划可修改功能板块与模块名称，保存新版
   assert.equal(persisted.planRevision, run.planRevision);
   assert.deepEqual(persisted.tasks, run.tasks);
 
-  await page.getByRole('tab', { name: /开发任务/ }).click();
+  await page.getByRole('tab', { name: /任务编排/ }).click();
   await root.getByText('计划待确认', { exact: true }).waitFor();
   const board = root.locator('.task-graph-scroll');
   const entry = taskCard(board, 'B');
@@ -518,7 +519,7 @@ test('真实 Edge：评审者可从任务图确认计划，开发入口仍由负
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).click();
   await until(() => settled('succeeded'), '评审者确认计划');
   assert.equal(run.approvals.plan.revision, run.planRevision);
-  await page.getByRole('tab', { name: /开发任务/ }).click();
+  await page.getByRole('tab', { name: /任务编排/ }).click();
   await root.getByText('计划已确认', { exact: true }).waitFor();
   assert.equal(await root.getByRole('button', { name: '准备验收与开发', exact: true }).isVisible(), false);
 });
@@ -548,7 +549,7 @@ for (const width of [1440, 390]) test(`真实 Edge ${width}px：项目回程链�
   assert.equal(new URL(page.url()).searchParams.get('run'), run.id);
   assert.equal(await oldRecord.getAttribute('aria-current'), 'true');
 
-  await page.getByRole('tab', { name: /开发任务/ }).click();
+  await page.getByRole('tab', { name: /任务编排/ }).click();
   await page.getByRole('tab', { name: '计划清单' }).click();
   const schedule = page.getByRole('table', { name: '开发计划清单' });
   assert.equal(await schedule.getByText('已纳入计划', { exact: true }).count(), 5);

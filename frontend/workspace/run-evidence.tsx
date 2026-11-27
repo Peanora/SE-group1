@@ -1,7 +1,8 @@
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import type { Root } from 'react-dom/client';
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
+import { Blocks, CheckCheck, ClipboardList, FileInput, FileOutput, FilePenLine, ListChecks, ScrollText } from 'lucide-react';
 import './run-evidence.css';
 
 type StageDefinition = {
@@ -10,8 +11,6 @@ type StageDefinition = {
   dependsOn: string[];
   description: string;
   output: string;
-  x: number;
-  y: number;
 };
 type Stage = {
   id: string;
@@ -62,17 +61,7 @@ type EventProps = {
   formatTime: (value: string) => string;
 };
 
-const markerColors: Record<string, string> = {
-  pending: '#a4b4da', running: '#3846ce', succeeded: '#6d9b85', failed: '#b46d62', blocked: '#b46d62',
-};
-const edges = [
-  ['spec', 'M165 149H200'],
-  ['architecture', 'M350 149H375V69H400'],
-  ['tasks', 'M350 149H375V229H400'],
-  ['review', 'M550 69H590V149H620'],
-  ['review', 'M550 229H590V149'],
-  ['export', 'M770 149H820'],
-];
+const stageIcons = { intake: FileInput, spec: FilePenLine, architecture: Blocks, tasks: ClipboardList, review: ListChecks, export: FileOutput };
 const engineeringStages = new Set(['architecture', 'tasks']);
 const eventLevels: Record<string, string> = { success: '成功', error: '失败', warn: '提醒', warning: '提醒', info: '记录' };
 
@@ -89,45 +78,34 @@ function waitingForStage(id: string, run: Run | null | undefined, specWaiting: b
 
 function WorkflowEvidence({ run, stages, labels, stageId, specWaiting }: WorkflowProps) {
   return (
-    <>
-      <svg className="flow-edges evidence-flow-edges" viewBox="0 0 1000 292" preserveAspectRatio="none" aria-hidden="true">
-        <defs>
-          {Object.entries(markerColors).map(([status, color]) => (
-            <marker key={status} id={`arrow-${status}`} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto">
-              <path d="M0 0L8 4L0 8Z" fill={color} />
-            </marker>
-          ))}
-        </defs>
-        {edges.map(([id, path]) => {
-          const status = run?.stages?.find(stage => stage.id === id)?.status ?? 'pending';
-          const marker = Object.hasOwn(markerColors, status) ? status : 'pending';
-          return <path key={path} className={`flow-edge ${status}`} d={path} markerEnd={`url(#arrow-${marker})`} />;
-        })}
-      </svg>
-      {stages.map((definition, index) => {
+    <ol className="studio-stage-sequence" onClick={event => {
+      if (event.detail > 0 && (event.target as Element).closest('[data-stage]') && window.matchMedia('(max-width: 720px)').matches) {
+        requestAnimationFrame(() => document.getElementById('stage-inspector')?.focus());
+      }
+    }}>
+      {stages.map(definition => {
         const stage = findStage(definition, run);
         const waiting = waitingForStage(stage.id, run, specWaiting);
-        const waitingOnQuestions = stage.id === 'spec' && specWaiting;
-        const visualStatus = waitingOnQuestions ? 'awaiting_spec' : stage.status;
-        const completed = stage.status === 'succeeded' && !waitingOnQuestions;
-        const selected = stageId === stage.id;
+        const visualStatus = stage.id === 'spec' && specWaiting ? 'awaiting_spec' : stage.status;
         const label = waiting || labels[stage.status] || stage.status;
-        const position = { '--x': `${definition.x}%`, '--y': `${definition.y}px` } as CSSProperties;
+        const Icon = stageIcons[stage.id as keyof typeof stageIcons] ?? FilePenLine;
+        const dependencies = stage.dependsOn.map(id => run?.stages?.find(item => item.id === id)?.title
+          ?? stages.find(item => item.id === id)?.title ?? id);
         return (
-          <button key={stage.id} type="button"
-            className={`flow-node ${visualStatus}${waiting ? ' awaiting-confirmation' : ''}${selected ? ' selected' : ''}`}
-            style={position} data-stage={stage.id} data-focus-key={`stage-${stage.id}`}
-            aria-pressed={selected} aria-label={`${stage.title}，${label}`}>
-            <span className="node-top">
-              <span className="node-number">{String(index + 1).padStart(2, '0')}</span>
-              <span className="node-status-dot">{completed ? '✓' : ''}</span>
-            </span>
-            <h3>{stage.title}</h3>
-            <span className="node-meta">{label}{(stage.attempt ?? 0) > 1 ? ` / 第 ${stage.attempt} 次` : ''}</span>
-          </button>
+          <li key={stage.id}>
+            <button type="button" className={`studio-stage-row ${visualStatus}${waiting ? ' awaiting-confirmation' : ''}`}
+              data-stage={stage.id} data-focus-key={`stage-${stage.id}`} aria-pressed={stageId === stage.id}
+              aria-label={`${stage.title}，${label}`}>
+              <span className="studio-stage-symbol"><Icon aria-hidden="true" /></span>
+              <span className="studio-stage-name"><strong>{stage.title}</strong>
+                <small>{dependencies.length ? `前置 · ${dependencies.join('、')}` : '流程起点'}</small>
+              </span>
+              <span className="node-meta">{label}</span>
+            </button>
+          </li>
         );
       })}
-    </>
+    </ol>
   );
 }
 
@@ -140,7 +118,7 @@ function inspectorNote(stage: Stage, run: Run | null | undefined, specWaiting: b
   }
   if (stage.status === 'blocked') return '前置阶段尚未成功。解决失败并重试后，编排器会重新检查依赖。';
   if (stage.status === 'succeeded') return '本阶段结果已保存。后续重试会保留成功分支。';
-  return '每个阶段成功后发布产物；下游只读取已成功的结果。';
+  return '阶段成功后发布产物，下游可读取已发布的结果。';
 }
 
 function StageEvidence({ run, stages, labels, stageId, specWaiting, stageTitle, duration, busy, readOnly }: InspectorProps) {
@@ -159,8 +137,8 @@ function StageEvidence({ run, stages, labels, stageId, specWaiting, stageTitle, 
     ? (failure.remaining === 0 ? '调用次数已用尽' : '工程总时长已用尽') : '重试此阶段';
   return (
     <>
-      <div className="inspector-eyebrow">
-        <span>阶段详情</span>
+      <div className="studio-inspector-meta">
+        <span><ScrollText aria-hidden="true" />阶段详情</span>
         <span className={`status-tag status-${visualStatus}`}>{label}</span>
       </div>
       <h3 className="inspector-title">{stage.title}</h3>
@@ -169,7 +147,7 @@ function StageEvidence({ run, stages, labels, stageId, specWaiting, stageTitle, 
         <dt>前置依赖</dt><dd>{stage.dependsOn.length ? stage.dependsOn.map(stageTitle).join('、') : '无，可直接启动'}</dd>
         <dt>尝试次数</dt><dd>{stage.attempt || '尚未执行'}</dd>
         <dt>执行用时</dt><dd>{duration(stage)}</dd>
-        <dt>输出产物</dt><dd>{waitingOnQuestions ? '等待补充后生成最终规格' : !artifacts.length ? definition.output
+        <dt>{artifacts.length ? '已存产物' : '预计产物'}</dt><dd>{waitingOnQuestions ? '等待补充后生成最终规格' : !artifacts.length ? definition.output
           : artifacts.map(artifact => (
             <button key={artifact.name} type="button" className="inspector-artifact-link"
               data-artifact={artifact.name} data-focus-key={`inspector-${artifact.name}`}>{artifact.name}</button>
@@ -195,6 +173,10 @@ function StageEvidence({ run, stages, labels, stageId, specWaiting, stageTitle, 
         </div>
       )}
       <p className="inspector-note">{inspectorNote(stage, run, specWaiting)}</p>
+      <button type="button" className="studio-return-stage"
+        onClick={() => document.querySelector<HTMLElement>('#workflow-graph [aria-pressed="true"]')?.focus()}>
+        返回阶段列表
+      </button>
     </>
   );
 }
@@ -203,14 +185,14 @@ function EventEvidence({ events = [], stageTitle, formatTime }: EventProps) {
   if (!events.length) {
     return (
       <div className="empty-records">
-        <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="5" y="4" width="22" height="25" rx="3" /><path d="M10 11h12M10 17h12M10 23h7" /></svg>
-        <strong>每一步都将在这里留下记录</strong>
-        <p>开始编排后，查看阶段执行、失败原因与操作结果。</p>
+        <CheckCheck aria-hidden="true" />
+        <strong>暂无规划事件</strong>
+        <p>启动规划后可查看各阶段的操作和结果。</p>
       </div>
     );
   }
   return (
-    <ol className="event-list run-event-list" aria-label="执行记录">
+    <ol className="event-list run-event-list" aria-label="规划事件">
       {events.slice(-200).map((event, index) => (
         <li key={event.sequence == null ? `record-${Math.max(0, events.length - 200) + index}` : `sequence-${event.sequence}`} className="event-row">
           <time className="event-time" dateTime={event.time}>{formatTime(event.time)}</time>

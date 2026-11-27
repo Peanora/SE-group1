@@ -18,7 +18,7 @@ const actions: Record<string, string> = {
   'request.finished': '操作结果', 'request.denied': '拒绝越权操作',
 };
 const query = new URLSearchParams(location.search);
-const returnHref = workbenchUrl(query.get('project'), query.get('run'));
+const returnHref = workbenchUrl(query.get('project'), query.get('run'), query.get('view'));
 
 async function teamRequest<T>(route: string, method = 'GET', body?: object): Promise<T> {
   const response = await fetch(`/api/team/${route}`, {

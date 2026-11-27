@@ -55,13 +55,15 @@ const native = process.env.TASKFLOW_TEST_REAL_SANDBOX === '1' && !!process.env.E
 const stage = (page, id) => page.locator(`[data-delivery-step="${id}"]`);
 const flow = page => page.locator('#delivery-workflow');
 async function openFlow(page) {
+  const overview = page.locator('#workspace-tab-overview');
+  if (await overview.isVisible()) await overview.click();
   const summary = flow(page).locator('> summary');
   await summary.waitFor();
   if (!await flow(page).evaluate(element => element.open)) await summary.click();
 }
 
 test('active development takes precedence over a locked definition and earlier failed drafts', () => {
-  const run = { specRevision: 'spec', planRevision: 'plan',
+  const run = { workflowVersion: 2, specRevision: 'spec', planRevision: 'plan',
     approvals: { spec: { revision: 'spec' }, plan: { revision: 'plan', specRevision: 'spec' } } };
   const earlier = { state: 'failed', text: '清单准备未完成' };
   const state = deliverySteps({ project: {}, run, verification: earlier,
@@ -74,7 +76,7 @@ test('active development takes precedence over a locked definition and earlier f
   assert.equal(history.find(step => step.id === 'verification').text, '历史版本');
 });
 
-test('homepage keeps the current step compact and opens the complete workflow with the keyboard on desktop and mobile', { timeout: 45000 }, async t => {
+test('homepage opens on the workflow map and supports keyboard navigation on desktop and mobile', { timeout: 45000 }, async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'tf-homepage-'));
   let app, browser;
   t.after(async () => {
@@ -96,13 +98,17 @@ test('homepage keeps the current step compact and opens the complete workflow wi
     await summary.waitFor();
     await page.locator('#delivery-current-title').getByText('需求输入', { exact: true }).waitFor();
     assert.equal(await flow(page).evaluate(element => element.tagName), 'DETAILS');
-    assert.equal(await flow(page).evaluate(element => element.open), false);
-    assert.match(await summary.innerText(), /查看完整流程/u);
+    assert.equal(await flow(page).evaluate(element => element.open), true);
+    assert.match(await summary.innerText(), /项目流程/u);
     assert.equal(await page.locator('#delivery-current-state').innerText(), '尚未开始');
     assert.match(await page.locator('#delivery-done-count').innerText(), /0\s*\/\s*9/u);
-    assert.equal(await stage(page, 'source').isVisible(), false);
+    assert.equal(await stage(page, 'source').isVisible(), true);
+    await page.locator('#settings-menu-trigger').click();
     for (const name of ['Agent 角色', 'API 服务']) assert.equal(await page.getByRole('link', { name, exact: true }).filter({ visible: true }).count(), 1);
+    await page.keyboard.press('Escape');
     await summary.focus();
+    await page.keyboard.press('Enter');
+    assert.equal(await stage(page, 'source').isVisible(), false);
     await page.keyboard.press('Enter');
     assert.equal(await flow(page).evaluate(element => element.open), true);
     await stage(page, 'source').waitFor();
@@ -113,17 +119,18 @@ test('homepage keeps the current step compact and opens the complete workflow wi
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await stage(page, 'source').focus();
     await page.keyboard.press('Enter');
-    await page.getByRole('dialog', { name: '新建软件项目' }).waitFor();
-    assert.equal(await page.getByRole('textbox', { name: '你想做什么？' }).isVisible(), true);
+    await page.getByRole('dialog', { name: '从需求创建项目' }).waitFor();
+    assert.equal(await page.getByRole('textbox', { name: '需求正文' }).isVisible(), true);
     await page.keyboard.press('Escape');
   }
   await stage(page, 'source').click();
-  await page.getByRole('textbox', { name: '你想做什么？' }).fill(request);
+  await page.getByRole('textbox', { name: '需求正文' }).fill(request);
   await page.getByRole('button', { name: '创建项目', exact: true }).click();
   await flow(page).locator('> summary').click();
   assert.equal(await flow(page).evaluate(element => element.open), false);
   await page.locator('#mode-select').selectOption('local');
   await page.locator('#start-run').click();
+  await page.locator('#workspace-tab-overview').click();
   await page.locator('#delivery-current-title').getByText('设计规格', { exact: true }).waitFor();
   await page.locator('#delivery-current-state').getByText('等待补充需求', { exact: true }).waitFor();
   assert.match(await page.locator('#delivery-done-count').innerText(), /1\s*\/\s*9/u);
@@ -136,7 +143,7 @@ test('homepage keeps the current step compact and opens the complete workflow wi
   await stage(page, 'spec').getByText('等待补充需求', { exact: true }).waitFor();
   await page.reload();
   await page.locator('#delivery-current-state').getByText('等待补充需求', { exact: true }).waitFor();
-  assert.equal(await flow(page).evaluate(element => element.open), false, '刷新后默认回到紧凑摘要');
+  assert.equal(await flow(page).evaluate(element => element.open), true, '刷新后显示全流程地图');
   assert.deepEqual(errors, []);
 });
 
@@ -221,24 +228,31 @@ test('homepage follows automatic repair of a failed browser round and a blocked 
   await page.goto(endpoint(app.server));
   await openFlow(page);
   await stage(page, 'source').click();
-  await page.getByRole('textbox', { name: '你想做什么？' }).fill(request);
+  await page.getByRole('textbox', { name: '需求正文' }).fill(request);
   await page.getByRole('button', { name: '创建项目', exact: true }).click();
   await page.locator('#mode-select').selectOption('model');
   await page.locator('#start-run').click();
+  await openFlow(page);
   await stage(page, 'spec').getByText('等待补充需求', { exact: true }).waitFor();
   await stage(page, 'spec').click();
   await page.getByRole('textbox', { name: /公告默认显示哪一句话/u }).fill(announcement);
   await page.getByRole('button', { name: '提交本轮回答', exact: true }).click();
+  await openFlow(page);
   await stage(page, 'spec-approval').getByText('待你确认', { exact: true }).waitFor();
+  await stage(page, 'spec-approval').click();
   await page.locator('#approve-button').click();
+  await openFlow(page);
   await stage(page, 'plan-approval').getByText('待你确认', { exact: true }).waitFor();
+  await stage(page, 'plan-approval').click();
   await page.locator('#approve-button').click();
+  await openFlow(page);
   await stage(page, 'plan-approval').getByText('已确认', { exact: true }).waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
   await stage(page, 'verification').click();
   const verification = page.locator('#verification-plans-section');
   await verification.getByRole('checkbox').check();
   await verification.getByRole('button', { name: '生成独立测试提案', exact: true }).click();
+  await openFlow(page);
   await stage(page, 'verification').getByText('待确认清单', { exact: true }).waitFor();
   // Add a later failure through the real API to reproduce a saved draft followed by a failed retry.
   const { projects: [project] } = await (await page.request.get(endpoint(app.server) + '/api/projects')).json();
@@ -259,6 +273,7 @@ test('homepage follows automatic repair of a failed browser round and a blocked 
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await verification.getByLabel('修订或审阅依据（必填，最多5000字）', { exact: true }).fill('已核对公告的接口返回和浏览器显示内容。');
   await verification.getByRole('button', { name: '认可测试定义（尚未运行）', exact: true }).click();
+  await openFlow(page);
   await stage(page, 'verification').getByText('清单已确认', { exact: true }).waitFor();
   await stage(page, 'coding').click();
   const execution = page.locator('#planned-execution-section');
@@ -267,6 +282,7 @@ test('homepage follows automatic repair of a failed browser round and a blocked 
   const cancel = execution.getByRole('button', { name: '请求停止本次开发', exact: true });
   await execution.getByRole('checkbox').check();
   await begin.click();
+  await openFlow(page);
   await stage(page, 'coding').getByText('正在编码', { exact: true }).waitFor({ timeout: 25000 });
   const locked = await (await page.request.get(verificationApi)).json();
   assert.equal(locked.capabilities.canImportDefinition, false);
@@ -283,6 +299,7 @@ test('homepage follows automatic repair of a failed browser round and a blocked 
   assert.doesNotMatch(await stage(page, 'verification').innerText(), /清单准备未完成/u);
   const executionApi = verificationApi.replace(/verification-plans$/u, 'development-executions');
   releaseCoding();
+  await openFlow(page);
   await stage(page, 'coding').getByText('已安排 1 次自动返工', { exact: true }).waitFor({ timeout: 50000 });
   assert.equal(await stage(page, 'coding').getAttribute('data-state'), 'working');
   await stage(page, 'testing').click();
@@ -300,6 +317,7 @@ test('homepage follows automatic repair of a failed browser round and a blocked 
   assert.equal(result.accepted, true, JSON.stringify({ status: result.status, workflow: result.workflow, error: result.error,
     checks: result.checks?.issues, calls, errors, recentEvents: result.events.slice(-8) }));
   assert.equal(result.workflow.reworkCount, 2);
+  await openFlow(page);
   await stage(page, 'delivery').getByText('可预览与下载', { exact: true }).waitFor();
   await stage(page, 'delivery').click();
   await roleProgress.getByText('审查已完成', { exact: true }).waitFor();

@@ -43,7 +43,7 @@ test('Edge实际页面：六节点、业务裁决、新规格重审、刷新联�
   const heading = panel.getByRole('heading', { name: '多 Agent 规格评审', exact: true });
   await page.getByRole('button', { name: '处理规格', exact: true }).click();
   assert.equal(await heading.evaluate(node => document.activeElement === node), true);
-  await page.locator('#delivery-workflow > summary').click();
+  await page.locator('#workspace-tab-overview').click();
   await page.locator('[data-delivery-step="spec-approval"]').click();
   assert.equal(await heading.evaluate(node => document.activeElement === node), true);
   const livePhase = panel.locator('[data-phase-live="true"]');

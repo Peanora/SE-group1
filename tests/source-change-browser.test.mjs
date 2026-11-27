@@ -97,7 +97,7 @@ test('late parent refresh after applying a source cannot announce success in a d
   const { app, project, page } = await fixture(t);
   const other = await app.store.create({ name: '另一个项目', source: { filename: 'other.md', content: '读取另一组独立资源。' } });
   await page.locator('#refresh-button').click();
-  await page.locator(`[data-project="${other.id}"]`).waitFor();
+  await page.locator(`[data-project="${other.id}"]`).waitFor({ state: 'attached' });
   const change = app.sourceChangeService.request({ projectId: project.id, baseRevision: app.store.getSourceVersion(project.id).revision,
     source: { filename: 'new.md', content: changed }, reason: '检查迟到通知归属', kind: 'field', requestKey: 'late-parent-refresh' });
   await page.getByRole('button', { name: '刷新变更状态', exact: true }).click();
@@ -112,6 +112,7 @@ test('late parent refresh after applying a source cannot announce success in a d
   try {
     await page.getByRole('button', { name: '应用为新需求版本', exact: true }).click();
     await waiting;
+    await page.locator('#project-menu-trigger').click();
     await page.locator(`[data-project="${other.id}"]`).click();
     await page.waitForFunction(() => document.querySelector('#project-title').textContent === '另一个项目');
   } finally { release(); }

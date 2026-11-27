@@ -57,17 +57,19 @@ test('删除确认、活动规划拦截、重启仍删除、旧保存不能复�
 for(const width of [1440,390])test(`Edge ${width}px默认方案恢复→计划导出→取消/删除项目/空工作台`,{timeout:60000},async t=>{
  const x=await fixture(t),p=await x.create('旧方案消息项目'),r=await legacy(x,p);await x.create('保留项目');
  const browser=await chromium.launch({channel:'msedge',headless:true});t.after(()=>browser.close());const page=await browser.newPage({viewport:{width,height:950}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto(x.url + '/?view=details');await page.locator(`[data-project="${p.id}"]`).click();
+ await page.goto(x.url + '/?' + new URLSearchParams({ project: p.id, run: r.id, view: 'details' }));
  await page.getByRole('button',{name:'采用默认方案并重新确认',exact:true}).click();
  await page.getByRole('heading',{name:'先确认规格，再生成开发计划',exact:true}).waitFor();assert.equal(await page.locator('[data-review-field^="stack."]').count(),0);assert.match(await page.locator('#review-banner').innerText(),/无需填写/);
  await page.getByRole('button',{name:'确认规格并继续',exact:true}).click();await page.getByRole('button',{name:'确认计划并导出',exact:true}).waitFor();
  await page.getByRole('button',{name:'确认计划并导出',exact:true}).click();await until(()=>r.status==='succeeded');assert.equal(x.calls(),1);
+ await page.locator('#project-menu-trigger').click();
  page.once('dialog',dialog=>dialog.dismiss());await page.getByRole('button',{name:'删除项目：旧方案消息项目',exact:true}).click();assert.equal(x.app.store.list().length,2);
  if(width===390)await page.evaluate(()=>Object.defineProperty(window,'sessionStorage',{configurable:true,get(){throw new DOMException('blocked','SecurityError');}}));
  page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'删除项目：旧方案消息项目',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#project-count').textContent==='1');
- assert.equal(await page.locator('#project-title').textContent(),'保留项目');await page.reload();await page.getByRole('button',{name:'删除项目：保留项目',exact:true}).waitFor();
+ await page.waitForFunction(()=>document.querySelector('#project-title').textContent==='保留项目');await page.reload();
+ await page.locator('#project-menu-trigger').click();await page.getByRole('button',{name:'删除项目：保留项目',exact:true}).waitFor();
  page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'删除项目：保留项目',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#project-count').textContent==='0');
- assert.equal(await page.locator('#onboarding').isVisible(),true);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);assert.equal(await page.locator('#error-banner').isHidden(),true);assert.deepEqual(errors,[]);
+ assert.equal(await page.locator('#onboarding').isVisible(),true);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);assert.equal(await page.locator('#error-banner').isHidden(),true);assert.equal(new URL(page.url()).search,'');assert.deepEqual(errors,[]);
 });
 
 test('固定方案由控制器提供，模型缺少stack也能整理业务规格，旧适配器默认校验不放宽',async()=>{

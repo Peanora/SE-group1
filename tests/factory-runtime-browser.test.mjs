@@ -121,6 +121,7 @@ test('真实 Factory v1.0.5 和 Edge：规格交接、原生图与角色、DAG �
   const projectQuery = new URLSearchParams({ project: project.id, run: planning.id });
   await page.goto(`${origin}/?${projectQuery}`);
   const mcpHref = `/factory.html?${projectQuery}&view=mcp`;
+  await page.locator('#settings-menu-trigger').click();
   const workspaceMcp = page.getByRole('link', { name: 'MCP 工具', exact: true });
   await until(async () => await workspaceMcp.getAttribute('href') === mcpHref, 'MCP 链接保存当前项目与运行');
   await page.getByRole('link', { name: 'Agent 角色', exact: true }).click();

@@ -1,12 +1,12 @@
 body[data-taskflow-tool] {
-  --tool-bg: #edf0f8;
+  --tool-bg: #f3f6fa;
   --tool-paper: #fff;
   --tool-ink: #182342;
   --tool-muted: #56617c;
   --tool-line: #d5ddf0;
-  --tool-accent: #3846ce;
-  --tool-accent-dark: #2834ad;
-  --tool-tint: #e8ecff;
+  --tool-accent: #2856c9;
+  --tool-accent-dark: #1c439f;
+  --tool-tint: #eaf1ff;
   --tool-warning: #785117;
   --tool-amber: #fff4dd;
   --tool-error: #913947;
@@ -32,7 +32,7 @@ body[data-taskflow-tool] :focus-visible { outline: 2px solid var(--tool-accent);
   justify-content: space-between;
   gap: 5px 16px;
   border-block-end: 1px solid var(--tool-line);
-  background: var(--tool-paper);
+  background: #172644;
 }
 
 .tools-brand, .tools-back {
@@ -43,14 +43,11 @@ body[data-taskflow-tool] :focus-visible { outline: 2px solid var(--tool-accent);
   text-decoration: none;
 }
 
-.tools-brand { font-size: 16px; letter-spacing: -.025em; }
-.tools-back { min-block-size: 32px; padding-inline: 4px; color: var(--tool-muted); font-size: 13px; font-weight: 600; }
-.tools-back:hover { color: var(--tool-accent); }
-.tools-back span { color: var(--tool-accent); font-size: 20px; line-height: 1; }
+.tools-brand { color: white; font-size: 16px; letter-spacing: -.025em; }
+.tools-back { min-block-size: 32px; padding-inline: 4px; color: #d7e3ff; font-size: 13px; font-weight: 600; }
+.tools-back:hover { color: white; }
+.tools-back span { color: inherit; font-size: 20px; line-height: 1; }
 .tools-brand-mark { inline-size: 25px; block-size: 25px; }
-.tools-brand-mark rect { fill: var(--tool-accent); }
-.tools-brand-mark path { stroke: #fff; fill: none; stroke-width: 1.5; stroke-linecap: round; }
-.tools-brand-mark circle { fill: #fff; }
 
 .tools-skip {
   position: fixed;
