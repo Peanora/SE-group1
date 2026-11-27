@@ -1,0 +1,60 @@
+.task-canvas-window {
+  position: relative;
+  isolation: isolate;
+  min-inline-size: 0;
+}
+
+.task-orchestration-root .task-navigator {
+  position: absolute;
+  z-index: 2;
+  inset-inline-end: 26px;
+  inset-block-end: 24px;
+  display: grid;
+  place-items: center;
+  inline-size: 142px;
+  block-size: 108px;
+  padding: 6px;
+  border: 1px solid #a8b8d4;
+  border-radius: 7px;
+  background: #f9fbff;
+  box-shadow: 0 2px 8px #263a6324;
+  cursor: crosshair;
+  touch-action: manipulation;
+}
+
+.task-orchestration-root .task-navigator:is(:hover, :focus-visible) {
+  border-color: var(--task-accent, #3846ce);
+}
+
+.task-orchestration-root .task-navigator:focus-visible {
+  outline: 2px solid var(--task-accent, #3846ce);
+  outline-offset: 2px;
+}
+
+.task-navigator-map {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  pointer-events: none;
+}
+
+.task-navigator-nodes { fill: #a5b4ce; }
+.task-navigator-nodes [data-relation="selected"] { fill: var(--task-accent, #3846ce); }
+.task-navigator-nodes [data-relation="upstream"] { fill: var(--task-upstream, #197d79); }
+.task-navigator-nodes [data-relation="downstream"] { fill: var(--task-downstream, #748cdc); }
+.task-navigator-shade { fill: #e3ebf7a3; }
+.task-navigator-viewport {
+  fill: #646de013;
+  stroke: var(--task-accent, #3846ce);
+  stroke-width: 1.25px;
+}
+
+@media (max-width: 650px) {
+  .task-orchestration-root .task-navigator {
+    inset-inline-end: 18px;
+    inset-block-end: 18px;
+    inline-size: 88px;
+    block-size: 72px;
+    padding: 4px;
+  }
+}

@@ -41,6 +41,45 @@
   pointer-events: auto;
 }
 
+.task-flow-surface[data-plan-canvas] .task-flow-extent > .react-flow {
+  position: relative;
+  z-index: 1;
+  background: transparent;
+}
+
+.task-flow-surface[data-plan-canvas] .dev-task-grip {
+  display: inline-block;
+  flex: none;
+  inline-size: 15px;
+  block-size: 15px;
+  margin-inline-end: 3px;
+  vertical-align: -3px;
+  color: #596c90;
+  cursor: grab;
+}
+
+.task-flow-surface[data-plan-canvas] .dev-task-grip svg {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+.task-flow-surface[data-plan-canvas] .react-flow__node.dragging {
+  z-index: 3 !important;
+}
+
+.task-flow-surface[data-plan-canvas] .react-flow__node.dragging :is(.dev-task, .dev-task-grip) {
+  cursor: grabbing;
+}
+
+.task-orchestration-root .task-flow-surface[data-plan-canvas] .react-flow__node.dragging .dev-task {
+  border-color: var(--task-accent);
+  box-shadow: 0 5px 14px #2433602b;
+}
+
+.task-flow-surface[data-plan-canvas] .react-flow__handle-top { background: #7390b6; }
+.task-flow-surface[data-plan-canvas] .react-flow__handle-bottom { background: #5267b7; }
+
 section.planned-execution .pe-process .pe-graph-canvas[data-renderer="react-flow"] {
   --execution-canvas-accent: #3846ce;
   --execution-canvas-ink: #182342;

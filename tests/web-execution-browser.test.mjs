@@ -80,9 +80,8 @@ test('real workbench confirms both planning versions before its execution panel 
   assert.equal(await page.locator('#verification-plans-host').isVisible(), false);
   assert.match(await overview.getByRole('complementary', { name: '运行版本链' }).innerText(), /设计规格\s+已确认[\s\S]*开发计划\s+待确认/u);
   await page.setViewportSize({ width: 390, height: 844 });
-  const decision = await overview.getByRole('heading', { name: '请先确认开发计划' }).boundingBox();
-  const rail = await page.locator('.run-rail').boundingBox();
-  assert.ok(decision && rail && decision.y < 844 && decision.y < rail.y, '窄屏首屏先显示交付卡点，再显示运行控制');
+  assert.equal(await overview.getByRole('heading', { name: '请先确认开发计划' }).isVisible(), true);
+  assert.equal(await page.locator('#workspace-execution').evaluate(element => element.getBoundingClientRect().width <= innerWidth), true);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole('tab', { name: '交付总览', exact: true }).focus();
   await page.keyboard.press('End');

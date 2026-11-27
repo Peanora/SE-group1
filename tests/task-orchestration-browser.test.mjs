@@ -52,6 +52,35 @@ async function openTasks(page, origin) {
   return root;
 }
 
+async function panOverflowingCanvas(page, canvas) {
+  await canvas.scrollIntoViewIfNeeded();
+  const overflow = await canvas.evaluate(element => {
+    element.scrollLeft = 0;
+    element.scrollTop = 0;
+    return { x: element.scrollWidth - element.clientWidth, y: element.scrollHeight - element.clientHeight };
+  });
+  assert.ok(Math.max(overflow.x, overflow.y) > 100, '放大后在画布的实际方向可滚动');
+  const axis = overflow.y > overflow.x ? 'y' : 'x';
+  const point = await canvas.evaluate((element, axis) => {
+    const rect = element.getBoundingClientRect();
+    const left = Math.max(rect.left, 0), top = Math.max(rect.top, 0);
+    const right = Math.min(rect.right - 18, innerWidth), bottom = Math.min(rect.bottom - 18, innerHeight);
+    for (const inset of [8, 14, 20]) {
+      const x = axis === 'x' ? Math.min(left + 120, right - 8) : left + inset;
+      const y = axis === 'y' ? Math.min(top + 120, bottom - 8) : top + inset;
+      const target = document.elementFromPoint(x, y);
+      if (target && element.contains(target) && !target.closest('button')) return { x, y };
+    }
+    return null;
+  }, axis);
+  assert.ok(point, '有可用于平移的画布空白');
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.mouse.move(point.x - (axis === 'x' ? 75 : 0), point.y - (axis === 'y' ? 75 : 0), { steps: 5 });
+  await page.mouse.up();
+  assert.ok(await canvas.evaluate((element, axis) => axis === 'x' ? element.scrollLeft > 0 : element.scrollTop > 0, axis), '拖动空白只平移画布');
+}
+
 for (const width of [1440, 390]) test(`真实 Edge ${width}px：开发任务依赖、画布与计划确认`, { timeout: 60000 }, async t => {
   const { project, run, settled, page, origin } = await fixture(t, { width });
   const errors = [];
@@ -62,6 +91,15 @@ for (const width of [1440, 390]) test(`真实 Edge ${width}px：开发任务依�
     if (request.method() === 'POST') posts.push({ path: new URL(request.url()).pathname, body: request.postDataJSON() });
   });
   const root = await openTasks(page, origin);
+  const shell = await page.evaluate(() => {
+    const sidebar = document.querySelector('aside.sidebar').getBoundingClientRect();
+    const main = document.querySelector('.app-shell').getBoundingClientRect();
+    const nav = document.querySelector('#workspace-nav');
+    return { sidebarRight: sidebar.right, sidebarBottom: sidebar.bottom, mainLeft: main.left, mainTop: main.top,
+      tabsInWorkspace: nav.parentElement.id === 'main', runInHeading: !!document.querySelector('.workspace-heading #run-select') };
+  });
+  assert.equal(shell.tabsInWorkspace && shell.runInHeading, true, '工作区标签和运行选择位于原工作台主体');
+  assert.ok(width === 1440 ? shell.sidebarRight <= shell.mainLeft + 1 : shell.sidebarBottom <= shell.mainTop + 1);
   const control = name => root.getByRole('button', { name, exact: true });
   const task = root.locator('.dev-task[data-task="B"]');
   const noPageOverflow = () => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1);
@@ -89,24 +127,60 @@ for (const width of [1440, 390]) test(`真实 Edge ${width}px：开发任务依�
   await control('放大').click();
   const increasedZoom = await zoomPercent();
   assert.ok(increasedZoom > baselineZoom);
-  const canvas = root.locator('.task-graph-scroll');
-  await canvas.scrollIntoViewIfNeeded();
-  assert.equal(await canvas.evaluate(element => {
-    element.scrollLeft = 0;
-    element.scrollTop = 0;
-    return element.scrollWidth > element.clientWidth + 100;
-  }), true);
-  const canvasBox = await canvas.boundingBox();
-  await page.mouse.move(canvasBox.x + 120, canvasBox.y + 12);
-  await page.mouse.down();
-  await page.mouse.move(canvasBox.x + 30, canvasBox.y + 12, { steps: 5 });
-  await page.mouse.up();
-  assert.ok(await canvas.evaluate(element => element.scrollLeft > 0), '拖动只平移画布');
+  const canvas = root.locator('.task-graph-scroll[data-plan-canvas]');
+  await panOverflowingCanvas(page, canvas);
+  const navigator = root.getByRole('button', { name: /任务图小地图/ });
+  const viewportMarker = navigator.locator('.task-navigator-viewport');
+  assert.equal(await navigator.locator('.task-navigator-nodes rect').count(), 5);
+  await canvas.evaluate(element => { element.scrollTop = 0; });
+  await navigator.press('ArrowDown');
+  await page.waitForFunction(() => Number(document.querySelector('.task-navigator-viewport')?.getAttribute('y')) > 0);
+  assert.ok(await canvas.evaluate(element => element.scrollTop > 0), '小地图方向键同步平移画布和视图框');
+  assert.ok(Number(await viewportMarker.getAttribute('height')) > 0);
   await control('缩小').click();
   assert.ok(await zoomPercent() < increasedZoom);
   await control('适应画布').click();
   assert.ok(await zoomPercent() > 0);
-  assert.equal(await canvas.evaluate(element => element.scrollWidth <= element.clientWidth + 1), true);
+  assert.equal(await canvas.evaluate(element => element.scrollWidth <= element.clientWidth + 1
+    && element.scrollHeight <= element.clientHeight + 1), true);
+  assert.equal(await canvas.locator('.task-level-band').count(), 4, '五个任务按真实依赖深度分为四层');
+
+  const firstTask = root.locator('.dev-task[data-task="A"]');
+  await firstTask.click();
+  const taskPosition = () => task.evaluate(element => getComputedStyle(element.closest('.react-flow__node')).transform);
+  const edge = canvas.locator('.task-edge[data-from="A"][data-to="B"]');
+  await edge.waitFor({ state: 'attached' });
+  const startPosition = await taskPosition(), startPath = await edge.getAttribute('d');
+  const mapTaskX = await navigator.locator('[data-map-task="B"]').getAttribute('x');
+  const grip = task.locator('.dev-task-grip');
+  await grip.scrollIntoViewIfNeeded();
+  const handleBox = await grip.boundingBox();
+  assert.ok(handleBox, '任务移动手柄可操作');
+  const handleX = handleBox.x + handleBox.width / 2, handleY = handleBox.y + handleBox.height / 2;
+  await page.mouse.move(handleX, handleY);
+  await page.mouse.down();
+  await page.mouse.move(handleX + 32, handleY + 17, { steps: 6 });
+  await page.waitForFunction(({ startPosition, startPath }) => {
+    const node = document.querySelector('.dev-task[data-task="B"]')?.closest('.react-flow__node');
+    const path = document.querySelector('.task-edge[data-from="A"][data-to="B"]');
+    return node && path && getComputedStyle(node).transform !== startPosition && path.getAttribute('d') !== startPath;
+  }, { startPosition, startPath }, { timeout: 5000 });
+  await page.mouse.up();
+  const draggedPosition = await taskPosition(), draggedPath = await edge.getAttribute('d');
+  await page.waitForFunction(x => document.querySelector('[data-map-task="B"]')?.getAttribute('x') !== x, mapTaskX);
+  assert.equal(await firstTask.getAttribute('aria-pressed'), 'true', '拖动未触发任务点选');
+  await task.click();
+  assert.match(await inspector.textContent(), /核对分支B模拟结果/);
+  await page.getByRole('tab', { name: '计划清单' }).click();
+  assert.equal(await root.locator('[data-task-schedule][data-task="B"]').getAttribute('aria-pressed'), 'true');
+  await page.locator('#records-tab-tasks').click();
+  assert.equal(await taskPosition(), draggedPosition, '从清单返回仍呈现当前计划的节点坐标');
+  assert.equal(await edge.getAttribute('d'), draggedPath, '返回图时保持依赖线归属与位置');
+  await task.press('End');
+  assert.equal(await inspector.locator('.task-detail-summary h3').innerText(), '后续任务');
+  await control('恢复节点位置').click();
+  assert.equal(await taskPosition(), startPosition);
+  assert.equal(await edge.getAttribute('d'), startPath);
   assert.equal(await noPageOverflow(), true);
 
   await control('查看设计规格').click();

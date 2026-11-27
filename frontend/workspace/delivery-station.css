@@ -136,11 +136,6 @@
   border-radius: 6px;
   background: #f8f9fe;
 }
-@media (max-width: 880px) {
-  .workstation:has(.delivery-station:not([hidden])) {
-    grid-template-areas: "work" "rail";
-  }
-}
 @media (max-width: 670px) {
   .delivery-instrument { grid-template-columns: minmax(0, 1fr); }
   .delivery-chain ol { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 6px; }
