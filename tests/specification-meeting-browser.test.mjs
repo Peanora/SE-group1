@@ -60,6 +60,16 @@ test('Edge实际页面：六节点、业务裁决、新规格重审、刷新联�
   await livePhase.waitFor({ state: 'detached' });
   assert.equal(currentMeeting(run).status, 'awaiting_decision');
   assert.equal(await page.getByRole('button', { name: '确认规格与阶段清单并继续', exact: true }).isDisabled(), true);
+  const topic = currentMeeting(run).discussion.topics.find(item => item.requirementId === 'R-CANCEL');
+  await panel.getByRole('button', { name: '议题讨论', exact: true }).click();
+  await panel.getByRole('combobox', { name: '业务议题' }).selectOption(topic.id);
+  const discussion = panel.getByRole('region', { name: '同议题提案与交叉质疑' });
+  assert.equal(await discussion.locator('.sm-discussion-columns > section').count(), 2);
+  assert.ok(await discussion.locator('.sm-discussion-columns > section').first().locator('li').count() > 1);
+  assert.ok(await discussion.locator('.sm-discussion-columns > section').last().locator('li').count() > 1);
+  await panel.getByRole('button', { name: '问题分流', exact: true }).click();
+  await panel.getByRole('heading', { name: '由用户裁决', exact: true }).waitFor();
+  assert.equal(await panel.locator('[data-route-kind="human_decision"] ul > li').count(), currentMeeting(run).issues.length);
   const original = run.specRevision;
   await page.getByRole('button', { name: '查看问题并裁决', exact: true }).click();
   const choices = currentMeeting(run).issues;

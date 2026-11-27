@@ -139,10 +139,15 @@ test('各专业提案锁定各自产物，忽略陈旧回执并续审缺席席�
   assert.equal(stopped.status, 'waiting');
   assert.equal(stopped.nodes[2].status, 'pending');
   assert.ok(!stopped.proposals.some(proposal => proposal.seat === 'business:R-UNIQUE'));
-  assert.equal(stopped.proposals.find(proposal => proposal.seat === 'business:R-CANCEL').status, 'waiting');
-  assert.ok(stopped.nodes[1].attempts[0].ignored.some(item => item.proposalSeat === 'business:R-CANCEL'));
+  assert.equal(stopped.discussion.phase, 'collecting');
+  assert.deepEqual(stopped.discussion.awaitingProposals, ['business:R-UNIQUE']);
+  assert.ok(stopped.proposals.every(proposal => !proposal.reviews.length), '首轮独立稿件齐全后才共享议题');
   const afterFirst = proposedSeats.length;
-  malformed = false; stale = false; await f.advance();
+  malformed = false; await f.advance();
+  assert.equal(stopped.discussion.phase, 'challenging');
+  assert.deepEqual(stopped.discussion.awaitingReviews, [{ seat: 'business:R-CANCEL', role: 'independent' }]);
+  assert.ok(stopped.nodes[1].attempts[1].ignored.some(item => item.proposalSeat === 'business:R-CANCEL'));
+  stale = false; await f.advance();
   assert.equal(currentMeeting(f.run).nodes[1].status, 'passed');
   assert.deepEqual(proposedSeats.slice(afterFirst), ['business:R-UNIQUE'], '同版本其他已冻结提案不会重新生成');
   await f.drive(); await f.answer(); await f.drive();
@@ -153,6 +158,135 @@ test('各专业提案锁定各自产物，忽略陈旧回执并续审缺席席�
   assert.equal(fromProposal.proposalRevision, finished.proposals.find(proposal => proposal.seat === 'business:R-UNIQUE').artifactRevision);
   const pending = finished.featureReviews.find(feature => feature.requirementId === 'R-CANCEL').checks.find(check => check.kind === 'format');
   assert.equal(pending.definitionStatus, 'pending');
+  assertSpecificationMeeting(f.run);
+});
+
+test('同一议题盲提案后交叉质疑，三类问题分流且独立席退回也能提交已收集的人工裁决', async t => {
+  const base = new OfflineSpecificationRoles();
+  const capturedTopics = new Map(), reviewedTopics = [];
+  const question = '取消后是否需要通知值班管理员？';
+  const routes = [
+    { kind: 'source_rework', requirementIds: ['R-CANCEL'], location: 'R-CANCEL.acceptance', impact: '缺少原文已给出的拒绝结果', condition: '补写可观察拒绝结果' },
+    { kind: 'cross_requirement_conflict', requirementIds: ['R-CANCEL', 'R-UNIQUE'], location: 'R-UNIQUE.acceptance', impact: '取消规则与占用规则需统一', condition: '修订相关两条规则并一起复核' },
+    { kind: 'human_decision', requirementIds: ['R-CANCEL'], location: 'R-CANCEL.description', impact: '原文没有约定通知', condition: '用户选择通知策略', question, options: ['通知管理员', '不通知管理员'] },
+  ];
+  const f = await meetingFixture(t, { specificationMeetingExecutor: {
+    async propose(request) {
+      capturedTopics.set(request.seat, request.topics);
+      assert.ok(request.topics.every(topic => !Object.hasOwn(topic, 'positions')));
+      return { ...await base.propose(request), sourceResolutions: [], issues: request.seat === 'access' ? [{
+        topic: 'access-notification', requirementIds: ['R-CANCEL'], question, options: ['通知管理员', '不通知管理员'],
+        impact: '涉及项目通知权限', blocking: true,
+      }] : [] };
+    },
+    async review(request) {
+      const result = await base.review(request);
+      if (request.proposalSeat) reviewedTopics.push(...request.artifact.discussion.topics);
+      if (request.proposalSeat === 'business:R-UNIQUE' && request.role === 'independent') {
+        return { ...result, artifactRevision: 'f'.repeat(64) };
+      }
+      if (request.proposalSeat !== 'business:R-CANCEL' || request.role !== 'independent') return result;
+      const { id, sourceQuote } = request.artifact.discussion.topics[0];
+      return { ...result, passed: false, findings: routes.map(finding => ({ ...finding, topicId: id, blocking: true,
+        ...(finding.kind === 'source_rework' ? { sourceQuote } : {}) })) };
+    },
+  } });
+  const specRev = f.run.specRevision;
+  await f.start('reservation'); await f.drive();
+  const round = currentMeeting(f.run);
+  assert.equal(round.reviewProtocol, 3);
+  assert.equal(round.status, 'awaiting_decision');
+  assert.equal(round.nodes[1].status, 'rejected');
+  assert.equal(round.nodes[3].status, 'pending');
+  const clause = round.discussion.topics.find(topic => topic.requirementId === 'R-CANCEL');
+  assert.equal(capturedTopics.get('business:R-CANCEL')[0].id, clause.id);
+  assert.ok(capturedTopics.get('data').some(topic => topic.id === clause.id));
+  assert.ok(reviewedTopics.some(topic => topic.id === clause.id
+    && topic.positions.some(position => position.seat === 'business:R-CANCEL')
+    && topic.positions.some(position => position.seat === 'data')));
+  assert.deepEqual(round.discussion.routes.map(item => item.kind).sort(),
+    ['cross_requirement_conflict', 'human_decision', 'source_rework']);
+  assert.deepEqual(round.issues[0].roles, ['access', 'independent']);
+  assert.deepEqual(round.discussion.awaitingReviews, [{ seat: 'business:R-UNIQUE', role: 'independent' }]);
+  assert.ok(round.discussion.routes.find(item => item.kind === 'source_rework').sourceQuote);
+  await assert.rejects(f.action({ action: 'approve_spec', revision: specRev, meetingRevision: round.bundleRevision }), /尚未通过|不能绕过/);
+  await f.answer();
+  const next = currentMeeting(f.run);
+  assert.notEqual(f.run.specRevision, specRev);
+  assert.ok(next.decisions.some(item => item.question === question && item.answer === '通知管理员'));
+  assert.ok(next.obligations.some(item => item.kind === 'cross_requirement_conflict'));
+  assert.equal(next.discussion.topics.find(topic => topic.requirementId === 'R-CANCEL').id, clause.id);
+  assert.equal(next.nodes[3].status, 'pending');
+});
+
+test('协议 v2 的已冻结提案和联合包沿用原哈希，不强制补造历史讨论', async t => {
+  const base = new OfflineSpecificationRoles();
+  const f = await meetingFixture(t, { specificationMeetingExecutor: {
+    async propose(request) { return { ...await base.propose(request), issues: [], sourceResolutions: [] }; },
+    review: request => base.review(request),
+  } });
+  await f.start('reservation');
+  const round = currentMeeting(f.run);
+  round.reviewProtocol = 2;
+  delete round.discussion;
+  await f.drive();
+  assert.equal(round.status, 'awaiting_confirmation');
+  assert.ok(round.proposals.every(proposal => proposal.authorRevision === undefined));
+  assertSpecificationMeeting(f.run, round.bundleRevision);
+});
+
+test('提案中的阻塞问题跨无关修订保留，遗漏和移除条款不能替代裁决', async t => {
+  const base = new OfflineSpecificationRoles();
+  const question = '取消是否通知值班管理员？';
+  let raiseQuestion = true, stale = false;
+  const f = await meetingFixture(t, { specificationMeetingExecutor: {
+    async propose(request) {
+      return { ...await base.propose(request), sourceResolutions: [], issues: raiseQuestion && request.seat === 'data' ? [{
+        topic: 'notification', requirementIds: ['R-CANCEL'], question, options: ['通知管理员', '不通知管理员'],
+        impact: '影响值班处理', blocking: true,
+      }] : [] };
+    },
+    async review(request) {
+      const result = await base.review(request);
+      return stale && request.proposalSeat === 'business:R-UNIQUE' && request.role === 'independent'
+        ? { ...result, artifactRevision: '0'.repeat(64) } : result;
+    },
+  } });
+  await f.start('reservation'); await f.drive();
+  const first = currentMeeting(f.run);
+  assert.equal(first.status, 'awaiting_decision');
+  const [issue] = first.issues;
+  const updated = structuredClone(f.run.spec); updated.title += ' 说明更新';
+  raiseQuestion = false; stale = true;
+  await f.action({ action: 'revise_spec', revision: f.run.specRevision, spec: updated });
+  await f.start('reservation'); await f.drive();
+  const carried = currentMeeting(f.run);
+  assert.equal(carried.status, 'awaiting_decision');
+  assert.ok(carried.proposals.every(proposal => proposal.issues.length === 0));
+  assert.deepEqual(carried.discussion.awaitingReviews, [{ seat: 'business:R-UNIQUE', role: 'independent' }]);
+  assert.deepEqual(carried.issues[0].carriedFrom, { roundId: first.id, specRevision: first.binding.specRevision });
+  assert.equal(carried.issues[0].id, issue.id);
+  const visible = (await f.app.orchestrator.describeRun(f.project, f.run)).planningIssue;
+  assert.equal(visible.qa[0].id, issue.id);
+  await assert.rejects(f.action({ action: 'approve_spec', revision: f.run.specRevision }), /不能绕过/);
+
+  const removed = { ...updated, title: updated.title + ' 移除条款', requirements: updated.requirements.filter(item => item.id !== 'R-CANCEL') };
+  stale = false;
+  await f.action({ action: 'revise_spec', revision: f.run.specRevision, spec: removed });
+  await f.start('reservation'); await f.drive();
+  const scopeMissing = currentMeeting(f.run);
+  assert.equal(scopeMissing.status, 'blocked');
+  assert.equal(scopeMissing.discussion.routes[0].kind, 'review_required');
+  assert.deepEqual(scopeMissing.discussion.routes[0].requirementIds, ['R-CANCEL']);
+  assert.equal((await f.app.orchestrator.describeRun(f.project, f.run)).planningIssue, undefined);
+
+  await f.action({ action: 'revise_spec', revision: f.run.specRevision, spec: { ...updated, title: updated.title + ' 恢复条款' } });
+  await f.start('reservation'); await f.drive();
+  await f.answer(); await f.drive();
+  const clean = currentMeeting(f.run);
+  assert.ok(clean.decisions.some(item => item.issueId === issue.id && item.answer === '通知管理员'));
+  assert.deepEqual(clean.carriedIssues, []);
+  assert.deepEqual(clean.issues, []);
   assertSpecificationMeeting(f.run);
 });
 

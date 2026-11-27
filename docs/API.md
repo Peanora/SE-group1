@@ -15,7 +15,7 @@
 
 ## 多 Agent 规格评审
 
-`GET /api/health` 提供 `specificationMeeting:{available:true,version:2,adapter:"offline_fixture",modelReview:{available,maxCalls,modelNames?}}`。健康检查只核对本地角色配置。就绪时 `maxCalls` 为单个规划运行的模型评审请求上限。
+`GET /api/health` 提供 `specificationMeeting:{available:true,version:3,adapter:"offline_fixture",modelReview:{available,maxCalls,modelNames?}}`。健康检查只核对本地角色配置。就绪时 `maxCalls` 为单个规划运行的模型评审请求上限。
 
 复用 `POST /api/projects/:projectId/runs/:runId/action`，启用和推进仅在手动 v2 `awaiting_spec` 状态由负责人操作，联合确认沿用原审批权限：
 
@@ -24,7 +24,9 @@
 - 裁决复用 `answer_planning_issue`。`issueId` 取当前问题，`answers` 为议题 ID 到列出的准确选项的映射，`continue:false` 保存草稿，`true` 要求全部阻塞已答。新答案生成新版规格和会议。
 - 联合确认：`{action:"approve_spec",revision:specRevision,meetingRevision:bundleRevision,feedback}`。已启用会议时缺失联合包版本、自测/必审未通过、旧版本、未关阻塞或包变化均返回409。成功才继续原架构/任务及计划确认。
 
-运行包含 `specReview:{required,currentRoundId,rounds}`。新轮次增加 `reviewProtocol:2`、`featureReviews`，专业提案带 `requiredReviewers`、`artifactRevision`、`selfTest`、`reviews` 和 `blocking`。节点可等待、通过或退回，轮次也可等待人工裁决或联合确认。角色缺席、超时、无效回执进入持久等待。重试复用已签收的同版提案证据，退回须实际修订。项目并发操作继续返回 409。
+运行包含 `specReview:{required,currentRoundId,rounds}`。新轮次 `reviewProtocol:3` 的 `discussion` 保存阶段、共同议题、独立提案位置、具名质疑、待收集回执和问题分流记录。提案与质疑回执分别绑定版本。分流的 `routes` 包含问题编号、去向、影响条款、阻塞状态、来源或复核条件。可选择的用户问题仍使用 `round.issues` 和现有裁决动作。其他返工项进入现有规格修订。旧轮次保留各自协议的版本门禁。
+
+专业提案保留 `requiredReviewers`、`artifactRevision`、`selfTest`、`reviews` 和 `blocking`。角色缺席、超时、无效回执进入持久等待。重试复用已签收的同版提案证据。已经收到的合法质疑和人工议题可以汇总，尚未取得的必审证据继续挡住规格放行。未裁决的阻塞议题在换版时保留原轮次和规格版本引用。裁决记录来自平台保存的答案与回执，草案内自带的 `meetingDecisions` 不构成裁决。项目并发操作继续返回 409。
 
 可通过现有规格修订保存每条需求的可选 `formatAcceptance`（1 至 20 项，每项至多 1200 字）。逐条定义同时记录当前规格版本、行为、格式、主责、独立席、提交证据、返工和后继。采用提案中的格式定义须绑定同版 Reviewer 通过的提案。缺少具体格式时显示待定义。
 

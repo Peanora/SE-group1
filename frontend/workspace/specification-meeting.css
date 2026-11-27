@@ -235,6 +235,51 @@
   color: var(--sm-sage);
 }
 #specification-meeting-host .sm-content { padding: 13px var(--sm-gutter) 15px; }
+#specification-meeting-host .sm-topic-picker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 9px;
+  margin-block: 10px;
+  font-size: 12px;
+}
+#specification-meeting-host .sm-topic-picker select {
+  flex: 1 1 240px;
+  max-inline-size: 420px;
+  min-inline-size: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--sm-line);
+  border-radius: 6px;
+  background: var(--sm-board);
+  color: inherit;
+  font: inherit;
+}
+#specification-meeting-host .sm-discussion-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  gap: 10px;
+}
+#specification-meeting-host .sm-discussion-columns > section,
+#specification-meeting-host .sm-route-group {
+  min-inline-size: 0;
+  border: 1px solid var(--sm-line);
+  border-radius: 7px;
+  padding: 9px 10px;
+  overflow-wrap: anywhere;
+}
+#specification-meeting-host .sm-discussion-columns h5,
+#specification-meeting-host .sm-route-group h5 { font-size: 12px; }
+#specification-meeting-host .sm-discussion-columns h5 span,
+#specification-meeting-host .sm-discussion-columns code { color: var(--sm-muted); font-size: 11px; margin-inline-start: 6px; }
+#specification-meeting-host .sm-route-group { margin-block-start: 8px; }
+#specification-meeting-host .sm-route-title { display: flex; align-items: baseline; justify-content: space-between; gap: 5px 8px; flex-wrap: wrap; }
+#specification-meeting-host .sm-route-group blockquote {
+  margin: 4px 0;
+  border-inline-start: 2px solid var(--sm-line);
+  padding-inline-start: 7px;
+  color: var(--sm-muted);
+}
+#specification-meeting-host .sm-route-group .text-button { margin-block-start: 5px; }
 #specification-meeting-host .sm-work {
   display: grid;
   grid-template-columns: minmax(185px, .62fr) minmax(0, 1.36fr);

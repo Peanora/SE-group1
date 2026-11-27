@@ -1,5 +1,12 @@
 # 首版验证记录
 
+## 2026-11-27 同议题交叉质疑与问题分流
+
+- Node.js 22.21.0 下 `npm run check` 通过 TypeScript 和 305 个脚本语法检查。`npm run spec-review:test` 包括 Vite 生产构建，186 项通过，0 失败、取消或跳过。
+- 定向覆盖同议题提案隔离、冻结后传递同行观点、同版签署、三类问题分流、并存退回和迟到回执时仍可裁决、跨修订携带未决、拒绝伪造裁决和历史协议兼容。模型链路使用本机模拟 Chat Completions 服务，未调用外部付费模型。完整自动化全量套件未执行。
+- 隔离工单从 HTTP 创建并运行协议 v3。F03 有 6 份同议题提案、12 份关联质疑回执，归入按原文返修，提前联合确认返回 409，架构尝试次数为 0。真实 Edge 在桌面和 390px 核对议题查看、分流和验收编辑焦点。本地日志和证据见 `output/spec-discussion-final.log`、`output/specification-discussion-demo.json`、`output/playwright/spec-discussion/`。
+- 评审线路图、分流看板和规格批注稿使用独立示例。真实 Edge 沙箱核对三种交互及 320、390、728、1024 像素内容宽度，没有横向溢出或脚本异常。
+
 ## 2026-11-27 需求到设计规格的分层 Review
 
 - Node.js 22.21.0 下 `npm run check` 通过 TypeScript 和 305 个脚本语法检查。`npm run spec-review:test` 含 Vite 生产构建，181 项通过，0 失败、取消或跳过。覆盖历史轮次兼容、合并专业异议时保留阻塞、同版提案复核和返工、权限与来源换版、人工确认、真实 Edge 和产物导出。回归日志在本地 `output/spec-review-chain-regression.log`。

@@ -306,7 +306,7 @@ export async function createApp(options = {}) {
             agentSettings: { available: true, version: 1 },
             engineeringRouteContractRevision: { available: true, version: 1 },
             planningIssueConversation: { available: true, version: 3 },
-            specificationMeeting: { available: true, version: 2, adapter: 'offline_fixture',
+            specificationMeeting: { available: true, version: 3, adapter: 'offline_fixture',
               modelReview: meetingModelReadiness(resolveMeetingModel) },
             automaticDelivery: { available: automaticDelivery.available, ...automaticDelivery.readiness(), ...AUTOMATIC_BUDGET,
               developmentTimeoutMs: plannedExecutionService?.timeoutMs },

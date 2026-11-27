@@ -644,7 +644,11 @@ const specificationMeeting = createSpecificationMeeting({ container: $('#specifi
   getState: () => ({ run: historicalRun() ? { ...state.run, sourceSuperseded: true } : state.run,
     busy: state.busy || state.selectionPending, canEdit: !state.health?.teamAccess?.enabled || state.actorRole === 'owner',
     modelReview: state.health?.specificationMeeting?.modelReview }),
-  submit: reviewAction, inspectIssue: () => { workspaceLayout.show('plan'); planningIssue.open(); }, showArtifact });
+  submit: reviewAction, inspectIssue: () => { workspaceLayout.show('plan'); planningIssue.open(); },
+  reviseClause: id => {
+    workspaceLayout.show('plan');
+    if (!planningReview.openRequirement(id)) focusWorkspaceTarget($('#review-heading'));
+  }, showArtifact });
 
 function renderProjects() {
   $('#project-count').textContent = state.projects.length;

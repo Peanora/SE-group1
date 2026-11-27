@@ -32,6 +32,17 @@ const views = [
   { id: 'features', label: '逐条评审' },
   { id: 'gates', label: '阶段门禁' },
 ];
+const discussionViews = [
+  { id: 'discussion', label: '议题讨论' },
+  { id: 'routing', label: '问题分流' },
+];
+const discussionPhases = { collecting: '收集独立提案', challenging: '交叉质疑', routing: '汇总并分流' };
+const routeNames = {
+  source_rework: '按原文修订',
+  cross_requirement_conflict: '协调跨条款冲突',
+  human_decision: '由用户裁决',
+  review_required: '待规格主笔核对',
+};
 const label = (round, role) => round?.seats?.[role] ?? roleLabels[role] ?? role;
 const phaseLabel = value => status[value] ?? value;
 const short = value => typeof value === 'string' ? value.slice(0, 10) : '尚未形成';
@@ -56,7 +67,7 @@ function stageMap(round, active, selectedNode, pending) {
       return `<li data-phase-state="${escape(visualStatus)}" data-phase-live="${live}">
         <button type="button" class="sm-map-node" data-meeting="node" data-node="${phase.id}" aria-pressed="${selected}" aria-controls="spec-meeting-content" title="${escape(node?.title ?? phase.title)}">
           <span class="sm-map-stop" aria-hidden="true">${visualStatus === 'passed' ? '✓' : String(index + 1).padStart(2, '0')}</span>
-          <strong>${phase.label}</strong>
+          <strong>${round?.discussion && phase.id === 'decisions' ? '汇总与分流' : phase.label}</strong>
           <span class="sm-map-state">${live ? '等待本次响应' : waitingForConfirmation ? '待用户确认' : escape(phaseLabel(visualStatus))}</span>
         </button>
       </li>`;
@@ -169,6 +180,63 @@ function issueEvidence(round) {
   </details>`;
 }
 
+function discussionEvidence(round, selectedTopic) {
+  const discussion = round.discussion;
+  const topics = list(discussion.topics);
+  const match = topics.find(topic => topic.id === selectedTopic);
+  const related = list(discussion.routes).find(route => route.blocking && route.requirementIds?.length);
+  const topic = match ?? topics.find(item => related?.requirementIds.includes(item.requirementId)) ?? topics[0];
+  const positions = list(topic?.positions);
+  const challenges = list(topic?.challenges);
+  return `<section class="sm-sheet sm-discussion" aria-label="同议题提案与交叉质疑">
+    <div class="sm-evidence-head"><div><h4>同议题提案与交叉质疑</h4><p>各席先独立提交，提案固定后再交其他席位质疑。</p></div>
+      <span class="sm-chip">${escape(discussionPhases[discussion.phase] ?? discussion.phase)}</span></div>
+    ${topic ? `<label class="sm-topic-picker">业务议题 <select data-meeting="topic">
+      ${topics.map(item => `<option value="${escape(item.id)}"${item === topic ? ' selected' : ''}>${escape(item.requirementId)} · ${escape(item.title)}</option>`).join('')}
+      </select></label>
+    <div class="sm-discussion-columns">
+      <section><h5>独立提案 <span>${positions.length} 份</span></h5>
+        ${positions.length ? `<ul class="sm-line-list">${positions.map(position => `<li>
+          <strong>${escape(label(round, position.seat))}</strong><code>${escape(short(position.proposalRevision))}</code>
+          <p>${escape(position.rule)}</p>${position.exception ? `<p>${escape(position.exception)}</p>` : ''}
+        </li>`).join('')}</ul>` : '<p class="sm-message">等待独立提案。</p>'}</section>
+      <section><h5>交叉质疑 <span>${challenges.length} 份</span></h5>
+        ${challenges.length ? `<ul class="sm-line-list">${challenges.map(challenge => `<li>
+          <strong>${escape(label(round, challenge.role))} → ${escape(label(round, challenge.proposalSeat))}</strong>
+          <p>${escape(challenge.evidence)}</p>
+          ${challenge.findings?.length ? `<ul class="sm-findings">${findingsMarkup(challenge.findings, round)}</ul>` : ''}
+        </li>`).join('')}</ul>` : '<p class="sm-message">提案固定后接收交叉质疑。</p>'}</section>
+    </div>` : '<p class="sm-message">需求基线固定后会列出业务议题。</p>'}
+    ${discussion.awaitingProposals?.length ? `<p class="sm-message">等待 ${discussion.awaitingProposals.length} 份提案。</p>` : ''}
+    ${discussion.awaitingReviews?.length ? `<p class="sm-message">等待 ${discussion.awaitingReviews.length} 份有效质疑回执。</p>` : ''}
+  </section>`;
+}
+
+function routingEvidence(round, canRevise) {
+  const routes = list(round.discussion.routes);
+  const groups = Object.entries(routeNames).map(([kind, title]) => ({ kind, title, entries: routes.filter(route => route.kind === kind) }));
+  return `<section class="sm-sheet sm-routing" aria-label="问题分流记录">
+    <div class="sm-evidence-head"><div><h4>问题分流记录</h4><p>按依据与影响确定处理去向。阻塞项关闭后才放行规格。</p></div>
+      <span class="sm-chip">${routes.length} 项</span></div>
+    ${routes.length ? groups.filter(group => group.entries.length).map(group => `<section class="sm-route-group" data-route-kind="${group.kind}">
+      <h5>${group.title}</h5><ul class="sm-line-list">${group.entries.map(route => {
+        const clauses = list(route.requirementIds);
+        const open = route.status === 'open';
+        return `<li><div class="sm-route-title"><strong>${escape(route.question || route.location || clauses.join('、') || '规格层问题')}</strong>
+          <span class="sm-chip" data-tone="${open ? route.blocking ? 'blocked' : 'pending' : 'passed'}">
+            ${open ? route.blocking ? '阻塞' : '保留' : route.status === 'resolved_pending_recheck' ? '待复核' : '已关闭'}</span></div>
+          ${route.impact ? `<p>${escape(route.impact)}</p>` : ''}
+          ${clauses.length || route.role ? `<p>${joined(clauses)}${clauses.length && route.role ? ' · ' : ''}${escape(route.role ? label(round, route.role) : '')}</p>` : ''}
+          ${route.sourceQuote ? `<blockquote>${escape(route.sourceQuote)}</blockquote>` : ''}
+          ${route.condition ? `<p><strong>复核条件</strong> ${escape(route.condition)}</p>` : ''}
+          ${canRevise && open && group.kind !== 'human_decision' ? `<button type="button" class="text-button" data-meeting="revise-clause"
+            data-clause="${escape(clauses[0] ?? '')}">修订规格条款</button>` : ''}
+        </li>`;
+      }).join('')}</ul>
+    </section>`).join('') : `<p class="sm-message">${round.discussion.phase === 'routing' ? '本轮没有需分流的问题。' : '交叉质疑结束后会在这里汇总。'}</p>`}
+  </section>`;
+}
+
 function featureEvidence(round) {
   const features = list(round?.featureReviews);
   const coverage = list(round?.coverage);
@@ -265,6 +333,7 @@ function reviewActions({ round, current, run, busy, pending, canEdit, modelRevie
     body = '<button type="button" class="button button-primary" data-meeting="issues">查看问题并裁决</button>';
   } else if (round.status === 'blocked') {
     body = '<p>按阻塞项修改相关条款并保存，在新版本重新发起评审。原意见和复核条件将随新轮次保留。</p>';
+    if (round.discussion?.routes?.length) body += '<button type="button" class="button button-primary" data-meeting="view" data-view="routing">查看问题分流</button>';
   } else if (round.status === 'awaiting_confirmation') {
     body = '<p>请核对设计规格、会议纪要和阶段清单，然后使用下方联合确认按钮。</p>';
   } else if (round.status === 'needs_source_revision') {
@@ -273,9 +342,9 @@ function reviewActions({ round, current, run, busy, pending, canEdit, modelRevie
   return body ? `<div class="sm-action-row">${body}</div>` : '';
 }
 
-export function createSpecificationMeeting({ container, getState, submit, inspectIssue, showArtifact }) {
+export function createSpecificationMeeting({ container, getState, submit, inspectIssue, reviseClause = () => {}, showArtifact }) {
   let pendingRun = '', signature = '', scenario = 'reservation', error = '', view = 'nodes', selectedNode = '';
-  let contextId = '';
+  let contextId = '', selectedTopic = '';
   const roundOf = run => run?.specReview?.rounds?.find(round => round.id === run.specReview.currentRoundId);
 
   function render() {
@@ -290,20 +359,25 @@ export function createSpecificationMeeting({ container, getState, submit, inspec
     if (nextContext !== contextId) {
       contextId = nextContext;
       selectedNode = '';
+      selectedTopic = '';
       view = 'nodes';
       if (!pending) error = '';
     }
     const activeNode = round?.nodes.find(node => node.status !== 'passed')?.id ?? (round ? 'confirmation' : 'baseline');
     const currentNode = selectedNode || activeNode;
-    const next = JSON.stringify([run.id, run.specRevision, run.status, round, pending, applying, busy, canEdit, modelReview, error, view, currentNode]);
+    const next = JSON.stringify([run.id, run.specRevision, run.status, round, pending, applying, busy, canEdit, modelReview, error, view, currentNode, selectedTopic]);
     if (signature === next) return;
     signature = next;
     const active = container.contains(document.activeElement) ? document.activeElement?.dataset : null;
-    const focusKey = active?.meeting ? [active.meeting, active.node, active.view].join('/') : null;
+    const focusKey = active?.meeting ? [active.meeting, active.node, active.view, active.clause].join('/') : null;
     const open = new Set([...container.querySelectorAll('[data-meeting-detail][open]')].map(element => element.dataset.meetingDetail));
     const phase = phases.find(item => item.id === currentNode) ?? phases[0];
     const node = round?.nodes.find(item => item.id === currentNode);
-    const phasePanel = view === 'features' ? featureEvidence(round) : view === 'gates' ? gateEvidence(round) : `
+    const availableViews = round?.discussion ? [views[0], ...discussionViews, ...views.slice(1)] : views;
+    const canRevise = current && canEdit && !busy && !pending && round.status === 'blocked';
+    const phasePanel = view === 'features' ? featureEvidence(round) : view === 'gates' ? gateEvidence(round)
+      : view === 'discussion' && round?.discussion ? discussionEvidence(round, selectedTopic)
+      : view === 'routing' && round?.discussion ? routingEvidence(round, canRevise) : `
       <div class="sm-work"><section class="sm-professions"><h4>并行专业席位</h4>${seatLanes(round)}${proposalEvidence(round)}</section>
         ${nodeEvidence(node, phase, round)}</div>${issueEvidence(round)}`;
     const model = isModelRound(round);
@@ -318,7 +392,7 @@ export function createSpecificationMeeting({ container, getState, submit, inspec
       ${stageMap(round, activeNode, currentNode, pending)}
       ${reviewActions({ round, current, run, busy, pending: applying, canEdit, modelReview })}
       <div class="sm-views" role="group" aria-label="评审视图">
-        ${views.map(option => `<button type="button" data-meeting="view" data-view="${option.id}" aria-pressed="${view === option.id}" aria-controls="spec-meeting-content">${option.label}</button>`).join('')}
+        ${availableViews.map(option => `<button type="button" data-meeting="view" data-view="${option.id}" aria-pressed="${view === option.id}" aria-controls="spec-meeting-content">${option.label}</button>`).join('')}
       </div>
       <div id="spec-meeting-content" class="sm-content">${phasePanel}</div>
       ${round ? `<footer class="sm-footer">
@@ -338,12 +412,16 @@ export function createSpecificationMeeting({ container, getState, submit, inspec
     }
     if (focusKey) [...container.querySelectorAll('[data-meeting]')].find(element => {
       const key = element.dataset;
-      return [key.meeting, key.node, key.view].join('/') === focusKey;
+      return [key.meeting, key.node, key.view, key.clause].join('/') === focusKey;
     })?.focus({ preventScroll: true });
   }
 
   container.addEventListener('change', event => {
     if (event.target.dataset.meeting === 'scenario') scenario = event.target.value;
+    if (event.target.dataset.meeting === 'topic') {
+      selectedTopic = event.target.value;
+      render();
+    }
   });
 
   container.addEventListener('click', async event => {
@@ -362,6 +440,7 @@ export function createSpecificationMeeting({ container, getState, submit, inspec
       return;
     }
     if (action === 'issues') { inspectIssue(); return; }
+    if (action === 'revise-clause') { reviseClause(button.dataset.clause); return; }
     const artifact = { 'design-spec': 'spec.md', minutes: 'spec-review-minutes.json', checklist: 'stage-review-checklist.json' }[action];
     if (artifact) {
       showArtifact(artifact);

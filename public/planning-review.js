@@ -191,7 +191,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     const draft = getDraft(run, kind);
     currentDraft = draft;
     const revisingPlan = isConfirmedPlanEdit(run, kind);
-    const signature = `${run.id}:${kind}:${localMode}:${run.status}:${run.specRevision}:${run.planRevision}:${run.decisions?.length || 0}:${revisingPlan}`;
+    const signature = `${run.id}:${kind}:${localMode}:${run.status}:${run.specRevision}:${run.planRevision}:${run.decisions?.length || 0}:${revisingPlan}:${Boolean(run.specReview?.required)}`;
     if (signature === viewKey) { syncControls(); return; }
     viewKey = signature;
     const focused = container.contains(document.activeElement) ? document.activeElement : null;
@@ -393,6 +393,19 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     $(`[data-review-field="task.${index}.title"]`)?.focus({ preventScroll: true });
     return true;
   }
+  function openRequirement(id) {
+    const { run, busy } = getState();
+    if (busy || pending || run?.status !== 'awaiting_spec' || run.sourceSuperseded) return false;
+    const index = run.spec?.requirements?.findIndex(requirement => requirement.id === id) ?? -1;
+    if (index < 0) return false;
+    render();
+    const details = $(`[data-review-details="requirement-${index}"]`);
+    if (!details || container.hidden) return false;
+    details.open = true;
+    details.scrollIntoView({ block: 'start' });
+    $(`[data-review-field="requirement.${index}.acceptance"]`)?.focus({ preventScroll: true });
+    return true;
+  }
   function taskDraft() {
     const { run } = getState();
     if (!canEditPlanTasks(run)) return null;
@@ -432,5 +445,5 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
     await act('save', draft);
     onPlanDraft();
   }
-  return { render, openTask, taskDraft, changeDependency, saveTaskGraph };
+  return { render, openTask, openRequirement, taskDraft, changeDependency, saveTaskGraph };
 }
