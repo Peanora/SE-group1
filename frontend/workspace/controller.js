@@ -28,7 +28,6 @@ const taskOrchestration = createTaskOrchestration($('#records-body'), {
 const state = { health: null, projects: [], project: null, run: null, automatic: null, stageId: 'spec', taskId: null, artifactName: 'task.md', tab: 'events', raw: false, busy: false, epoch: 0, selectionPending: false, pollTimer: null, feedback: '', importFile: null, filename: 'requirements.md' };
 wireTaskSchedule($('#records-body'));
 let sourceReadyProject = '';
-let expandedAutomaticRun = '';
 let automaticRetryConsent = null;
 let taskExecutionSignature = '';
 const notices = createWorkspaceNotices({ errorBanner: $('#error-banner'), errorText: $('#error-text'), dismissButton: $('#dismiss-error'), toast: $('#toast'),
@@ -318,8 +317,7 @@ function renderDeliveryProgress() {
   if ($('#delivery-current-state').textContent !== current.text) $('#delivery-current-state').textContent = current.text;
   $('#delivery-current-state').dataset.state = current.state;
   $('#delivery-done-count').textContent = `${steps.filter(step => step.state === 'done').length} / ${steps.length} 完成`;
-  if (automatic && expandedAutomaticRun !== state.run.id) { expandedAutomaticRun = state.run.id; $('#delivery-workflow').open = true; }
-  showRunTimeline($('#delivery-steps'), steps, upcoming?.id, state.selectionPending, Boolean(state.project));
+  showRunTimeline($('#delivery-steps'), steps, current.id, state.selectionPending, Boolean(state.project));
   renderExecutionFlow(steps);
   renderWorkspaceContext(steps);
 }
@@ -494,6 +492,7 @@ function renderWorkspaceContext(steps = workflowSteps()) {
   if ($('#workspace-context-title').textContent !== title) $('#workspace-context-title').textContent = title;
   if ($('#workspace-context-note').textContent !== note) $('#workspace-context-note').textContent = note;
   const button = $('[data-workspace-next]'); button.textContent = action; button.dataset.nextKind = kind;
+  button.hidden = kind === 'start';
   button.className = `button ${downloadReady ? 'button-outline' : 'button-primary'}`;
   button.disabled = !state.project || state.busy || state.selectionPending;
 }
@@ -659,11 +658,10 @@ function renderProjects() {
 }
 function renderHeader() {
   $('#project-title').textContent = state.project?.name || '需求编排工作台';
-  $('#breadcrumb-project').textContent = state.project?.name || '新项目';
   const source = selectedSource();
-  $('#project-description').textContent = source
-    ? (source.filename || '需求文档') + '　' + (source.content?.length?.toLocaleString('zh-CN') || 0) + ' 字'
-    : '从需求规划到开发验收。';
+  const description = $('#project-description');
+  description.hidden = !source;
+  description.textContent = source?.filename || '';
   $('#source-button').disabled = !state.project;
   const factoryLink = $('#factory-workbench-link');
   factoryLink.hidden = !state.project || state.health?.factoryWorkbench?.available !== true;

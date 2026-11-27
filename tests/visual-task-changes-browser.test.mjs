@@ -87,8 +87,12 @@ for (const width of [1440, 390]) test(`真实Edge ${width}px：从任务图编�
   assert.equal(await page.locator('[data-review-details="task-1"]').evaluate(element => element.open), true);
   assert.equal(await title.evaluate(element => document.activeElement === element), true);
   const changedTitle = '明确资源读取及库存不足提示';
+  const changedModuleName = '资源读取与库存提示';
   await title.fill(changedTitle);
-  await page.waitForFunction(value => document.querySelector('.dev-task[data-task="B"] .dev-task-title')?.textContent === value, changedTitle);
+  const moduleName = page.locator('[data-review-field="module.1.name"]');
+  await moduleName.fill(changedModuleName);
+  await page.waitForFunction(value => document.querySelector('.dev-task[data-task="B"] .dev-task-title')?.textContent === value, changedModuleName);
+  assert.equal(await page.locator('.task-detail .module-task-action').textContent(), changedTitle);
   const preview = page.locator('#review-plan-preview');
   assert.match(await preview.textContent(), /实现资源读取/);
   assert.ok((await preview.textContent()).includes(changedTitle));
@@ -117,6 +121,7 @@ for (const width of [1440, 390]) test(`真实Edge ${width}px：从任务图编�
   await page.locator('[data-workspace-view="plan"]').click();
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).waitFor();
   assert.equal(await title.inputValue(), changedTitle);
+  assert.equal(await moduleName.inputValue(), changedModuleName);
   assert.equal(await prerequisite('C').isChecked(), true);
   assert.equal(await page.locator('[data-review-choice="requirementIds"][data-task-index="1"][value="R-002"]').isChecked(), true);
   await page.locator('#tab-tasks').click();
@@ -130,6 +135,7 @@ for (const width of [1440, 390]) test(`真实Edge ${width}px：从任务图编�
   await page.waitForFunction(() => document.querySelector('#approve-button') && !document.querySelector('#approve-button').disabled);
   assert.deepEqual(calls, { specifications: 1, engineering: 1 }, '保存任务修订不能重新调用模型');
   assert.equal(run.tasks[1].title, changedTitle);
+  assert.equal(run.tasks[1].workflowModule.name, changedModuleName);
   assert.deepEqual(run.tasks[1].dependsOn, ['A', 'C']);
   assert.deepEqual(run.tasks[1].requirementIds, ['R-001', 'R-002']);
   for (const key of ['category', 'writePaths', 'suggestedFiles', 'inputs', 'outputs']) assert.deepEqual(run.tasks[1][key], original.tasks[1][key], `保留工程字段${key}`);
@@ -147,9 +153,10 @@ for (const width of [1440, 390]) test(`真实Edge ${width}px：从任务图编�
   assert.equal(run.approvals.plan.revision, run.planRevision);
   const exported = JSON.parse(run.artifacts.find(item => item.name === 'plan.json').content);
   assert.equal(exported.tasks[1].title, changedTitle);
+  assert.equal(exported.tasks[1].workflowModule.name, changedModuleName);
   assert.equal(exported.planRevision, run.planRevision);
   const flow = page.locator('#delivery-workflow');
-  await flow.locator('summary').click();
+  assert.equal(await flow.evaluate(element => element.open), true);
   assert.equal(await flow.locator('#delivery-steps').getByRole('button').count(), 9);
   assert.equal(await flow.locator('[data-delivery-step="plan-approval"]').getAttribute('data-state'), 'done');
   await flow.locator('[data-delivery-step="coding"]').click();
@@ -200,7 +207,7 @@ test('全流程以当前版本的实际记录更新，并定位验收清单、�
   await page.route(`**${base}/development-executions`, route => route.fulfill({ json: { capabilities: { canStart: approved, contractRevision: revision,
     model: { name: 'fixture' }, budget, reason: approved ? '' : '必须先认可当前联合HTTP与浏览器验收定义。' }, executions: execution ? [execution] : [] } }));
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).click();
-  await page.locator('#delivery-workflow > summary').click();
+  assert.equal(await page.locator('#delivery-workflow').evaluate(element => element.open), true);
   const step = id => page.locator(`[data-delivery-step="${id}"]`);
   await step('verification').getByText('待准备清单', { exact: true }).waitFor();
   await page.getByRole('button', { name: '打开验收清单', exact: true }).click();

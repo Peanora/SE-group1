@@ -63,7 +63,7 @@ type EventProps = {
 };
 
 const markerColors: Record<string, string> = {
-  pending: '#a4b4da', running: '#3846ce', succeeded: '#6d9b85', failed: '#b46d62', blocked: '#b46d62',
+  pending: '#8fa3ae', running: '#7bbaff', succeeded: '#71d4a7', failed: '#ff9b99', blocked: '#ff9b99',
 };
 const edges = [
   ['spec', 'M165 149H200'],

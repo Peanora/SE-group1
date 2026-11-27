@@ -1,5 +1,10 @@
 # 首版验证记录
 
+## 2026-11-27 流程图工作台
+
+- `npm test` 默认配置完成 1513 项，1421 项通过、92 项跳过、0 项失败。TypeScript、305 个脚本语法检查及 Vite 生产构建通过。
+- 另启用真实 Windows 沙箱单独运行首页 3 项回归。使用离线模型夹具完成浏览器失败和 Review 阻塞后的两轮返工，并实际预览和下载同版源码。Factory v1.0.5 原生 Edge 测试验证规格交接、执行与 Git 集成。未使用付费服务。[实施与验证](tasks/graph-workspace.md)
+
 ## 2026-11-27 同议题交叉质疑与问题分流
 
 - Node.js 22.21.0 下 `npm run check` 通过 TypeScript 和 305 个脚本语法检查。`npm run spec-review:test` 包括 Vite 生产构建，186 项通过，0 失败、取消或跳过。

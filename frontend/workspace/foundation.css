@@ -171,39 +171,6 @@ textarea { resize: vertical; }
 .demo-options-content { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .demo-options-content p { margin: 0; }
 
-.delivery-workflow { container-type: inline-size; }
-.delivery-workflow > summary { display: flex; align-items: center; justify-content: space-between; gap: 5px; cursor: pointer; list-style: none; }
-.delivery-workflow > summary::-webkit-details-marker { display: none; }
-.tf-flow-summary, .tf-flow-actions { display: flex; align-items: center; flex-wrap: wrap; }
-.tf-flow-label { font-weight: 650; color: var(--tf-ink); }
-.tf-flow-action, #delivery-current-state { color: var(--tf-accent); }
-#delivery-done-count { color: var(--tf-muted); font-size: 11px; }
-#delivery-steps { display: grid; gap: 4px; border-top: 1px solid var(--tf-line); list-style: none; margin: 0; }
-.delivery-step {
-  display: grid;
-  grid-template-columns: 23px minmax(0, 1fr);
-  gap: 0 5px;
-  width: 100%;
-  padding: 4px;
-  border: 1px solid transparent;
-  border-radius: 5px;
-  background: #fff;
-  color: var(--tf-ink);
-  text-align: start;
-  overflow-wrap: anywhere;
-}
-.delivery-step strong { font-size: 12px; }
-.delivery-step span:first-child { grid-row: span 2; align-self: start; display: grid; place-items: center; width: 23px; height: 23px; background: #eff2f8; color: #526887; font: 11px/1 var(--mono-type); }
-.delivery-step span.delivery-state, .delivery-step small { color: var(--tf-muted); font-size: 11px; }
-.delivery-step small { grid-column: 2; }
-.delivery-step small:empty { display: none; }
-.delivery-step[aria-current="step"] { background: var(--tf-accent-soft); border-color: #c0ccf4; }
-.delivery-step[data-state="failed"] .delivery-state { color: var(--red); }
-.delivery-step[data-state="done"] .delivery-state { color: var(--green); }
-@container (min-width: 780px) {
-  #delivery-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-
 .records-toolbar, .tabs { display: flex; align-items: center; gap: 6px; }
 .records-toolbar { justify-content: space-between; }
 .records-hint { color: var(--tf-muted); font-size: 12px; }

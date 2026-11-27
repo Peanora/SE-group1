@@ -1,7 +1,7 @@
-.tf-workbench .evidence-flow-edges .flow-edge { stroke: #a4b4da; }
-.tf-workbench .evidence-flow-edges .flow-edge.running { stroke: #3846ce; }
-.tf-workbench .evidence-flow-edges .flow-edge.succeeded { stroke: #6d9b85; }
-.tf-workbench .evidence-flow-edges .flow-edge:is(.failed, .blocked) { stroke: #b46d62; }
+.tf-workbench .evidence-flow-edges .flow-edge { stroke: var(--flow-idle); }
+.tf-workbench .evidence-flow-edges .flow-edge.running { stroke: var(--flow-working); }
+.tf-workbench .evidence-flow-edges .flow-edge.succeeded { stroke: var(--flow-done); }
+.tf-workbench .evidence-flow-edges .flow-edge:is(.failed, .blocked) { stroke: var(--flow-failed); }
 
 .tf-workbench .run-event-list {
   margin: 0;

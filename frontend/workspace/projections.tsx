@@ -1,5 +1,5 @@
 import { DeliveryOverview, type DeliveryOverviewProps } from './delivery-station';
-import { FileText } from 'lucide-react';
+import { Braces, ClipboardCheck, FileCheck, FilePenLine, FileText, ListChecks, PackageCheck, ShieldCheck, Workflow } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
@@ -54,21 +54,36 @@ interface Phase {
   hasUsage?: boolean;
 }
 
+const phaseIcons: Record<string, typeof FileText> = {
+  source: FileText,
+  spec: FilePenLine,
+  'spec-approval': FileCheck,
+  plan: Workflow,
+  'plan-approval': ClipboardCheck,
+  verification: ListChecks,
+  coding: Braces,
+  testing: ShieldCheck,
+  delivery: PackageCheck,
+};
+
 export function showRunTimeline(container: Element, steps: Phase[], currentId: string | undefined,
   pending: boolean, hasProject: boolean) {
-  render(container, steps.map((step, index) => (
-    <li key={step.id}>
-      <button type="button" className="delivery-step" data-delivery-step={step.id}
-        data-state={step.state} data-has-usage={step.hasUsage ? '' : undefined}
-        aria-current={step.id === currentId ? 'step' : undefined}
-        disabled={pending || (!hasProject && step.id !== 'source')}>
-        <span aria-hidden="true">{index + 1}</span>
-        <strong>{step.title}</strong>
-        <span className="delivery-state">{step.text}</span>
-        <small>{step.detail}</small>
-      </button>
-    </li>
-  )));
+  render(container, steps.map(step => {
+    const Icon = phaseIcons[step.id] ?? FileText;
+    return (
+      <li key={step.id} data-state={step.state}>
+        <button type="button" className="delivery-step" data-delivery-step={step.id}
+          data-state={step.state} data-has-usage={step.hasUsage ? '' : undefined}
+          aria-current={step.id === currentId ? 'step' : undefined}
+          disabled={pending || (!hasProject && step.id !== 'source')}>
+          <span className="delivery-node-icon" aria-hidden="true"><Icon /></span>
+          <strong>{step.title}</strong>
+          <span className="delivery-state">{step.text}</span>
+          <small>{step.detail}</small>
+        </button>
+      </li>
+    );
+  }));
 }
 
 export function showExecutionTimeline(container: Element, steps: Phase[], currentId: string, disabled: boolean) {

@@ -135,14 +135,16 @@ for (const width of [1440, 390]) test(`真实 Edge ${width}px：开发任务依�
   });
   const root = await openTasks(page, origin);
   const shell = await page.evaluate(() => {
-    const sidebar = document.querySelector('aside.sidebar').getBoundingClientRect();
-    const main = document.querySelector('.app-shell').getBoundingClientRect();
+    const projectStrip = document.querySelector('aside.project-strip').getBoundingClientRect();
+    const main = document.querySelector('#main').getBoundingClientRect();
     const nav = document.querySelector('#workspace-nav');
-    return { sidebarRight: sidebar.right, sidebarBottom: sidebar.bottom, mainLeft: main.left, mainTop: main.top,
-      tabsInWorkspace: nav.parentElement.id === 'main', runInHeading: !!document.querySelector('.workspace-heading #run-select') };
+    return { projectStripBottom: projectStrip.bottom, mainTop: main.top,
+      tabsInWorkspace: nav.parentElement.id === 'main', runInHeading: !!document.querySelector('.workspace-heading #run-select'),
+      settingsInTopbar: document.querySelectorAll('.topbar a[href="/api-settings.html"], .topbar a[href="/agent-settings.html"]').length };
   });
-  assert.equal(shell.tabsInWorkspace && shell.runInHeading, true, '工作区标签和运行选择位于原工作台主体');
-  assert.ok(width === 1440 ? shell.sidebarRight <= shell.mainLeft + 1 : shell.sidebarBottom <= shell.mainTop + 1);
+  assert.equal(shell.tabsInWorkspace && shell.runInHeading, true, '工作区标签和运行选择位于主体');
+  assert.equal(shell.settingsInTopbar, 2, '模型设置从顶栏进入');
+  assert.ok(shell.projectStripBottom <= shell.mainTop + 1, '项目列表位于主体上方');
   const control = name => root.getByRole('button', { name, exact: true });
   const task = taskCard(root, 'B');
   const noPageOverflow = () => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1);
