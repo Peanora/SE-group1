@@ -4,6 +4,8 @@
 
 `GET /api/health` 提供 `factoryWorkbench:{available,version}`，`available` 表示当前单人模式开放入口。项目路由提供可执行文件可用性与运行状态。仅允许回环 Host 和本机请求，团队模式返回 403。
 
+`/factory.html?project=<projectId>&run=<runId>&view=mcp` 显示 MCP 入口。运行编号可省略。浏览器启动和读取同一个项目的 Factory 运行时，再直接打开其原生 Settings。
+
 | 接口 | 结果 |
 | --- | --- |
 | `GET /api/projects/:projectId/factory?run=<runId>` | `{project,factory,handoff,result?,resultError?}`。省略运行编号时取最后一次规划。 |

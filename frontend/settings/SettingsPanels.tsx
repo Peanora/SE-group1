@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { ArrowLeft, ArrowUpRight, Bot, Plug } from 'lucide-react';
+import { ArrowLeft, ArrowUpRight, Bot, Cable, Plug } from 'lucide-react';
 import { requestStartupReadiness } from './api';
 import type { Provider, Snapshot, StartupReadiness } from './api';
+import { workbenchUrl } from '../tools/shell';
 
 export type SettingsView = 'api' | 'agents';
 
@@ -10,6 +11,14 @@ const navigation = [
   { label: 'API 服务', href: '/api-settings.html', view: 'api', Icon: Plug },
   { label: 'Agent 角色', href: '/agent-settings.html', view: 'agents', Icon: Bot },
 ];
+const current = new URLSearchParams(location.search);
+const project = current.get('project');
+const run = project ? current.get('run') : null;
+const context = new URLSearchParams();
+if (project) context.set('project', project);
+if (run) context.set('run', run);
+const settingsQuery = context.size ? `?${context}` : '';
+context.set('view', 'mcp');
 
 export function SettingsNavigation({ view }: { view: SettingsView }) {
   return (
@@ -21,12 +30,13 @@ export function SettingsNavigation({ view }: { view: SettingsView }) {
         </a>
         <nav className="settings-navigation" aria-label="设置导航">
           {navigation.map(({ href, label, view: itemView, Icon }) => (
-            <a key={href} href={href} aria-current={itemView === view ? 'page' : undefined}>
+            <a key={href} href={href + settingsQuery} aria-current={itemView === view ? 'page' : undefined}>
               <Icon aria-hidden="true" size={16} />{label}
             </a>
           ))}
+          <a href={`/factory.html?${context}`}><Cable aria-hidden="true" size={16} />MCP 工具</a>
         </nav>
-        <a className="settings-back" href="/"><ArrowLeft aria-hidden="true" size={15} />项目工作台</a>
+        <a className="settings-back" href={workbenchUrl(project, run)}><ArrowLeft aria-hidden="true" size={15} />项目工作台</a>
       </div>
     </header>
   );
@@ -95,12 +105,12 @@ export function SettingsOverview({ snapshot, view }: { snapshot: Snapshot; view:
       {view === 'api' ? (
         <>
           <p>远程服务需要密钥。localhost 与 127.0.0.1 服务可留空。</p>
-          <a className="settings-inline-link" href="/agent-settings.html">分配角色<ArrowUpRight size={15} aria-hidden="true" /></a>
+          <a className="settings-inline-link" href={'/agent-settings.html' + settingsQuery}>分配角色<ArrowUpRight size={15} aria-hidden="true" /></a>
         </>
       ) : (
         <>
           <p>开发执行沿用启动时配置。规划在每次新调用时读取配置。</p>
-          <a className="settings-inline-link" href="/api-settings.html">管理 API 服务<ArrowUpRight size={15} aria-hidden="true" /></a>
+          <a className="settings-inline-link" href={'/api-settings.html' + settingsQuery}>管理 API 服务<ArrowUpRight size={15} aria-hidden="true" /></a>
         </>
       )}
     </aside>

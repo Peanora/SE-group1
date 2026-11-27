@@ -1,4 +1,4 @@
-import { RefreshCw } from 'lucide-react';
+import { Cable, RefreshCw } from 'lucide-react';
 import { WorkspaceDialogs } from './dialogs';
 import { ProjectHeading, ProjectLaunch, RunOverview } from './overview';
 import { DeliveryPanel, PlanningPanel, RequirementsPanel, TaskPanel } from './panels';
@@ -29,9 +29,10 @@ function ProjectSidebar() {
       <div className="sidebar-section-title"><span>项目</span><span id="project-count">0</span></div>
       <nav id="project-list" className="project-list" aria-label="项目列表" />
       <div className="sidebar-bottom tf-sidebar-bottom">
-        <nav className="tf-settings-links" aria-label="模型设置">
-          <a href="/agent-settings.html" className="sidebar-help"><span className="tf-nav-icon tf-icon-roles" aria-hidden="true" />Agent 角色</a>
-          <a href="/api-settings.html" className="sidebar-help"><span className="tf-nav-icon tf-icon-api" aria-hidden="true" />API 服务</a>
+        <nav className="tf-settings-links" aria-label="设置">
+          <a id="workspace-agent-settings" href="/agent-settings.html" className="sidebar-help"><span className="tf-nav-icon tf-icon-roles" aria-hidden="true" />Agent 角色</a>
+          <a id="workspace-api-settings" href="/api-settings.html" className="sidebar-help"><span className="tf-nav-icon tf-icon-api" aria-hidden="true" />API 服务</a>
+          <a id="workspace-mcp-settings" href="/factory.html?view=mcp" className="sidebar-help" hidden><Cable aria-hidden="true" size={16} />MCP 工具</a>
         </nav>
         <button type="button" id="help-button" className="sidebar-help"><span className="tf-nav-icon tf-icon-help" aria-hidden="true">?</span>使用说明</button>
       </div>

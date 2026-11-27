@@ -6,7 +6,7 @@ Taskflow 的项目页提供「Factory 全流程」。该入口启动 Agentic Sof
 
 1. 在 Taskflow 仓库运行 `npm run factory:install`，然后运行 `npm start`。已经有对应平台的官方压缩包时，可以执行 `npm run factory:install -- --archive <压缩包路径>`。也可以通过 `TASKFLOW_FACTORY_BINARY` 指向已安装的 v1.0.5 可执行文件。
 2. 打开 Taskflow 项目，点「Factory 全流程」。留空仓库路径会创建该项目的专用 Git 仓库。若需要对已有仓库执行任务，填写有权限操作的 Git 仓库顶层绝对路径，确认本机 CLI 权限后启动。
-3. 从原版 Settings 的 Roles 检查 Planner、Worker、Reviewer，或管理自定义角色。在同页 External Tools / MCP 配置工具服务器、测试连接并查看发现的工具。Factory 使用 CLI 自己的登录状态。缺少默认 OpenCode 时，可把已安装并登录的 Codex 或其他 Agent 分配给 Worker。GitHub Issue 导入与 PR 另需可用并已登录的 `gh` 及一个关联的 GitHub 仓库。
+3. 从原版 Settings 的 Roles 检查 Planner、Worker、Reviewer，或管理自定义角色。也可从 Taskflow 左栏或设置导航选择「MCP 工具」，启动本项目的 Factory 后点击「打开 MCP 设置」。在 External Tools / MCP 面板添加服务器、测试连接并查看发现的工具。Factory 使用 CLI 自己的登录状态。缺少默认 OpenCode 时，可把已安装并登录的 Codex 或其他 Agent 分配给 Worker。GitHub Issue 导入与 PR 另需可用并已登录的 `gh` 及一个关联的 GitHub 仓库。
 4. 可从当前已确认规格点击「交给 Factory 规划」，或在原生 Agent 图中从目标文字或 GitHub Issue 开始。规格交接时 Taskflow 服务校验当前已保存的规格版本，Factory 按其 Planner 创建自己的任务图。先在原生运行详情检查任务与依赖，再启动。已交接的待执行计划也可从 Taskflow 的「启动此 Factory 运行」调用同一原生入口。
 5. 在 Factory 查看尝试、审查、产物、执行记录及集成分支。通过 Taskflow 交接的运行也可在项目启动页重新打开，并核对原生分支和提交。确需外部交付时，在原生页面预览并确认提交 PR。
 6. 点击「停止本地 Factory」停止服务。正常停止后可以重新启动同一仓库，继续读取其 SQLite 历史及 Git 分支。使用 Taskflow 生成的独立验收和源码交付时，继续在「代码与验收」核对对应版本。
@@ -38,3 +38,5 @@ Taskflow 私有交接账本保存规格版本、工作区指纹、交接目标�
 该原生服务使用独立回环端口和本机单人信任模式。Taskflow 只在本机项目入口启动，不代理 Factory 的命令、会话或凭据接口。团队登录模式关闭此入口。Factory 从允许的宿主环境变量取得平台环境，CLI 仍使用系统用户权限与各自的本机授权。绑定仓库时应选择可信的工作副本。含 `.env` 的外部仓库或上级目录不能绑定，因为原版 CLI 会自动读取它。
 
 Factory 的执行、Review 和分支结果归属 Factory 工作流。Taskflow 的独立 HTTP、Edge 验收及源码交付按 Taskflow 本身的授权和候选版本记录。两个工作区的审批结果各自核对。
+
+「MCP 工具」打开放在当前项目 Factory 工作区的工具配置。Taskflow 自有规划和执行流程尚未消费这份 MCP 配置。

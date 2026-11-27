@@ -666,12 +666,20 @@ function renderHeader() {
     : '从需求规划到开发验收。';
   $('#source-button').disabled = !state.project;
   const factoryLink = $('#factory-workbench-link');
-  factoryLink.hidden = !state.project || state.health?.factoryWorkbench?.available !== true;
+  const mcpLink = $('#workspace-mcp-settings');
+  mcpLink.hidden = state.health?.factoryWorkbench?.available !== true;
+  factoryLink.hidden = !state.project || mcpLink.hidden;
+  const query = new URLSearchParams();
   if (state.project) {
-    const query = new URLSearchParams({ project: state.project.id });
+    query.set('project', state.project.id);
     if (state.run) query.set('run', state.run.id);
     factoryLink.href = '/factory.html?' + query;
   }
+  const contextQuery = query.size ? `?${query}` : '';
+  $('#workspace-agent-settings').href = '/agent-settings.html' + contextQuery;
+  $('#workspace-api-settings').href = '/api-settings.html' + contextQuery;
+  query.set('view', 'mcp');
+  mcpLink.href = '/factory.html?' + query;
   $('#onboarding').hidden = !!state.project;
   const runs = sortedRuns();
   const select = $('#run-select');

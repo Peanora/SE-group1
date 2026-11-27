@@ -1,5 +1,11 @@
 # 当前实现与开发交接
 
+## 2026-11-27 Taskflow 设置中的 MCP 工具
+
+在项目左栏与设置导航增加「MCP 工具」，按当前项目和运行编号打开 MCP 视图。启动项目的本地 Factory 后，可以打开原生 External Tools 面板。工具配置归属该 Factory 工作区，供其工作流使用。Taskflow 自有执行器继续读取自身配置。[操作入口](FACTORY_WORKBENCH.md)
+
+基线 `dca7d18`。前端构建与 `npm run check` 通过。设置及 Factory 定向回归 7/7，真实 Edge 核对桌面、390px、项目与运行绑定及原生 MCP 入口。本机 HTTP 夹具通过服务器添加、连接、工具发现、缓存和删除检查。未运行全量测试或真实模型。下一项验收是在已授权的 Factory 业务工作流中核对实际工具调用记录。
+
 ## 2026-11-27 恢复 Taskflow 布局与直开原版 Factory
 
 基于 `c2afb01` 恢复 `4536436` 的 Taskflow 主界面。项目内「Factory 全流程」直接打开官方 v1.0.5 的 Agent Graph、Runs、Settings 和 Performance。Roles、External Tools / MCP、配方和交付均由原生运行时操作。Taskflow 在提交前保存规格和工作区绑定，项目重新打开时核对原生运行、集成分支及提交。

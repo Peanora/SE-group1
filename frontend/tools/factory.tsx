@@ -27,6 +27,7 @@ type Action = 'start' | 'stop' | 'plan' | 'start-workflow';
 const params = new URLSearchParams(location.search);
 const projectId = params.get('project')?.trim();
 const selectedRun = params.get('run')?.trim();
+const mcpView = params.get('view') === 'mcp';
 const endpoint = projectId ? `/api/projects/${encodeURIComponent(projectId)}/factory` : '';
 const statusPath = selectedRun ? `${endpoint}?${new URLSearchParams({ run: selectedRun })}` : endpoint;
 const states: Record<string, string> = {
@@ -198,7 +199,7 @@ export function FactoryPage() {
     <ToolShell id="factory-main" skipLabel="跳到 Factory 工作流" returnLabel="返回项目工作台" returnHref={returnHref}>
       <header className="factory-heading">
         <div className="factory-context">
-          <h1>Factory 工作流</h1>
+          <h1>{mcpView ? 'MCP 工具' : 'Factory 工作流'}</h1>
           <p id="factory-project">{project?.name || (projectId ? 'Taskflow 项目' : '请先在项目工作台选择一个项目。')}</p>
         </div>
         <div className="factory-session">
@@ -213,7 +214,14 @@ export function FactoryPage() {
       </header>
       <ToolMessages prefix="factory" error={error} notice={notice} />
       <div className="factory-layout">
-        {url && <section id="factory-dashboard" className="factory-dashboard" aria-labelledby="factory-dashboard-heading">
+        {mcpView && projectId && <section className="factory-dashboard" aria-label="Factory MCP 设置">
+          <p className="tools-hint">{url ? '在 Factory Settings 的 External Tools 面板添加 MCP 服务器、测试连接和查看工具。'
+            : '启动本项目的 Factory 后，即可配置本项目工作流使用的 MCP 工具。'}</p>
+          {url && <nav aria-label="Factory MCP 入口">
+            <a href={`${url}#/settings`} id="factory-open-mcp" className="tools-button tools-primary" target="_blank" rel="noopener noreferrer">打开 MCP 设置</a>
+          </nav>}
+        </section>}
+        {!mcpView && url && <section id="factory-dashboard" className="factory-dashboard" aria-labelledby="factory-dashboard-heading">
           <div>
             <h2 id="factory-dashboard-heading">Factory 原生工作台</h2>
             <p className="tools-hint">在新标签页打开</p>
@@ -225,7 +233,7 @@ export function FactoryPage() {
               <a href={`${url}#/performance`} id="factory-open-performance" className="tools-button" target="_blank" rel="noopener noreferrer">运行表现</a>
             </nav>
         </section>}
-        <aside className="factory-controls" aria-label="Factory 会话与规格">
+        {(!mcpView || (projectId && !url)) && <aside className="factory-controls" aria-label={mcpView ? 'Factory 会话' : 'Factory 会话与规格'}>
           <section className="factory-runtime" aria-labelledby="factory-runtime-heading">
             <h2 id="factory-runtime-heading">本地运行环境</h2>
             <p id="factory-runtime-message">{runtimeMessage}</p>
@@ -243,7 +251,7 @@ export function FactoryPage() {
               <button id="factory-start" className="tools-button tools-primary" disabled={!canStart || acting || !execConfirmed}>启动本地 Factory</button>
             </form>
           </section>
-          <section className="factory-handoff" aria-labelledby="factory-handoff-heading">
+          {!mcpView && <section className="factory-handoff" aria-labelledby="factory-handoff-heading">
             <h2 id="factory-handoff-heading">已确认规格</h2>
             <p id="factory-handoff-message">{handoffMessage}</p>
             <dl id="factory-handoff-version" className="factory-spec" hidden={!revision}>
@@ -279,8 +287,8 @@ export function FactoryPage() {
             </a>
             {canStartWorkflow && <button type="button" className="tools-button tools-primary" id="factory-start-workflow"
               disabled={acting} onClick={startWorkflow}>启动此 Factory 运行</button>}
-          </section>
-        </aside>
+          </section>}
+        </aside>}
       </div>
     </ToolShell>
   );
