@@ -20,10 +20,15 @@ const tasks = [
   { id: 'beta', title: '乙功能', description: '独立乙观察', dependsOn: ['base'], requirementIds: ['R3'], inputs: ['已验收基础'], outputs: ['乙模块'], acceptance: ['乙可观察'], writePaths: ['src/beta.mjs'] },
   { id: 'integration', title: '完整集成', description: '合并代码完整联合检查', dependsOn: ['alpha', 'beta'], requirementIds: ['R1', 'R2', 'R3'], inputs: ['全部已验收功能'], outputs: ['集成说明'], acceptance: ['完整清单通过'], writePaths: ['docs/integration.md'] },
 ];
-const rollingTasks = [...tasks.slice(0, -1),
+const rollingTasks = [
+  { ...tasks[0], workflowModule: { group: '应用基础', name: '服务入口' } },
+  { ...tasks[1], workflowModule: { group: '场地与规则', name: '读取可预约时段' } },
+  { ...tasks[2], workflowModule: { group: '场地与规则', name: '并发配额核对' } },
   { id: 'alpha_follow', title: '甲分支后继', description: '不等待乙分支', dependsOn: ['alpha'], requirementIds: ['R4'],
+    workflowModule: { group: '预约界面', name: '时段选择' },
     inputs: ['已验收甲模块'], outputs: ['甲分支结果'], acceptance: ['甲分支后继可观察'], writePaths: ['src/alpha_follow.mjs'] },
-  { ...tasks.at(-1), dependsOn: ['alpha_follow', 'beta'], requirementIds: ['R1', 'R2', 'R3', 'R4'] },
+  { ...tasks.at(-1), dependsOn: ['alpha_follow', 'beta'], requirementIds: ['R1', 'R2', 'R3', 'R4'],
+    workflowModule: { group: '联合验收', name: '业务链路复验' } },
 ];
 
 function approved(selectedTasks = tasks) {
@@ -53,7 +58,9 @@ if (!process.env.TASKFLOW_TASK_PARALLEL_CHILD) {
   mock.module(new URL('../lib/windows-sandbox.mjs', import.meta.url).href, { namedExports: { createWindowsSandbox: () => ({ preflight: async () => ({ kind: 'inert-parallel-test-infrastructure' }) }) } });
   mock.module(new URL('../lib/http-scenarios.mjs', import.meta.url).href, { namedExports: { runHttpScenarios: async input => {
     seen.http.push({ taskId: input.binding.taskId, steps: input.manifest.steps.map(step => step.id) });
-    const ready = input.manifest.steps.every(step => input.files.some(file => file.path === `src/${step.id === 'base' ? 'app' : step.id}.mjs`)) && !(['alpha-http-failed', 'rolling-failed'].includes(mode) && input.binding.taskId === 'alpha');
+    const forcedFailure = (['alpha-http-failed', 'rolling-failed'].includes(mode) && input.binding.taskId === 'alpha')
+      || (mode === 'rolling-join-failed' && input.binding.taskId === 'beta');
+    const ready = !forcedFailure && input.manifest.steps.every(step => input.files.some(file => file.path === `src/${step.id === 'base' ? 'app' : step.id}.mjs`));
     return { status: ready ? 'passed' : 'failed', binding: structuredClone(input.binding), sourceHash: hash(validateProjectFiles(input.files)), manifestHash: input.manifest.manifestHash, policyHash: input.manifest.policyHash,
       terminationConfirmed: true, processes: [{ ...stop, pid: 1 }], checks: input.manifest.checks.map(rule => ({ ...rule, passed: ready })) };
   } } });
@@ -63,7 +70,7 @@ if (!process.env.TASKFLOW_TASK_PARALLEL_CHILD) {
   const { isPlannedWebTaskAccepted } = await import('../lib/planned-web-executor.mjs');
   const abortError = signal => new Promise((_, reject) => { if (signal.aborted) reject(new Error('inert aborted transport')); else signal.addEventListener('abort', () => reject(new Error('inert aborted transport')), { once: true }); });
   async function execute(t, selected = 'normal', maxConcurrency = 2) {
-    mode = selected; seen = { code: [], review: [], http: [], mergeFaults: 0, observedPause: null, pauseAtBoundary: null }; live = true; started = 0; peakCallbacks = 0; activeCallbacks = 0; cancelledCallbacks = 0;
+    mode = selected; seen = { code: [], modules: [], review: [], http: [], mergeFaults: 0, observedPause: null, pauseAtBoundary: null }; live = true; started = 0; peakCallbacks = 0; activeCallbacks = 0; cancelledCallbacks = 0;
     const outputDir = await mkdtemp(path.join(os.tmpdir(), 'planned-task-parallel-')); let barrier = new Promise(resolve => { release = resolve; });
     t.after(async () => { assert.equal(path.dirname(outputDir), path.resolve(os.tmpdir())); assert.ok(path.basename(outputDir).startsWith('planned-task-parallel-')); await rm(outputDir, { recursive: true, force: true }); });
     const rolling = selected.startsWith('rolling');
@@ -72,7 +79,9 @@ if (!process.env.TASKFLOW_TASK_PARALLEL_CHILD) {
     let releaseBeta;
     const betaGate = new Promise(resolve => { releaseBeta = resolve; });
     const provider = async input => {
-      const id = JSON.parse(input.task).activeTask.id; seen.code.push(id);
+      const { id, workflowModule } = JSON.parse(input.task).activeTask;
+      seen.code.push(id);
+      if (workflowModule) seen.modules.push([id, workflowModule]);
       if (['alpha', 'beta'].includes(id)) {
         activeCallbacks++; peakCallbacks = Math.max(peakCallbacks, activeCallbacks); started++; if (started === 2) release();
         try {
@@ -94,12 +103,13 @@ if (!process.env.TASKFLOW_TASK_PARALLEL_CHILD) {
       await input.onReceipt({ model: 'synthetic-code', finishReason: 'stop', usage: { inputTokens: 2, outputTokens: 3 }, content: JSON.stringify({ files }) }); return { files };
     };
     const reviewer = async input => { seen.review.push(JSON.parse(input.task).activeTask.id); const value = { summary: 'Synthetic independent review transport', issues: [], resolutions: [] }; await input.onReceipt({ model: 'synthetic-review', finishReason: 'stop', usage: { inputTokens: 3, outputTokens: 4 }, content: JSON.stringify(value) }); return value; };
-    const options = { outputDir, binding, task: { title: 'Parallel fixture', tasks: taskSet, ...(rolling ? { dependencyExecution: true } : {}) }, manifest, provider, reviewer, maxConcurrency, maxCalls: 1, maxReviewCalls: 1, timeoutMs: rolling ? 24000 : 90000, assertCurrent: () => live,
+    const options = { outputDir, binding, task: { title: 'Parallel fixture', tasks: taskSet, ...(rolling ? { dependencyExecution: true } : {}) }, manifest, provider, reviewer, maxConcurrency, maxCalls: 1, maxReviewCalls: 1, timeoutMs: rolling ? 40000 : 90000, assertCurrent: () => live,
       onEvent: event => {
         if (rolling && event.type === 'task_started' && event.taskId === 'alpha_follow') {
           seen.betaAtNextDispatch = handle.snapshot().tasks.find(item => item.id === 'beta').status;
-          releaseBeta();
+          if (selected !== 'rolling-join-failed') releaseBeta();
         }
+        if (selected === 'rolling-join-failed' && event.type === 'batch_completed' && event.taskIds.includes('alpha_follow')) releaseBeta();
         if (selected === 'stale-merge' && event.type === 'task_verified' && ['alpha', 'beta'].includes(event.taskId) && handle.snapshot().tasks.filter(item => ['alpha', 'beta'].includes(item.id) && item.status === 'verified').length === 2) live = false;
         if (selected === 'pause' && event.type === 'paused') { seen.pauseAtBoundary = handle.snapshot(); assert.equal(seen.code.includes('integration'), false); setTimeout(() => { handle.resume(); assert.equal(handle.snapshot().status, 'running'); assert.throws(() => handle.resume()); }, 10); }
       } };
@@ -121,12 +131,15 @@ if (!process.env.TASKFLOW_TASK_PARALLEL_CHILD) {
   test('explicit concurrency1 keeps real execution serial, sums all calls and uses no parallel merge', async t => {
     const { record, peakCallbacks } = await execute(t, 'normal', 1); assert.equal(record.status, 'accepted'); assert.equal(record.maxConcurrentTasks, 1); assert.equal(peakCallbacks, 1); assert.equal(record.merges.length, 0); assert.equal(record.totalModelCalls, 8); assert.deepEqual(record.batches.map(batch => batch.taskIds), [['base'], ['alpha'], ['beta'], ['integration']]);
   });
-  test('a drawn dependency releases its own successor while its sibling is still in flight, then the join rechecks real Git', async t => {
+  test('module dispatch crosses business groups when its own dependency completes, then the join rechecks real Git', async t => {
     const { record, manifest, seen } = await execute(t, 'rolling');
     assert.equal(record.status, 'accepted', JSON.stringify({ tasks: record.tasks.map(({ id, status, record }) => [id, status, record?.error]), error: record.error }));
     assert.equal(record.dispatchMode, 'direct_dependencies');
     assert.equal(seen.betaAtNextDispatch, 'running');
-    assert.deepEqual(seen.code.slice(0, 4), ['base', 'alpha', 'beta', 'alpha_follow']);
+    assert.equal(seen.code[0], 'base');
+    assert.deepEqual(seen.code.slice(1, 3).sort(), ['alpha', 'beta']);
+    assert.equal(seen.code[3], 'alpha_follow');
+    assert.deepEqual(Object.fromEntries(seen.modules), Object.fromEntries(rollingTasks.map(task => [task.id, task.workflowModule])));
     const integratedAt = id => record.events.findIndex(event => event.type === 'batch_completed' && event.taskIds.includes(id));
     const startedAt = id => record.events.findIndex(event => event.type === 'task_started' && event.taskId === id);
     assert.ok(integratedAt('alpha') < startedAt('alpha_follow') && startedAt('alpha_follow') < integratedAt('beta'));
@@ -134,6 +147,7 @@ if (!process.env.TASKFLOW_TASK_PARALLEL_CHILD) {
     assert.equal(record.maxObservedConcurrency, 2);
     assert.ok(record.merges.some(merge => merge.taskIds.length === 1));
     assert.equal(isPlannedTaskRunAccepted(record, manifest), true);
+    t.diagnostic('预约界面/时段选择 started after its own prerequisite integrated, while 场地与规则/并发配额核对 was running');
   });
   test('failed checkpoint releases no successor or final join and started work is accounted for', async t => {
     const { record, seen } = await execute(t, 'rolling-failed');
@@ -142,6 +156,21 @@ if (!process.env.TASKFLOW_TASK_PARALLEL_CHILD) {
     assert.ok(!seen.code.includes('alpha_follow') && !seen.code.includes('integration'));
     assert.equal(record.transactionEvents.filter(event => event.type === 'task_completed').length, 1);
     assert.equal(record.transaction.budget.unknown, 0);
+  });
+  test('cross-group successor can integrate while the other input later fails, without starting the final join', async t => {
+    const { record, manifest, seen } = await execute(t, 'rolling-join-failed');
+    const byId = Object.fromEntries(record.tasks.map(task => [task.id, task]));
+    assert.equal(seen.betaAtNextDispatch, 'running');
+    assert.deepEqual([...seen.code].sort(), ['alpha', 'alpha_follow', 'base', 'beta']);
+    assert.equal(byId.alpha_follow.status, 'completed');
+    assert.equal(byId.beta.status, 'failed');
+    assert.ok(!record.attempts.some(attempt => attempt.taskId === 'integration'), 'a failed direct input must never lease the join');
+    assert.ok(!seen.http.some(report => report.taskId === 'integration'), 'the full manifest never runs for blocked integration');
+    assert.equal(record.status, 'failed');
+    assert.equal(record.terminationConfirmed, true);
+    assert.equal(record.transaction.budget.unknown, 0);
+    assert.equal(isPlannedTaskRunAccepted(record, manifest), false);
+    t.diagnostic('The independent reservation module integrated, then failed quota verification blocked final integration');
   });
   test('one failed self-check waits for the successful sibling costs without completing either parallel task or releasing integration', async t => {
     const { record, seen } = await execute(t, 'alpha-http-failed'); assert.equal(record.status, 'failed'); assert.equal(record.terminationConfirmed, true); assert.equal(record.totalModelCalls, 5); assert.equal(record.modelCalls.length, 5); assert.equal(record.transaction.budget.committed.calls, 5); assert.equal(record.transaction.budget.unknown, 0); assert.equal(seen.review.includes('beta'), true); assert.equal(seen.code.includes('integration'), false); assert.ok(record.tasks.slice(1, 3).every(item => item.status !== 'completed')); assert.equal(record.transactionEvents.filter(event => event.type === 'task_completed').length, 1);

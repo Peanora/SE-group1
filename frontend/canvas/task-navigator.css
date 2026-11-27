@@ -4,20 +4,20 @@
   min-inline-size: 0;
 }
 
+.task-orchestration-root .task-canvas-dock {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 .task-orchestration-root .task-navigator {
-  position: absolute;
-  z-index: 2;
-  inset-inline-end: 26px;
-  inset-block-end: 24px;
   display: grid;
   place-items: center;
-  inline-size: 142px;
-  block-size: 108px;
-  padding: 6px;
+  inline-size: 102px;
+  block-size: 48px;
+  padding: 3px;
   border: 1px solid #a8b8d4;
   border-radius: 7px;
   background: #f9fbff;
-  box-shadow: 0 2px 8px #263a6324;
   cursor: crosshair;
   touch-action: manipulation;
 }
@@ -51,10 +51,7 @@
 
 @media (max-width: 650px) {
   .task-orchestration-root .task-navigator {
-    inset-inline-end: 18px;
-    inset-block-end: 18px;
-    inline-size: 88px;
-    block-size: 72px;
-    padding: 4px;
+    inline-size: 68px;
+    block-size: 44px;
   }
 }

@@ -1,9 +1,7 @@
 import { memo, useId, useMemo, useState, type PointerEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
-import {
-  Bot, CircleCheck, CircleDot, CircleX, ClipboardCheck, Clock3, GitBranch, GitMerge, Globe, Grip, Monitor, Shield, Wrench,
-} from 'lucide-react';
+import { Bot, ClipboardCheck, GitBranch, GitMerge, Grip, Shield } from 'lucide-react';
 import {
   BaseEdge, getBezierPath, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow,
   type Connection, type Edge, type EdgeProps, type Node, type NodeProps, type OnNodesChange, type XYPosition,
@@ -13,8 +11,6 @@ import './task-canvas.css';
 
 type Relation = 'muted' | 'upstream' | 'downstream';
 type GateState = 'planned' | 'waiting' | 'checking' | 'passed' | 'failed';
-type PlanKind = 'agent' | 'tool' | 'review' | 'checkpoint' | 'fork' | 'join';
-type PlanRole = 'coding' | 'self' | 'http' | 'browser' | 'review' | 'checkpoint' | 'fork' | 'join';
 type Side = 'bottom' | 'top' | 'left' | 'right';
 type EdgeMotion = 'selected' | 'active';
 
@@ -27,9 +23,15 @@ type NodeIdentity = {
 
 type PlanNode = NodeIdentity & {
   taskId: string;
-  kind: PlanKind;
-  role?: PlanRole;
+  kind: 'agent';
+  group: string;
+  roleLabel: string;
   roleHelp?: string;
+  reviewState: GateState;
+  reviewLabel: string;
+  checkpoint?: { gateState: GateState; gateLabel: string; delivery: boolean; blocked: boolean };
+  fork?: { count: number; gateState: GateState; gateLabel: string };
+  join?: { count: number; gateState: GateState; gateLabel: string };
   label: string;
   className: string;
   meta: string;
@@ -67,7 +69,8 @@ type PlanDependency = {
 };
 type DependencyData = (PlanDependency & { gateState: GateState; motion?: EdgeMotion }) | { focused: boolean; vertical: boolean };
 type CanvasEdge = { id?: string; source: string; target: string } & (PlanDependency | { focused: boolean });
-type PlanGroup = { rank: number; title: string; top: number; height: number; left: number; width: number; count: number };
+type PlanGroup = { id: string; rank: number; title: string; top: number; height: number; left: number; width: number; count: number };
+type PlanColumn = { rank: number; title: string; left: number; width: number };
 
 type CanvasModel = {
   nodes: (PlanNode | ExecutionNode)[];
@@ -79,6 +82,7 @@ type CanvasModel = {
   nodeHeight: number;
   zoom: number;
   groups?: PlanGroup[];
+  columns?: PlanColumn[];
   variant?: 'execution';
   key?: string;
   onNodeMove?: (id: string, position: XYPosition) => void;
@@ -88,7 +92,7 @@ type CanvasModel = {
 
 type TaskNode = Node<PlanTask | ExecutionNode, 'task'>;
 type DependencyEdge = Edge<DependencyData, 'dependency'>;
-type Move = { model: CanvasModel; taskId: string; dx: number; dragging: boolean };
+type Move = { model: CanvasModel; taskId: string; y: number; dragging: boolean };
 
 const sidePositions: Record<Side, Position> = {
   top: Position.Top, bottom: Position.Bottom, left: Position.Left, right: Position.Right,
@@ -97,26 +101,6 @@ const markerColors: Record<Relation, string> = {
   muted: '#7685a1',
   upstream: '#197d79',
   downstream: '#3846ce',
-};
-const roles = {
-  agent: { kicker: '编码智能体', icon: Bot },
-  tool: { kicker: '工具步骤', icon: Wrench },
-  review: { kicker: '审查智能体', icon: ClipboardCheck },
-  checkpoint: { kicker: '验收检查点', icon: Shield },
-  fork: { kicker: '分叉', icon: GitBranch },
-  join: { kicker: '汇合', icon: GitMerge },
-};
-const toolRoles = {
-  self: { kicker: '本地工具', icon: Wrench },
-  http: { kicker: '接口工具', icon: Globe },
-  browser: { kicker: '网页工具', icon: Monitor },
-};
-const gatePresentation = {
-  planned: { label: '待验收', icon: Shield },
-  waiting: { label: '待检查', icon: Clock3 },
-  checking: { label: '检查中', icon: CircleDot },
-  passed: { label: '通过并集成', icon: CircleCheck },
-  failed: { label: '失败，后续阻断', icon: CircleX },
 };
 const gateHelp = '同一代码版本的自检、独立 HTTP、Edge 和 Review 均通过且完成代码集成后，才释放后续任务。';
 
@@ -134,57 +118,52 @@ const TaskCard = memo(function TaskCard({ data, sourcePosition, targetPosition }
 });
 
 function PlanCard({ data }: { data: PlanTask }) {
-  const { kind, taskId, selected, editing, movable, gateState = 'planned' } = data;
-  const tool = data.role === 'self' || data.role === 'http' || data.role === 'browser' ? toolRoles[data.role] : null;
-  const role = tool ?? roles[kind];
-  const agent = kind === 'agent';
-  const checkpoint = kind === 'checkpoint';
-  const junction = kind === 'fork' || kind === 'join';
-  const status = checkpoint ? data.gateLabel || gatePresentation[gateState].label
-    : agent ? data.label || (gateState !== 'planned' ? data.gateLabel : '') : gateState !== 'planned' ? data.label : '';
-  const PartIcon = checkpoint ? gatePresentation[gateState].icon : role.icon;
-  const cardTitle = checkpoint ? '' : junction ? data.label : kind === 'review' ? '同版本代码审查' : data.title;
-  const detail = agent ? data.meta : '';
-  const explanation = checkpoint ? `直接前置：${data.parents.join('、') || '无'}。${gateHelp}` : data.roleHelp;
-  const title = [role.kicker, cardTitle, status, data.meta, explanation].filter(Boolean).join(' · ');
-
+  const { taskId, selected, editing, movable, gateState = 'planned', checkpoint, join, fork } = data;
+  const explanation = `直接前置：${data.parents.join('、') || '无'}。${checkpoint ? gateHelp : ''}`;
   return (
-    <div className="plan-task-node" data-movable={agent && movable} data-editing={editing}>
-      <button
-        type="button"
-        className={`task-flow-card ${agent ? 'dev-task ' : ''}${data.className ?? ''}`}
-        data-flow-node={data.id}
-        data-flow-part={kind}
-        data-flow-role={data.role}
-        data-owner-task={taskId}
-        data-flow-rank={data.rank}
-        data-task={agent ? taskId : undefined}
-        data-gate-state={gateState}
-        data-focus-key={agent ? `task-${taskId}` : `task-flow-${data.id}`}
-        aria-pressed={selected}
-        aria-description={explanation}
-        title={title}
-      >
+    <div className="plan-task-node" data-movable={movable} data-editing={editing}>
+      <button type="button" className={`task-flow-card dev-task ${data.className}`}
+        data-flow-node={data.id} data-flow-part="agent" data-flow-role="coding" data-owner-task={taskId}
+        data-flow-rank={data.rank} data-task={taskId} data-focus-key={`task-${taskId}`}
+        data-workflow-module={taskId} data-workflow-group={data.group}
+        data-gate-state={gateState} data-review-state={data.reviewState}
+        aria-pressed={selected} aria-description={explanation}
+        title={[data.title, data.group, data.roleLabel, data.reviewLabel, data.gateLabel, explanation].filter(Boolean).join(' · ')}>
         <span className="task-flow-card-kicker">
-          <PartIcon aria-hidden="true" />
-          <span>{role.kicker}{agent && <small>{taskId}</small>}</span>
-          {agent && movable && <Grip className="dev-task-grip" aria-hidden="true" />}
+          <Bot aria-hidden="true" /><span>{data.roleLabel} <small>{taskId}</small></span>
+          {movable && <Grip className="dev-task-grip" aria-hidden="true" />}
         </span>
-        {cardTitle && <span className={`task-flow-card-title${agent ? ' dev-task-title' : ''}`}>{cardTitle}</span>}
-        {(status || detail) && <span className="task-flow-card-meta">
-          {status && <span className="task-flow-card-status">{status}</span>}
-          {detail && <span className="task-flow-card-detail">{detail}</span>}
+        <span className="task-flow-card-title dev-task-title">{data.title}</span>
+        <span className="task-flow-card-meta">
+          {data.reviewState !== 'planned' && <span className="task-module-review" data-review-state={data.reviewState}
+            title={`审查智能体：${data.reviewLabel}`}>
+            <ClipboardCheck aria-hidden="true" /><span>审查 · {data.reviewLabel}</span>
+          </span>}
+          {data.label && <span className="task-module-note" title={data.label}>{data.label}</span>}
+          {checkpoint && <span className="task-module-checkpoint" data-module-checkpoint=""
+            data-gate-state={checkpoint.gateState} data-blocked={checkpoint.blocked} title={checkpoint.gateLabel}>
+            <Shield aria-hidden="true" />
+            <span>{checkpoint.gateState === 'failed' ? '检查点阻断' : checkpoint.blocked ? '前置阻断' : checkpoint.delivery ? '交付检查点' : '验收检查点'}</span>
+          </span>}
+        </span>
+        {(join || fork) && <span className="task-module-junctions">
+          {join && <span data-module-join="" data-gate-state={join.gateState} title={join.gateLabel}>
+            <GitMerge aria-hidden="true" />汇合 {join.count} 项
+          </span>}
+          {fork && <span data-module-fork="" data-gate-state={fork.gateState} title={fork.gateLabel}>
+            <GitBranch aria-hidden="true" />分叉 {fork.count} 路
+          </span>}
         </span>}
       </button>
       {data.inputs.map(side => {
-        const eligible = agent && side === 'top';
+        const eligible = side === 'left';
         return <Handle key={side} id={`input-${side}`} type="target" position={sidePositions[side]}
           isConnectable={eligible && editing} isConnectableStart={false}
           data-task-connector={eligible ? 'input' : undefined} data-owner-task={eligible ? taskId : undefined}
           onPointerDown={eligible ? stopCanvasPan : undefined} />;
       })}
       {data.outputs.map(side => {
-        const eligible = checkpoint && side === 'bottom';
+        const eligible = side === 'right';
         return <Handle key={side} id={`output-${side}`} type="source" position={sidePositions[side]}
           isConnectable={eligible && editing} isConnectableEnd={false}
           data-task-connector={eligible ? 'output' : undefined} data-owner-task={eligible ? taskId : undefined}
@@ -241,10 +220,10 @@ const Dependency = memo(function Dependency(props: EdgeProps<DependencyEdge>) {
   if (plan && typeof plan.channel === 'number') {
     const sourceExit = outsideHandle(sourceX, sourceY, props.sourcePosition);
     const targetEntry = outsideHandle(targetX, targetY, props.targetPosition);
-    path = roundedPath([{ x: sourceX, y: sourceY }, sourceExit, { x: plan.channel, y: sourceExit.y },
-      { x: plan.channel, y: targetEntry.y }, targetEntry, { x: targetX, y: targetY }]);
-    labelX = plan.channel;
-    labelY = (sourceExit.y + targetEntry.y) / 2;
+    path = roundedPath([{ x: sourceX, y: sourceY }, sourceExit, { x: sourceExit.x, y: plan.channel },
+      { x: targetEntry.x, y: plan.channel }, targetEntry, { x: targetX, y: targetY }]);
+    labelX = (sourceExit.x + targetEntry.x) / 2;
+    labelY = plan.channel;
   } else if (plan) {
     [path, labelX, labelY] = getSmoothStepPath({ ...props, sourceX, sourceY, targetX, targetY, borderRadius: 9, offset: 12 });
   } else {
@@ -283,22 +262,18 @@ function getPlanningData(nodes: CanvasModel['nodes'], edges: CanvasEdge[]) {
   const planNodes = new Map<string, PlanNode>();
   const inputs = new Map<string, Set<Side>>();
   const outputs = new Map<string, Set<Side>>();
-  const byTask = new Map<string, PlanNode[]>();
   const parents = new Map<string, Set<string>>();
 
   for (const node of nodes) {
     if (!('kind' in node)) continue;
     planNodes.set(node.id, node);
-    inputs.set(node.id, new Set(node.kind === 'agent' ? ['top'] : []));
-    outputs.set(node.id, new Set(node.kind === 'checkpoint' ? ['bottom'] : []));
-    const parts = byTask.get(node.taskId);
-    if (parts) parts.push(node);
-    else byTask.set(node.taskId, [node]);
+    inputs.set(node.id, new Set(['left']));
+    outputs.set(node.id, new Set(['right']));
   }
   for (const edge of edges) {
     if ('focused' in edge) continue;
-    outputs.get(edge.source)?.add(edge.sourceSide ?? 'bottom');
-    inputs.get(edge.target)?.add(edge.targetSide ?? 'top');
+    outputs.get(edge.source)?.add(edge.sourceSide ?? 'right');
+    inputs.get(edge.target)?.add(edge.targetSide ?? 'left');
     if (edge.internal) continue;
     const from = edge.fromTask ?? planNodes.get(edge.source)?.taskId;
     const to = edge.toTask ?? planNodes.get(edge.target)?.taskId;
@@ -307,35 +282,35 @@ function getPlanningData(nodes: CanvasModel['nodes'], edges: CanvasEdge[]) {
     if (direct) direct.add(from);
     else parents.set(to, new Set([from]));
   }
-  return { planNodes, inputs, outputs, byTask, parents };
+  return { planNodes, inputs, outputs, parents };
 }
 
 function TaskCanvas({ model }: { model: CanvasModel }) {
   const id = useId();
-  const { nodes, edges, width, height, nodeWidth, nodeHeight, vertical, zoom, variant, groups } = model;
+  const { nodes, edges, width, height, nodeWidth, nodeHeight, vertical, zoom, variant, groups, columns } = model;
   const planning = variant !== 'execution';
   const editing = planning && model.editing === true && Boolean(model.onConnect);
-  const { planNodes, inputs, outputs, byTask, parents } = useMemo(() => getPlanningData(nodes, edges), [nodes, edges]);
+  const { planNodes, inputs, outputs, parents } = useMemo(() => getPlanningData(nodes, edges), [nodes, edges]);
   const [moved, setMoved] = useState<Move>();
   const moving = moved && (moved.model === model || moved.dragging && moved.model.key === model.key) ? moved : undefined;
 
   const flowNodes = useMemo<TaskNode[]>(() => nodes.map(node => {
     const plan = 'kind' in node ? node : null;
-    const canMove = Boolean(plan?.movable && plan.kind === 'agent');
+    const canMove = Boolean(plan?.movable);
     const movingPart = plan && moving?.taskId === plan.taskId ? moving : undefined;
     return {
       id: node.id,
       type: 'task',
       data: plan ? { ...plan, editing, inputs: [...(inputs.get(node.id) ?? [])],
         outputs: [...(outputs.get(node.id) ?? [])], parents: [...(parents.get(plan.taskId) ?? [])] } : node as ExecutionNode,
-      position: movingPart ? { x: node.position.x + movingPart.dx, y: node.position.y } : node.position,
+      position: movingPart ? { x: node.position.x, y: movingPart.y } : node.position,
       width: plan?.width ?? nodeWidth,
       height: plan?.height ?? nodeHeight,
       draggable: canMove,
       dragHandle: canMove ? '.dev-task' : undefined,
-      zIndex: plan ? movingPart?.dragging ? canMove ? 5 : 4 : plan.selected ? 3 : plan.kind === 'agent' ? 2 : 1 : undefined,
-      sourcePosition: vertical ? variant === 'execution' ? Position.Left : Position.Bottom : Position.Right,
-      targetPosition: vertical && variant !== 'execution' ? Position.Top : Position.Left,
+      zIndex: plan ? movingPart?.dragging ? 5 : plan.selected ? 3 : 2 : undefined,
+      sourcePosition: vertical && variant === 'execution' ? Position.Left : Position.Right,
+      targetPosition: Position.Left,
     };
   }), [nodes, nodeWidth, nodeHeight, vertical, variant, editing, inputs, outputs, parents, moving]);
 
@@ -343,7 +318,7 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
     const gateByTask = new Map<string, GateState>();
     const selectedTask = nodes.find(node => 'kind' in node && node.selected) as PlanNode | undefined;
     for (const node of planNodes.values()) {
-      if (node.gateState && (node.kind === 'checkpoint' || !gateByTask.has(node.taskId))) gateByTask.set(node.taskId, node.gateState);
+      if (node.gateState) gateByTask.set(node.taskId, node.gateState);
     }
     return edges.map(edge => {
       const { source, target } = edge;
@@ -363,7 +338,7 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
       const color = edge.internal ? '#92a0bb' : gateState === 'passed' ? '#19734f' : markerColors[edge.relation];
       return {
         id, type: 'dependency', source, target,
-        sourceHandle: `output-${edge.sourceSide ?? 'bottom'}`, targetHandle: `input-${edge.targetSide ?? 'top'}`,
+        sourceHandle: `output-${edge.sourceSide ?? 'right'}`, targetHandle: `input-${edge.targetSide ?? 'left'}`,
         data: { ...edge, fromTask, toTask, gateState, motion },
         markerEnd: edge.internal || gateState === 'planned' || gateState === 'passed'
           ? { type: MarkerType.ArrowClosed, width: 11, height: 11, color } : undefined,
@@ -371,26 +346,23 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
     });
   }, [edges, nodes, planNodes, vertical]);
 
-  function clampMotion(node: PlanNode, x: number) {
-    const parts = byTask.get(node.taskId) ?? [node];
-    const left = Math.min(...parts.map(part => part.position.x));
-    const right = Math.max(...parts.map(part => part.position.x + (part.width ?? nodeWidth)));
-    return Math.max(12 - left, Math.min(width - 12 - right, x - node.position.x));
+  function clampMotion(node: PlanNode, y: number) {
+    return Math.max(12, Math.min(height - 12 - (node.height ?? nodeHeight), y));
   }
 
   const onNodesChange: OnNodesChange<TaskNode> = changes => {
     for (const change of changes) {
       if (change.type !== 'position' || !change.position) continue;
       const node = planNodes.get(change.id);
-      if (node?.kind !== 'agent' || !node.movable) continue;
-      setMoved({ model, taskId: node.taskId, dx: clampMotion(node, change.position.x), dragging: change.dragging === true });
+      if (!node?.movable) continue;
+      setMoved({ model, taskId: node.taskId, y: clampMotion(node, change.position.y), dragging: change.dragging === true });
     }
   };
 
   function canConnect({ source, target, sourceHandle, targetHandle }: Connection | DependencyEdge) {
     const from = planNodes.get(source), to = planNodes.get(target);
-    return from?.kind === 'checkpoint' && to?.kind === 'agent' && from.taskId !== to.taskId
-      && sourceHandle === 'output-bottom' && targetHandle === 'input-top';
+    return !!from && !!to && from.taskId !== to.taskId
+      && sourceHandle === 'output-right' && targetHandle === 'input-left';
   }
 
   const viewport = useMemo(() => ({ x: 0, y: 0, zoom }), [zoom]);
@@ -402,9 +374,15 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
       {planning && groups?.length && (
         <div className="task-flow-groups" style={{ width, height, transform: `scale(${zoom})` }}>
           {groups.map(group => (
-            <div className="task-flow-group" data-flow-group={group.rank} key={group.rank}
+            <div className="task-flow-group" data-flow-group={group.id} key={group.id}
               style={{ left: group.left, width: group.width, top: group.top, height: group.height }}>
-              <div className="task-flow-group-heading"><strong>{group.title}</strong><span>{group.count} 项任务</span></div>
+              <div className="task-flow-group-heading"><strong title={group.title}>{group.title}</strong><span>{group.count} 个模块</span></div>
+            </div>
+          ))}
+          {columns?.map(column => (
+            <div className="task-flow-column" data-flow-column={column.rank} key={column.rank}
+              style={{ left: column.left - 10, width: column.width + 20, height: height - 9 }}>
+              <span>{column.title}</span>
             </div>
           ))}
         </div>
@@ -419,9 +397,8 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
         onNodesChange={planning ? onNodesChange : undefined}
         onNodeDragStop={planning ? (_event, node) => {
           const original = planNodes.get(node.id);
-          if (original?.kind !== 'agent' || !original.movable) return;
-          const dx = clampMotion(original, node.position.x);
-          model.onNodeMove?.(original.taskId, { x: original.position.x + dx, y: original.position.y });
+          if (!original?.movable) return;
+          model.onNodeMove?.(original.taskId, { x: original.position.x, y: clampMotion(original, node.position.y) });
         } : undefined}
         nodeDragThreshold={5}
         nodeExtent={planning ? [[12, 12], [width - 12, height - 12]] : undefined}

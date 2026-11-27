@@ -83,7 +83,7 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
       <section id="review-plan-preview" class="review-plan-preview" aria-label="任务修改预览" aria-live="polite"></section>
       <div class="review-item-list">${draft.tasks.map((task, index) => index !== selectedIndex ? '' : `<details class="review-item" data-review-details="task-${index}" open>
         <summary><span>${escape(task.id)}</span><strong>${escape(task.title)}</strong><small data-task-change="${escape(task.id)}">${(task.dependsOn || []).length} 项依赖</small></summary>
-        <div class="review-item-body">${field('任务标题', `task.${index}.title`, task.title, { max: 300 })}${field('任务描述', `task.${index}.description`, task.description, { multiline: true, rows: 3 })}${field('验收条件', `task.${index}.acceptance`, (task.acceptance || []).join('\n'), { multiline: true, rows: 3, help: '每行一条可检查的条件。' })}
+        <div class="review-item-body"><div class="review-form-grid">${field('功能板块', `module.${index}.group`, task.workflowModule?.group ?? '', { max: 40 })}${field('模块名称', `module.${index}.name`, task.workflowModule?.name ?? '', { max: 60 })}</div>${field('任务标题', `task.${index}.title`, task.title, { max: 300 })}${field('任务描述', `task.${index}.description`, task.description, { multiline: true, rows: 3 })}${field('验收条件', `task.${index}.acceptance`, (task.acceptance || []).join('\n'), { multiline: true, rows: 3, help: '每行一条可检查的条件。' })}
         ${!run.engineeringPlan ? field('可写文件（每行一个）', `task.${index}.writePaths`, (task.writePaths ?? []).join('\n'), { multiline: true, rows: 3, help: '按图计划需填写精确项目相对路径，如 src/app.mjs。' }) : ''}
         <div class="review-form-grid"><fieldset class="review-choices"><legend>前置任务（勾选后才可开始本任务）</legend>${choices(draft.tasks, index, 'dependsOn', task.dependsOn || [], unavailableDependencies(draft.tasks, task.id))}<small>不能选择自身或其下游任务，避免形成循环。</small></fieldset>
         <fieldset class="review-choices"><legend>关联需求</legend>${choices(run.spec?.requirements || [], index, 'requirementIds', task.requirementIds || [])}<small>每条规格需求至少应关联一项开发任务。</small></fieldset></div>
@@ -246,6 +246,11 @@ export function createPlanningReview({ container, getState, submit, refresh, sho
       if (group === 'stack') { draft.spec.stack ||= {}; draft.spec.stack[key] = value; }
       if (group === 'requirement') draft.spec.requirements[Number(key)][property] = property === 'acceptance' ? lines(value) : value;
       if (group === 'task') draft.tasks[Number(key)][property] = ['acceptance', 'dependsOn', 'requirementIds', 'writePaths'].includes(property) ? lines(value) : value;
+      if (group === 'module') {
+        const task = draft.tasks[Number(key)];
+        task.workflowModule = { group: '', name: '', ...task.workflowModule, [property]: value };
+        if (!task.workflowModule.group && !task.workflowModule.name && !getState().run?.tasks?.find(item => item.id === task.id)?.workflowModule) delete task.workflowModule;
+      }
       if (group === 'answer') draft.answers[key] = value;
     }
     persist(draft); syncControls();

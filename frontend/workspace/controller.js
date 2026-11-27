@@ -31,7 +31,6 @@ let sourceReadyProject = '';
 let expandedAutomaticRun = '';
 let automaticRetryConsent = null;
 let taskExecutionSignature = '';
-let flowSelection;
 const notices = createWorkspaceNotices({ errorBanner: $('#error-banner'), errorText: $('#error-text'), dismissButton: $('#dismiss-error'), toast: $('#toast'),
   getContext: () => ({ projectId: state.project?.id || '', runId: state.run?.id || '' }), locate: locateWorkspaceProblem });
 const workspaceLayout = createWorkspaceLayout({ getContext: () => ({ projectId: state.selectionPending ? '' : state.project?.id || '', runId: state.run?.id || '', busy: state.busy, runStatus: state.run?.status, historical: historicalRun() }),
@@ -807,7 +806,6 @@ function renderTaskWorkspace(simulation, preview, owner) {
   const key = JSON.stringify([run.id, version, simulation?.id]);
   const graph = taskOrchestration.render({ key, tasks, selected, simulation, preview, statusNames: SIM_STATUS,
     execution: simulation || preview ? null : currentTaskExecution(), editable: canEditTaskGraph(simulation),
-    selectedVisual: state.tab === 'tasks' && flowSelection?.key === key ? flowSelection.id : undefined,
     dependencyExecution: run.dependencyExecution === true, engineeringReady: Boolean(run.engineeringPlan) });
   const planConfirmed = Boolean(run.planRevision && run.approvals?.plan?.revision === run.planRevision
     && run.approvals.plan.specRevision === run.specRevision);
@@ -815,34 +813,44 @@ function renderTaskWorkspace(simulation, preview, owner) {
     ? renderTaskSchedule({ key, tasks, selected, simulation, preview, statusNames: SIM_STATUS, planConfirmed, escape })
     : graph.html;
   const detailGroup = (label, contents) => '<section class="task-detail-section"><h4>' + label + '</h4>' + contents + '</section>';
-  const taskNames = new Map(tasks.map(task => [task.id, task.title]));
+  const taskNames = new Map(tasks.map(task => [task.id, task.workflowModule?.name || task.title]));
   const taskLinks = (ids, empty) => ids.length ? ids.map(id => `<button type="button" class="pill" data-task="${escape(id)}" title="${escape(taskNames.get(id) || id)}">${escape(id)}</button>`).join('') : `<span class="pill">${empty}</span>`;
   const sources = (selected.requirementIds || []).map((id) => (simulation ? simulation.spec : run.spec)?.requirements?.find((requirement) => requirement.id === id)).filter(Boolean);
   const boundary = [['计划修改范围', selected.writePaths], ['输入资料', selected.inputs?.length ? selected.inputs : ['当前计划未明确输入资料，请结合前置任务与规格来源核对。']], ['预期产出', selected.outputs?.length ? selected.outputs : ['当前计划未明确输出，请结合目标与验收条件核对。']]]
     .filter(([, values]) => Array.isArray(values) && values.length).map(([label, values]) => detailGroup(label, `<ul>${values.map(value => `<li>${escape(value)}</li>`).join('')}</ul>`)).join('');
   const files = (selected.suggestedFiles || []).map(file => `<span class="pill">${escape(file)}</span>`).join('');
   const sourceDetails = sources.map(source => `<div class="task-source-quote"><strong>${escape(source.id)} ${escape(source.title)}</strong><br>${escape(source.sourceQuote || source.description)}</div>`).join('');
-  const part = graph.inspected;
-  const partTitle = { agent: '编码智能体', self: '自检工具', http: '接口验收工具', browser: '浏览器验收工具', review: '审查智能体', checkpoint: '验收检查点', fork: '工作流分支', join: '工作流汇合' };
-  const isAgent = part.kind === 'agent';
-  const checks = ['generating', 'proposal_rejected'].includes(graph.observed?.stage) ? undefined : graph.observed?.checks?.[part.step];
-  const checkDetails = Array.isArray(checks) && checks.length
-    ? detailGroup('已记录的检查', `<ul>${checks.map(check => `<li>${check.passed === true ? '通过' : check.passed === false ? '未通过' : '待核对'} · ${escape(check.name || check.id || check.testId || '用例')}</li>`).join('')}</ul>`) : '';
+  const module = graph.inspected;
+  const currentChecks = ['generating', 'proposal_rejected'].includes(graph.observed?.stage) ? null : graph.observed?.checks;
+  const operations = module.operations.map(operation => {
+    const checks = ['checking', 'passed', 'failed'].includes(operation.gateState) ? currentChecks?.[operation.step] : null;
+    const results = Array.isArray(checks) && checks.length
+      ? `<ul>${checks.map(check => `<li>${check.passed === true ? '通过' : check.passed === false ? '未通过' : '待核对'} · ${escape(check.name || check.id || check.testId || '用例')}</li>`).join('')}</ul>` : '';
+    return `<li><span>${escape(operation.title)}</span><small>${escape(operation.gateLabel)}</small>${results}</li>`;
+  }).join('');
+  const release = module.join ? `等 ${module.join.count} 个直接前置模块通过后开始。` : '';
+  const detailKey = JSON.stringify([key, selected.id]);
+  const currentDetail = document.querySelector('.task-detail');
+  const keepStepsOpen = currentDetail?.dataset.graphContext === detailKey && currentDetail.querySelector('.module-operation-details')?.open;
+  const steps = `<details class="module-operation-details" ${keepStepsOpen ? 'open' : ''}><summary data-focus-key="module-operations">执行步骤与证据</summary><ol>${operations}</ol></details>`;
   return `${renderTaskHandoff(run, simulation, preview, owner)}
     <div class="task-workspace">
       ${taskView}
-      <aside class="task-detail" aria-label="所选任务详情" data-inspected-step="${escape(part.step)}">
+      <aside class="task-detail" aria-label="所选任务详情" data-graph-context="${escape(detailKey)}" data-inspected-step="agent" data-inspected-module="${escape(selected.id)}">
         <div class="task-detail-summary">
-          <p class="task-detail-id">${escape(partTitle[part.step] || part.label)} · ${escape(selected.id)}</p>
-          <h3>${escape(isAgent ? selected.title : part.title)}</h3><p>${escape(isAgent ? selected.description : part.roleHelp)}</p>
-          ${isAgent ? simulatedTasks.detail(selected.id) : ''}
+          <p class="task-detail-id">${escape(module.group)} · ${escape(selected.id)}</p>
+          <h3>${escape(module.title)}</h3>
+          ${selected.title !== module.title ? `<p class="module-task-action">${escape(selected.title)}</p>` : ''}
+          <p>${escape(selected.description)}</p>
+          ${simulatedTasks.detail(selected.id)}
+          ${state.tab === 'tasks' ? '<button type="button" class="text-button module-back" data-module-back>返回任务图</button>' : ''}
         </div>
-        ${!isAgent ? detailGroup('所属任务', taskLinks([selected.id], '')) : ''}
-        ${!isAgent && graph.observed ? detailGroup('当前状态', `<p>${escape(part.gateLabel)}</p>`) + checkDetails : ''}
+        ${detailGroup('验收检查点', `<p>${escape(release)}${escape(module.gateLabel)}。</p>`)}
+        ${steps}
         ${detailGroup('前置任务', '<div>' + taskLinks(selected.dependsOn || [], '无前置任务') + '</div>')}
         ${detailGroup('后续任务', '<div>' + taskLinks(graph.nextIds, '无后续任务') + '</div>')}
         ${detailGroup('验收条件', '<ul>' + (selected.acceptance || []).map(item => '<li>' + escape(item) + '</li>').join('') + '</ul>')}
-        ${isAgent && files ? detailGroup('建议文件', '<div>' + files + '</div>') : ''}${isAgent ? boundary : ''}
+        ${boundary}${files && !selected.writePaths?.length ? detailGroup('建议文件', '<div>' + files + '</div>') : ''}
         ${detailGroup('需求来源', sourceDetails || '<p>基础工程或集成验证任务</p>')}
       </aside>
     </div>`;
@@ -1276,12 +1284,17 @@ document.addEventListener('click', (event) => {
   const handoff = event.target.closest('[data-task-handoff]');
   if (handoff) { openDeliveryStage(handoff.dataset.taskHandoff); return; }
   const task = event.target.closest('[data-task],[data-flow-node]');
+  if (event.target.closest('[data-module-back]')) {
+    taskOrchestration.revealSelected();
+    document.querySelector('.task-graph-scroll')?.scrollIntoView({ block: 'center' });
+    return;
+  }
   if (task) {
     state.taskId = task.dataset.ownerTask ?? task.dataset.task;
-    const simulation = simulatedTasks.selection();
-    flowSelection = task.dataset.flowNode ? { id: task.dataset.flowNode,
-      key: JSON.stringify([state.run.id, simulation?.planRevision ?? state.run.planRevision, simulation?.id]) } : null;
     renderRecords(); rememberSelection();
+    if (event.detail && task.hasAttribute('data-flow-node') && matchMedia('(max-width: 850px)').matches) {
+      document.querySelector('.task-detail')?.scrollIntoView({ block: 'start' });
+    }
     if (!task.hasAttribute('data-flow-node') && !task.hasAttribute('data-task-schedule')) taskOrchestration.revealSelected();
   }
   const artifact = event.target.closest('[data-artifact]'); if (artifact) showArtifact(artifact.dataset.artifact);

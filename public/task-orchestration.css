@@ -643,6 +643,16 @@
   margin-block-start: 0;
 }
 
+.module-operation-details { padding-block: 8px; border-block: 1px solid var(--task-line); }
+.module-operation-details summary { color: var(--task-ink); font-weight: 600; cursor: pointer; }
+.module-operation-details ol { margin-block-end: 0; }
+.module-operation-details li { padding-block: 3px; }
+.module-operation-details small { margin-inline-start: 8px; color: var(--task-quiet); }
+.module-back { display: none; }
+@media (max-width: 850px) {
+  .task-detail .module-back { display: inline-flex; }
+}
+
 .task-orchestration-root .task-detail :is(.pill,.task-source-quote) {
   border-color: var(--task-line);
   background: #f6f8ff;

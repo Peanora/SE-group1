@@ -1,6 +1,6 @@
-import { projectWorkflow } from './task-workflow-layout.js';
+import { projectWorkflow, reorderWorkflow } from './task-workflow-layout.js';
 
-const ORDER_KEY = 'taskflow.workflow.slotOrder.v1';
+const ORDER_KEY = 'taskflow.workflow.lanes.v1';
 const zoomLabel = zoom => `${Number((zoom * 100).toFixed(zoom < .01 ? 2 : zoom < .1 ? 1 : 0))}%`;
 const sizerStyle = (width, height, zoom) => `width:${Math.ceil(width * zoom)}px;height:${Math.ceil(height * zoom)}px`;
 
@@ -34,15 +34,15 @@ function fallbackCanvas(model, escape) {
   const byId = new Map(model.nodes.map(node => [node.id, node]));
   const paths = model.edges.map(edge => {
     const from = byId.get(edge.source), to = byId.get(edge.target);
-    const x1 = from.position.x + from.width / 2, x2 = to.position.x + to.width / 2;
-    const y1 = from.position.y + from.height, y2 = to.position.y;
-    const route = edge.channel == null ? `V${(y1 + y2) / 2} H${x2}` : `v8 H${edge.channel} V${y2 - 8} H${x2}`;
-    return `<path d="M${x1} ${y1} ${route} V${y2}" fill="none" stroke="currentColor" marker-end="url(#taskflow-end)"/>`;
+    const x1 = from.position.x + from.width, x2 = to.position.x;
+    const y1 = from.position.y + from.height / 2, y2 = to.position.y + to.height / 2;
+    const route = edge.channel == null ? `H${(x1 + x2) / 2} V${y2}` : `h8 V${edge.channel} H${x2 - 8} V${y2}`;
+    return `<path d="M${x1} ${y1} ${route} H${x2}" fill="none" stroke="currentColor" marker-end="url(#taskflow-end)"/>`;
   });
   const cards = model.nodes.map(node => {
     const { x, y } = node.position;
     const agent = node.kind === 'agent';
-    return `<button type="button" class="task-fallback-card ${agent ? 'dev-task' : ''} ${escape(node.className)}" style="left:${x}px;top:${y}px;width:${node.width}px;height:${node.height}px" data-focus-key="task-${escape(node.id)}" data-flow-node="${escape(node.id)}" data-flow-part="${node.kind}" data-owner-task="${escape(node.taskId)}" ${agent ? `data-task="${escape(node.taskId)}"` : ''} aria-pressed="${node.selected}"><small>${escape(agent ? '编码智能体' : node.label)}</small><strong>${escape(node.title)}</strong></button>`;
+    return `<button type="button" class="task-fallback-card ${agent ? 'dev-task' : ''} ${escape(node.className)}" style="left:${x}px;top:${y}px;width:${node.width}px;height:${node.height}px" data-focus-key="task-${escape(node.id)}" data-flow-node="${escape(node.id)}" data-flow-part="${node.kind}" data-owner-task="${escape(node.taskId)}" data-task="${escape(node.taskId)}" aria-pressed="${node.selected}"><small>${escape(node.group)}</small><strong>${escape(node.title)}</strong></button>`;
   });
   return `<div class="task-graph" style="width:${model.width}px;height:${model.height}px;transform:scale(${model.zoom})"><svg class="task-edges" width="${model.width}" height="${model.height}" aria-hidden="true"><defs><marker id="taskflow-end" viewBox="0 0 8 8" refX="7" refY="4" orient="auto" markerWidth="6" markerHeight="6"><path d="M0 0L8 4L0 8Z" fill="currentColor"/></marker></defs>${paths.join('')}</svg>${cards.join('')}</div>`;
 }
@@ -73,7 +73,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
       scheduleNavigator();
     }) : null;
 
-  function render({ key, tasks, selected, simulation, preview, statusNames, execution, editable, dependencyExecution, engineeringReady, selectedVisual }) {
+  function render({ key, tasks, selected, simulation, preview, statusNames, execution, editable, dependencyExecution, engineeringReady }) {
     if (key !== editingKey) { editingKey = key; editing = false; }
     const editingGraph = editable && editing;
     const graph = buildGraph(tasks);
@@ -129,15 +129,14 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
         className: [style, relation].filter(Boolean).join(' ') };
     });
     const layout = projectWorkflow({ tasks, graph, nodes, edges, narrow: narrow.matches, order: savedOrder.get(orderKey) });
-    const inspected = layout.nodes.find(node => node.id === selectedVisual && node.taskId === selected.id)
-      ?? layout.nodes.find(node => node.id === selected.id);
+    const inspected = layout.nodes.find(node => node.id === selected.id);
     for (const node of layout.nodes) {
       node.selected = node === inspected;
       if (node.selected) node.className += ' selected';
     }
     const { width, height } = layout;
-    model = { ...layout, key: layoutKey, vertical: true, zoom,
-      editing: editingGraph, onNodeMove: (id, position) => reorderByPosition(layoutKey, id, position.x),
+    model = { ...layout, key: layoutKey, vertical: false, zoom,
+      editing: editingGraph, onNodeMove: (id, position) => reorderByPosition(layoutKey, id, position.y),
       onConnect: (from, to) => { if (layoutKey === contextKey) changeLink(from, to); } };
     const enhanced = typeof window.taskflowTaskCanvas === 'function';
     const diagram = enhanced ? '<div class="task-flow-slot"></div>' : fallbackCanvas(model, escape);
@@ -145,7 +144,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
       inspected, observed: activeTasks.get(selected.id), nextIds: graph.dependants.get(selected.id),
       html: `<div class="task-graph-zone" data-focus-relations="${focusRelations}">
         <div class="task-orchestration-bar">
-          <div class="task-orchestration-heading"><h3>开发工作流</h3><p>${tasks.length} 项任务 · ${edges.length} 条依赖${simulation ? ' · 模拟运行，非真实验收' : execution ? ' · 真实逐任务执行' : dependencyExecution ? engineeringReady ? ' · 按图运行' : ' · 按图计划，待工程契约' : ' · 编排设计'}</p></div>
+          <div class="task-orchestration-heading"><h3>模块工作流</h3><p>${layout.groups.length} 个板块 · ${tasks.length} 个模块 · ${edges.length} 条依赖${simulation ? ' · 模拟运行' : execution ? ' · 正在查看执行记录' : dependencyExecution ? engineeringReady ? ' · 按图运行' : ' · 按图计划，待工程契约' : ' · 编排设计'}</p></div>
           ${editable ? `<button type="button" class="task-canvas-relations" data-task-canvas="edit-links" data-focus-key="task-canvas-edit-links" aria-pressed="${editingGraph}">编辑连线</button>` : ''}
           <button type="button" class="task-canvas-relations" data-task-canvas="relations" data-focus-key="task-canvas-relations" aria-pressed="${focusRelations}">突出关联</button>
           <div class="task-orchestration-tools" role="group" aria-label="画布缩放">
@@ -161,6 +160,14 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
           <div class="task-graph-scroll" data-plan-canvas role="region" aria-label="开发任务依赖画布" tabindex="0" data-focus-key="task-canvas" data-graph-context="${escape(layoutKey)}" data-graph-width="${width}" data-graph-height="${height}">
             <div class="task-graph-sizer" style="${sizerStyle(width, height, zoom)}">${diagram}</div>
           </div>
+        </div>
+        <div class="task-canvas-dock">
+          <div>
+            <div class="task-canvas-legend" aria-label="任务图图例">
+              <span class="task-legend-selected">当前模块</span><span class="task-legend-upstream">前置路径</span><span class="task-legend-downstream">后续路径</span>
+            </div>
+            ${enhanced ? '<span class="task-canvas-note">同列模块可上下换位，或按 Alt + ↑ / ↓。点选查看详情。</span>' : ''}
+          </div>
           <button type="button" class="task-navigator" data-focus-key="task-canvas-navigator" aria-label="任务图小地图，方向键平移，回车居中" title="点击定位，方向键平移，回车居中">
             <svg class="task-navigator-map" viewBox="0 0 ${width} ${height}" aria-hidden="true">
               <g class="task-navigator-nodes"></g>
@@ -168,12 +175,6 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
               <rect class="task-navigator-viewport" vector-effect="non-scaling-stroke"></rect>
             </svg>
           </button>
-        </div>
-        <div class="task-canvas-dock">
-          <div class="task-canvas-legend" aria-label="任务图图例">
-            <span class="task-legend-selected">当前任务</span><span class="task-legend-upstream">前置路径</span><span class="task-legend-downstream">后续路径</span>
-          </div>
-          ${enhanced ? '<span class="task-canvas-note">拖动同层智能体可换位，也可按 Alt + ← / →。拖动空白平移。</span>' : ''}
         </div>
       </div>`,
     };
@@ -183,7 +184,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
     const options = (items, current) => items.map(task => `<option value="${escape(task.id)}" ${task.id === current ? 'selected' : ''}>${escape(task.id)} · ${escape(task.title)}</option>`).join('');
     const canEnableExecution = tasks.length >= 2 && tasks.length <= 8;
     return `<section class="task-link-editor" aria-label="编辑任务流程">
-      <p>从检查点拖线到后继的顶端，或用下面的选择器添加。保存后请重新确认计划。正式开发还需要当前工程契约和逐任务联合验收清单。</p>
+      <p>从模块右侧的出口拖到后继模块左侧的入口，或在下方选择两个模块。保存后重新确认计划和验收清单。</p>
       <form data-task-link-form class="task-link-fields">
         <label>起点<select name="source" data-focus-key="task-link-source">${options(tasks, selected.id)}</select></label>
         <label>后继<select name="target" data-focus-key="task-link-target">${options(tasks, tasks.find(task => task.id !== selected.id)?.id)}</select></label>
@@ -192,8 +193,9 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
       ${parents.length ? `<div class="task-link-parents"><span>${escape(selected.id)} 的前置</span>${parents.map(id =>
         `<button type="button" class="button button-outline" data-link-from="${escape(id)}" data-link-to="${escape(selected.id)}" aria-label="移除 ${escape(id)} 到 ${escape(selected.id)} 的连线">${escape(id)} ×</button>`).join('')}</div>` : ''}
       <div class="task-link-actions">
-        ${!dependencyExecution ? `<button type="button" class="button button-outline" data-task-canvas="save-design" data-focus-key="task-canvas-save-design" ${!preview?.graphEdited ? 'disabled' : ''}>保存连线</button>` : ''}
-        ${canEnableExecution ? `<button type="button" class="button button-primary" data-task-canvas="save-links" data-focus-key="task-canvas-save-links" ${dependencyExecution && !preview?.graphEdited ? 'disabled' : ''}>保存为按图运行</button>` : '<span>逐任务开发支持 2 至 8 项任务。当前图可以继续保存连线。</span>'}
+        <button type="button" class="button ${dependencyExecution ? 'button-primary' : 'button-outline'}" data-task-canvas="save-design" data-focus-key="task-canvas-save-design" ${!preview?.graphEdited ? 'disabled' : ''}>保存连线</button>
+        ${canEnableExecution && !dependencyExecution ? '<button type="button" class="button button-primary" data-task-canvas="save-links" data-focus-key="task-canvas-save-links">保存为按图运行</button>' : ''}
+        ${!canEnableExecution ? '<span>逐任务开发支持 2 至 8 个模块。当前图可以继续保存连线。</span>' : ''}
       </div>
       ${preview?.error ? `<p class="inline-error" role="alert">${escape(preview.error)}</p>` : ''}
     </section>`;
@@ -218,23 +220,21 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
   function moveToSlot(id, targetIndex) {
     if (!model.nodes.some(node => node.id === id && node.movable)) return;
     const rank = model.ranks.get(id), slots = model.orders[rank];
-    const index = slots?.indexOf(id) ?? -1;
-    if (index < 0 || targetIndex < 0 || targetIndex >= slots.length || targetIndex === index) return;
-    const next = model.orders.map(row => [...row]);
-    [next[rank][index], next[rank][targetIndex]] = [next[rank][targetIndex], id];
+    const next = reorderWorkflow(model, id, slots?.[targetIndex]);
+    if (!next) return;
     savedOrder.delete(orderKey);
     savedOrder.set(orderKey, next);
     persistOrder();
   }
 
-  function reorderByPosition(key, id, x) {
-    if (key !== contextKey || !Number.isFinite(x)) return;
+  function reorderByPosition(key, id, y) {
+    if (key !== contextKey || !Number.isFinite(y)) return;
     const slots = model.orders[model.ranks.get(id)];
     if (!slots?.includes(id)) return;
-    const byId = new Map(model.nodes.map(node => [node.id, node.position.x]));
+    const byId = new Map(model.nodes.map(node => [node.id, node.position.y]));
     let nearest = slots.indexOf(id);
     slots.forEach((other, index) => {
-      if (Math.abs(byId.get(other) - x) < Math.abs(byId.get(slots[nearest]) - x)) nearest = index;
+      if (Math.abs(byId.get(other) - y) < Math.abs(byId.get(slots[nearest]) - y)) nearest = index;
     });
     moveToSlot(id, nearest);
     // Re-render even when a drop must snap back into its original slot.
@@ -250,7 +250,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
   function drawNavigator() {
     const viewport = observedViewport;
     if (!viewport?.isConnected || !viewport.clientWidth) return;
-    const map = viewport.parentElement.querySelector('.task-navigator-map');
+    const map = viewport.closest('.task-graph-zone').querySelector('.task-navigator-map');
     const { width, height, nodes } = model;
     if (map !== navigatorMap || nodes !== navigatorNodes) {
       navigatorMap = map;
@@ -263,6 +263,8 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
       }).join('');
     }
     const visible = viewportGeometry(viewport);
+    // Lane headings live in the scaled graph. Keep them readable while panning right.
+    viewport.style.setProperty('--task-lane-scroll-x', `${Math.max(0, visible.x / zoom)}px`);
     const clamp = (value, max) => Math.min(max, Math.max(0, value));
     const left = clamp(visible.x / zoom, width);
     const top = clamp(visible.y / zoom, height);
@@ -327,7 +329,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
       requestAnimationFrame(() => {
         const current = observedViewport;
         if (key !== contextKey || !current?.clientWidth) return;
-        current.scrollLeft = (current.scrollWidth - current.clientWidth) / 2;
+        current.scrollLeft = 0;
         scheduleNavigator();
       });
     }
@@ -357,7 +359,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
     }
     const navigator = event.target.closest('.task-navigator');
     if (navigator) {
-      const viewport = navigator.previousElementSibling;
+      const viewport = observedViewport;
       const { width, height } = model;
       const bounds = navigator.firstElementChild.getBoundingClientRect();
       const scale = Math.min(bounds.width / width, bounds.height / height);
@@ -426,16 +428,16 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
       const direction = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
       if (!direction) return;
       event.preventDefault();
-      const viewport = navigator.previousElementSibling;
+      const viewport = observedViewport;
       viewport.scrollBy(direction[0] * viewport.clientWidth / 3, direction[1] * viewport.clientHeight / 3);
       return;
     }
     const node = event.target.closest('.dev-task');
-    if (node && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && ['ArrowLeft', 'ArrowRight'].includes(event.key)) {
+    if (node && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && ['ArrowUp', 'ArrowDown'].includes(event.key)) {
       event.preventDefault();
       const id = node.dataset.task;
       const index = model.orders[model.ranks.get(id)].indexOf(id);
-      moveToSlot(id, index + (event.key === 'ArrowLeft' ? -1 : 1));
+      moveToSlot(id, index + (event.key === 'ArrowUp' ? -1 : 1));
       onLayoutChange();
       return;
     }

@@ -8,6 +8,12 @@ import { chromium } from 'playwright-core';
 import { createApp } from '../server.mjs';
 import { simulationPlanner } from '../examples/simulation-fixture.mjs';
 
+const groups = { A: '应用基础', B: '场地与规则', C: '场地与规则', D: '预约核对', E: '联合验收' };
+const moduleNames = { A: '应用入口', B: '场地查询', C: '预约配额', D: '审阅预约', E: '后续任务' };
+const modulePlanner = { ...simulationPlanner, generateTasks: (...args) => simulationPlanner.generateTasks(...args).map(task => ({
+  ...task, workflowModule: { group: groups[task.id], name: moduleNames[task.id] },
+})) };
+
 async function until(check, label) {
   const deadline = Date.now() + 10000;
   while (!check()) {
@@ -16,7 +22,7 @@ async function until(check, label) {
   }
 }
 
-async function fixture(t, { width, planner = simulationPlanner, teamEnabled = false, name = '分叉汇合验收', content = 'A 完成后执行 B 和 C，随后检查 D 并执行 E。' }) {
+async function fixture(t, { width, planner = modulePlanner, teamEnabled = false, name = '分叉汇合验收', content = 'A 完成后执行 B 和 C，随后检查 D 并执行 E。' }) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'task-orchestration-browser-'));
   let app, browser;
   t.after(async () => {
@@ -82,7 +88,6 @@ async function panOverflowingCanvas(page, canvas) {
 }
 
 const taskCard = (canvas, id) => canvas.locator(`.dev-task[data-task="${id}"]`);
-const flowPart = (canvas, kind, owner) => canvas.locator(`[data-flow-part="${kind}"][data-owner-task="${owner}"]`);
 const dependency = (canvas, from, to) => canvas.locator(`.task-edge[data-from="${from}"][data-to="${to}"]`);
 
 async function layoutOf(locator) {
@@ -111,12 +116,12 @@ async function centerOf(locator) {
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 }
 
-async function waitForBranchOrder(page, left, right) {
-  await page.waitForFunction(([left, right]) => {
-    const before = document.querySelector(`.dev-task[data-task="${left}"]`)?.getBoundingClientRect();
-    const after = document.querySelector(`.dev-task[data-task="${right}"]`)?.getBoundingClientRect();
-    return before && after && before.right <= after.left;
-  }, [left, right], { timeout: 5000 });
+async function waitForBranchOrder(page, upper, lower) {
+  await page.waitForFunction(([upper, lower]) => {
+    const before = document.querySelector(`.dev-task[data-task="${upper}"]`)?.getBoundingClientRect();
+    const after = document.querySelector(`.dev-task[data-task="${lower}"]`)?.getBoundingClientRect();
+    return before && after && before.bottom <= after.top;
+  }, [upper, lower], { timeout: 5000 });
 }
 
 for (const width of [1440, 390]) test(`真实 Edge ${width}px：开发任务依赖、画布与计划确认`, { timeout: 60000 }, async t => {
@@ -144,6 +149,16 @@ for (const width of [1440, 390]) test(`真实 Edge ${width}px：开发任务依�
   await task.click();
   assert.equal(await task.getAttribute('aria-pressed'), 'true');
   const inspector = root.locator('.task-detail');
+  assert.equal(await task.locator('.dev-task-title').innerText(), moduleNames.B);
+  assert.equal(await inspector.getAttribute('data-inspected-module'), 'B');
+  assert.equal(await inspector.getByRole('heading', { name: moduleNames.B, exact: true }).count(), 1);
+  const steps = inspector.getByText('执行步骤与证据', { exact: true });
+  await steps.click();
+  assert.equal(await inspector.getByText('HTTP 验收', { exact: true }).isVisible(), true);
+  if (width === 390) {
+    await inspector.getByRole('button', { name: '返回任务图', exact: true }).click();
+    assert.equal(await task.getAttribute('aria-pressed'), 'true');
+  }
   for (const label of ['前置任务', '后续任务', '验收条件']) {
     assert.equal(await inspector.getByRole('heading', { name: label, exact: true }).isVisible(), true);
   }
@@ -170,11 +185,15 @@ for (const width of [1440, 390]) test(`真实 Edge ${width}px：开发任务依�
   const navigator = root.getByRole('button', { name: /任务图小地图/ });
   const viewportMarker = navigator.locator('.task-navigator-viewport');
   assert.equal(await navigator.locator('[data-map-task]').count(), 5);
-  assert.ok(await navigator.locator('[data-map-flow]').count() > 0);
-  await canvas.evaluate(element => { element.scrollTop = 0; });
-  await navigator.press('ArrowDown');
-  await page.waitForFunction(() => Number(document.querySelector('.task-navigator-viewport')?.getAttribute('y')) > 0);
-  assert.ok(await canvas.evaluate(element => element.scrollTop > 0), '小地图方向键同步平移画布和视图框');
+  assert.equal(await navigator.locator('[data-map-flow]').count(), 0);
+  const scrollAxis = await canvas.evaluate(element => {
+    element.scrollLeft = 0;
+    element.scrollTop = 0;
+    return element.scrollWidth - element.clientWidth > element.scrollHeight - element.clientHeight ? 'x' : 'y';
+  });
+  await navigator.press(scrollAxis === 'x' ? 'ArrowRight' : 'ArrowDown');
+  await page.waitForFunction(axis => Number(document.querySelector('.task-navigator-viewport')?.getAttribute(axis)) > 0, scrollAxis);
+  assert.ok(await canvas.evaluate((element, axis) => (axis === 'x' ? element.scrollLeft : element.scrollTop) > 0, scrollAxis), '小地图方向键同步平移画布和视图框');
   assert.ok(Number(await viewportMarker.getAttribute('height')) > 0);
   await control('缩小').click();
   assert.ok(await zoomPercent() < increasedZoom);
@@ -183,51 +202,50 @@ for (const width of [1440, 390]) test(`真实 Edge ${width}px：开发任务依�
   assert.equal(await canvas.evaluate(element => element.scrollWidth <= element.clientWidth + 1
     && element.scrollHeight <= element.clientHeight + 1), true);
   const firstTask = taskCard(canvas, 'A'), sibling = taskCard(canvas, 'C'), next = taskCard(canvas, 'D');
-  assert.equal(await canvas.locator('[data-flow-part="agent"][data-owner-task]').count(), 5);
-  for (const kind of ['agent', 'tool', 'review', 'checkpoint']) {
-    assert.ok(await flowPart(canvas, kind, 'B').count() > 0, `任务 B 显示 ${kind} 节点`);
+  assert.equal(await canvas.locator('[data-workflow-module][data-flow-part="agent"]').count(), 5, '每项真实任务只画一个模块节点');
+  assert.equal(await canvas.locator('[data-flow-node]').count(), 5);
+  for (const group of new Set(Object.values(groups))) {
+    assert.equal(await canvas.locator('[data-flow-group]').filter({ hasText: group }).count(), 1);
   }
-  assert.ok(await flowPart(canvas, 'fork', 'A').count() > 0, '任务 A 是实际分叉');
-  assert.ok(await flowPart(canvas, 'join', 'D').count() > 0, '任务 D 是实际汇合');
+  assert.equal(await task.getAttribute('data-workflow-group'), groups.B);
+  assert.equal(await sibling.getAttribute('data-workflow-group'), groups.C);
+  assert.equal(await firstTask.locator('[data-module-fork]').count(), 1, '任务 A 标记实际分叉');
+  assert.equal(await next.locator('[data-module-join]').count(), 1, '任务 D 标记实际汇合');
   const businessEdges = () => canvas.locator('.task-edge[data-from][data-to]').evaluateAll(edges =>
     edges.map(edge => `${edge.dataset.from}->${edge.dataset.to}`).sort());
   const savedEdges = ['A->B', 'A->C', 'B->D', 'C->D', 'D->E'];
   assert.deepEqual(await businessEdges(), savedEdges);
   const originalTasks = structuredClone(run.tasks);
-  const gate = flowPart(canvas, 'checkpoint', 'B');
-  await gate.click();
-  await root.locator('.task-detail[data-inspected-step="checkpoint"]').waitFor();
-  assert.match(await inspector.locator('.task-detail-summary').innerText(), /验收检查点 · B/);
+  assert.equal(await firstTask.locator('[data-module-checkpoint]').count(), 1);
+  assert.equal(await task.locator('[data-module-checkpoint]').count(), 0, '普通模块的校验细节由详情展示');
 
   await firstTask.click();
   await canvas.scrollIntoViewIfNeeded();
   const start = await layoutOf(task), other = await layoutOf(sibling);
-  assert.ok(Math.abs(start.y - other.y) < 1 && start.x + start.width <= other.x, '同排分支位置并列且不重叠');
-  assert.ok((await layoutOf(firstTask)).y < start.y && start.y < (await layoutOf(next)).y, '任务按真实前置关系向下排布');
+  assert.ok(Math.abs(start.x - other.x) < 1 && start.y + start.height <= other.y, '同深度的分支保持相同列且不重叠');
+  assert.ok((await layoutOf(firstTask)).x < start.x && start.x < (await layoutOf(next)).x, '任务按真实前置关系从左到右排布');
 
   const edge = dependency(canvas, 'A', 'B');
   await edge.waitFor({ state: 'attached' });
   const startPath = await edge.getAttribute('d');
-  const mapTaskX = await navigator.locator('[data-map-task="B"]').getAttribute('x');
+  const mapTaskY = await navigator.locator('[data-map-task="B"]').getAttribute('y');
   const grip = task.locator('.dev-task-grip');
   const originGrip = await centerOf(grip), otherCenter = await centerOf(sibling), nextCenter = await centerOf(next);
-  await dragPointer(page, originGrip, { x: originGrip.x, y: nextCenter.y });
+  await dragPointer(page, originGrip, { x: nextCenter.x, y: originGrip.y });
   assertSameSlot(await layoutOf(task), start);
   assertSameSlot(await layoutOf(sibling), other);
-  assert.deepEqual(await businessEdges(), savedEdges, '尝试跨排只保留原有依赖');
+  assert.deepEqual(await businessEdges(), savedEdges, '尝试跨深度只保留原有依赖');
 
-  const originalGate = await layoutOf(gate);
-  await dragPointer(page, await centerOf(grip), { x: otherCenter.x, y: originGrip.y });
+  await dragPointer(page, await centerOf(grip), { x: originGrip.x, y: otherCenter.y });
   await waitForBranchOrder(page, 'C', 'B');
   assertSameSlot(await layoutOf(task), other);
   assertSameSlot(await layoutOf(sibling), start);
-  const movedGate = await layoutOf(gate);
-  assert.ok(Math.abs(movedGate.x - originalGate.x - (other.x - start.x)) < 1, '检查点和其所属任务一起换位');
+  assert.equal(await task.getAttribute('data-workflow-group'), groups.B, '换位不改变模块所属板块');
   assert.notEqual(await edge.getAttribute('d'), startPath, '业务连线跟随换位更新');
-  await page.waitForFunction(x => {
+  await page.waitForFunction(y => {
     const marker = document.querySelector('[data-map-task="B"]');
-    return marker && marker.getAttribute('x') !== x;
-  }, mapTaskX);
+    return marker && marker.getAttribute('y') !== y;
+  }, mapTaskY);
   assert.deepEqual(await businessEdges(), savedEdges);
   assert.deepEqual(run.tasks, originalTasks);
   assert.equal(await firstTask.getAttribute('aria-pressed'), 'true', '拖动未触发任务点选');
@@ -247,10 +265,10 @@ for (const width of [1440, 390]) test(`真实 Edge ${width}px：开发任务依�
   await waitForBranchOrder(page, 'B', 'C');
   assertSameSlot(await layoutOf(task), start);
   assertSameSlot(await layoutOf(sibling), other);
-  await task.press('Alt+ArrowRight');
+  await task.press('Alt+ArrowDown');
   await waitForBranchOrder(page, 'C', 'B');
   assertSameSlot(await layoutOf(task), other);
-  await task.press('Alt+ArrowLeft');
+  await task.press('Alt+ArrowUp');
   await waitForBranchOrder(page, 'B', 'C');
   await task.press('End');
   assert.equal(await inspector.locator('.task-detail-summary h3').innerText(), '后续任务');
@@ -293,7 +311,8 @@ test('真实 Edge 390px：80 项长链可适应到 10% 以下并完整显示', {
   const root = await openTasks(page, origin);
   const canvas = root.locator('.task-graph-scroll');
   assert.equal(await canvas.locator('.dev-task').count(), 80);
-  assert.equal(await canvas.evaluate(element => element.scrollHeight > element.clientHeight * 10), true);
+  assert.equal(await canvas.evaluate(element => element.scrollWidth > element.clientWidth * 10
+    || element.scrollHeight > element.clientHeight * 10), true);
   await root.getByRole('button', { name: '适应画布', exact: true }).click();
   const zoom = Number.parseFloat(await root.locator('[data-task-zoom-value]').innerText());
   assert.ok(zoom > 0 && zoom < 10);
@@ -302,7 +321,7 @@ test('真实 Edge 390px：80 项长链可适应到 10% 以下并完整显示', {
 });
 
 test('真实 Edge 390px：画布修改直接依赖，保存并重新确认按图执行计划', { timeout: 60000 }, async t => {
-  const planner = { ...simulationPlanner, generateTasks: (...args) => simulationPlanner.generateTasks(...args).map(task => {
+  const planner = { ...modulePlanner, generateTasks: (...args) => modulePlanner.generateTasks(...args).map(task => {
     const files = task.id === 'A' ? ['src/app.mjs'] : task.suggestedFiles;
     return { ...task, suggestedFiles: files, writePaths: [...files] };
   }) };
@@ -334,10 +353,8 @@ test('真实 Edge 390px：画布修改直接依赖，保存并重新确认按图
   assert.equal(await edit.getAttribute('aria-pressed'), 'true');
   const editor = root.getByRole('region', { name: '编辑任务流程' });
   await editor.waitFor();
-  assert.equal(await canvas.locator('[data-flow-part="checkpoint"][data-gate-state="planned"]').count(), 5);
-  const checkpoint = flowPart(canvas, 'checkpoint', 'D');
-  assert.match(await checkpoint.getAttribute('title'), /自检、独立 HTTP、Edge 和 Review.*代码集成/);
-  assert.match(await flowPart(canvas, 'join', 'D').getAttribute('title'), /2 项前置/);
+  assert.equal(await canvas.locator('[data-module-checkpoint]').count(), 3);
+  assert.equal(await taskCard(canvas, 'D').locator('[data-module-join]').count(), 1);
   assert.equal(await edge('B', 'D').count(), 1);
   assert.equal(await edge('C', 'D').count(), 1);
   assert.equal(await edge('D', 'E').count(), 1);
@@ -351,7 +368,7 @@ test('真实 Edge 390px：画布修改直接依赖，保存并重新确认按图
   await dragPointer(page, await centerOf(port('output', 'B')), await centerOf(port('input', 'E')));
   await edge('B', 'E').waitFor({ state: 'attached' });
   await root.getByText('计划修订预览', { exact: true }).waitFor();
-  await taskCard(canvas, 'B').press('Alt+ArrowRight');
+  await taskCard(canvas, 'B').press('Alt+ArrowDown');
   await waitForBranchOrder(page, 'C', 'B');
   assert.equal(await edge('B', 'E').count(), 1, '本地换位保留当前直接依赖草稿');
   await root.getByText('计划修订预览', { exact: true }).waitFor();
@@ -435,6 +452,58 @@ test('真实 Edge 390px：画布修改直接依赖，保存并重新确认按图
   assert.deepEqual(errors, []);
 });
 
+test('真实 Edge：旧计划可修改功能板块与模块名称，保存新版本并保留原依赖', { timeout: 45000 }, async t => {
+  const { app, project, run, settled, page, origin } = await fixture(t, { width: 1440, planner: simulationPlanner });
+  const priorRevision = run.planRevision;
+  const original = structuredClone(run.tasks);
+  assert.equal(original.find(item => item.id === 'B').workflowModule, undefined);
+  await app.orchestrator.action(project.id, run.id, { action: 'approve_plan', revision: priorRevision, specRevision: run.specRevision });
+  await until(() => settled('succeeded'), '旧计划已确认');
+
+  const runPath = `/api/projects/${project.id}/runs/${run.id}`;
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto(origin + '/?' + new URLSearchParams({ project: project.id, run: run.id, view: 'tasks' }));
+  const root = page.locator('.task-orchestration-root');
+  await root.getByText('计划已确认', { exact: true }).waitFor();
+  await taskCard(root, 'B').click();
+  await root.getByRole('button', { name: '修改此任务', exact: true }).click();
+  const group = page.getByLabel('功能板块', { exact: true });
+  const name = page.getByLabel('模块名称', { exact: true });
+  assert.equal(await group.inputValue(), '');
+  assert.equal(await name.inputValue(), '');
+  await group.fill('预约入口');
+  await name.fill('时段选择');
+  const response = page.waitForResponse(item => item.url() === origin + runPath + '/action' && item.request().method() === 'POST');
+  await page.getByRole('button', { name: '保存修订', exact: true }).click();
+  const saved = await response;
+  assert.equal(saved.status(), 200, await saved.text());
+  await until(() => run.planRevision !== priorRevision && settled('awaiting_review'), '模块更名保存为新计划');
+  const previous = original.find(item => item.id === 'B');
+  const expected = { ...previous, workflowModule: { group: '预约入口', name: '时段选择' } };
+  assert.deepEqual(run.tasks, original.map(task => task.id === 'B' ? expected : task));
+  assert.equal(run.approvals.plan, null);
+  assert.equal(run.revisionHistory.plan.at(-1).revision, priorRevision);
+  const persisted = app.store.getPersistedRun(project.id, run.id).run;
+  assert.equal(persisted.planRevision, run.planRevision);
+  assert.deepEqual(persisted.tasks, run.tasks);
+
+  await page.getByRole('tab', { name: /开发任务/ }).click();
+  await root.getByText('计划待确认', { exact: true }).waitFor();
+  const board = root.locator('.task-graph-scroll');
+  const entry = taskCard(board, 'B');
+  await entry.click();
+  assert.equal(await entry.locator('.dev-task-title').innerText(), '时段选择');
+  assert.equal(await entry.getAttribute('data-workflow-group'), '预约入口');
+  assert.equal(await board.locator('[data-flow-group]').filter({ hasText: '预约入口' }).count(), 1);
+  const inspector = root.locator('.task-detail[data-inspected-module="B"]');
+  assert.equal(await inspector.getByRole('heading', { name: '时段选择', exact: true }).count(), 1);
+  assert.match(await inspector.locator('.task-detail-id').innerText(), /预约入口/);
+  await dependency(board, 'A', 'B').waitFor({ state: 'attached' });
+  await dependency(board, 'B', 'D').waitFor({ state: 'attached' });
+  assert.deepEqual(errors, []);
+});
+
 test('真实 Edge：评审者可从任务图确认计划，开发入口仍由负责人操作', { timeout: 30000 }, async t => {
   const { app, page, origin, settled, run } = await fixture(t, { width: 1440, teamEnabled: true });
   const password = 'Synthetic-Taskflow-Reviewer-3092!';
@@ -486,7 +555,7 @@ for (const width of [1440, 390]) test(`真实 Edge ${width}px：项目回程链�
   const selected = schedule.locator('[data-task-schedule][data-task=C]');
   await selected.click();
   const details = page.getByRole('complementary', { name: '所选任务详情' });
-  assert.equal(await details.getByRole('heading', { name: '分支C' }).isVisible(), true);
+  assert.equal(await details.getByRole('heading', { name: moduleNames.C, exact: true }).isVisible(), true);
   await selected.press('End');
   assert.equal(await details.getByRole('heading', { name: '后续任务', level: 3 }).isVisible(), true);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);

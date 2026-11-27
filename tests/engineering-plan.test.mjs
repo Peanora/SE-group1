@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { contentRevision } from '../lib/planning-review.mjs';
 import { ENGINEERING_PLATFORM, engineeringPlanPolicy, inspectEngineeringContext, validateEngineeringPlan } from '../lib/engineering-plan.mjs';
+import { assertEngineeringAlignment, engineeringTasks, finalizeEngineeringWorkflow, reviseEngineeringTasks } from '../lib/engineering-planner.mjs';
+import { executionWorkflowTask } from '../lib/workflow-module.mjs';
 
 function spec() { return { title: '工单协作', roles: ['访客：提交并查看本人问题', '处理员：分派及处理问题'], constraints: ['非法操作不得改变记录'],
   stack: { frontend: '原生 HTML/CSS/JavaScript', backend: 'Node.js', storage: 'SQLite' }, requirements: [
@@ -47,6 +49,65 @@ test('confirmed content, original requirements and Chinese role definitions rema
   assert.ok(Object.isFrozen(result) && Object.isFrozen(result.proposal.tasks[0]) && Object.isFrozen(result.requirements));
   original.roles[0] = 'changed'; original.requirements[0].description = 'changed'; raw.tasks[0].description = 'changed';
   assert.equal(result.roleDefinitions[0].text, '访客：提交并查看本人问题'); assert.equal(result.requirements[0].description, '用户提交有效问题'); assert.equal(result.proposal.tasks[0].description, '按实体建立持久化数据');
+});
+
+test('module contracts survive projection and edits while safe write ownership still constrains same-group tasks', () => {
+  const original = spec(), raw = proposal();
+  raw.tasks[1].workflowModule = { group: '工单处理', name: '提交工单' };
+  raw.tasks[2].workflowModule = { group: '工单处理', name: '分派工单' };
+  raw.tasks[2].dependsOn = ['SCHEMA'];
+  const model = finalizeEngineeringWorkflow(draft(raw, original), original);
+  const tasks = engineeringTasks(model);
+  assert.ok(tasks.every(task => task.workflowModule));
+  assert.deepEqual(tasks.slice(1, 3).map(task => task.dependsOn), [['SCHEMA'], ['SCHEMA']]);
+  assert.deepEqual(executionWorkflowTask(tasks[1]).workflowModule, { group: '工单处理', name: '提交工单' });
+  const run = { ...model.binding, id: model.binding.runId, spec: original, engineeringPlan: model, tasks };
+  const edited = structuredClone(tasks);
+  edited[1].workflowModule.name = '新建工单';
+  const revised = reviseEngineeringTasks(run, edited);
+  assert.notEqual(revised.engineeringPlan.hash, model.hash);
+  assert.equal(revised.tasks[1].workflowModule.name, '新建工单');
+  delete edited[2].workflowModule;
+  assert.deepEqual(reviseEngineeringTasks(run, edited).tasks[2].workflowModule, tasks[2].workflowModule);
+
+  raw.tasks[2].workflowModule.name = raw.tasks[1].workflowModule.name;
+  assert.throws(() => draft(raw, original), /模块名称重复/u);
+  raw.tasks[2].workflowModule = { group: '前台资源', name: '读取工单' };
+  raw.tasks[2].writePaths.push('src/app.mjs');
+  assert.throws(() => draft(raw, original), /串行依赖链/u);
+});
+
+test('old engineering drafts retain original proof hashes and never receive modules through alignment', () => {
+  const original = spec(), { hash, ...fresh } = draft(proposal(), original);
+  const body = { ...fresh, policyHash: 'fc0b9a42052fb9a50d4b9523337f3527fb53687c600efb44b9328f3c5bf2f3c9' };
+  const stored = { ...body, hash: contentRevision(body) };
+  const run = { ...stored.binding, id: stored.binding.runId, spec: original, engineeringPlan: stored, tasks: engineeringTasks(stored) };
+  const restored = assertEngineeringAlignment(run);
+  assert.deepEqual(restored, stored);
+  assert.notEqual(restored.hash, hash);
+  assert.ok(restored.proposal.tasks.every(task => !Object.hasOwn(task, 'workflowModule')));
+  assert.ok(run.tasks.every(task => !Object.hasOwn(executionWorkflowTask(task), 'workflowModule')));
+  const corrupt = structuredClone(run);
+  corrupt.engineeringPlan.proposal.tasks[0].title = 'tampering';
+  assert.throws(() => assertEngineeringAlignment(corrupt), { status: 409 });
+});
+
+test('declared requirement dependencies must be supplied by the same module or a reachable ancestor', () => {
+  const original = spec(), raw = proposal();
+  original.requirements[1].dependsOn = ['REQ1'];
+  raw.tasks[0].requirementIds = ['REQ1'];
+  raw.tasks[1].requirementIds = ['REQ1'];
+  raw.tasks[2].requirementIds = ['REQ2'];
+  assert.doesNotThrow(() => draft(raw, original), 'VERIFY inherits REQ1 via both FRONTEND and BACKEND');
+  raw.tasks[2].dependsOn = [];
+  assert.throws(() => draft(raw, original), /任务 FRONTEND 的需求 REQ2 需要前置 REQ1/u);
+  raw.tasks[2].requirementIds.push('REQ1');
+  assert.doesNotThrow(() => draft(raw, original), 'one observable module can implement both related requirements');
+  original.requirements[0].dependsOn = ['REQ2'];
+  assert.throws(() => draft(raw, original), /规格需求依赖存在循环/u);
+  delete original.requirements[0].dependsOn;
+  delete original.requirements[1].dependsOn;
+  assert.doesNotThrow(() => draft(raw, original), 'legacy requirements impose no extra ordering');
 });
 
 test('object key order is canonical, while changed spec content, role order, binding or proposal has a new hash', () => {

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { validatePlanningSpec } from '../lib/planning-review.mjs';
 import {
   analyzeRequirements,
   analyzeWithModel,
@@ -50,6 +51,69 @@ test('不同软件需求生成不同的规格与可追溯开发任务', () => {
       assert.ok(tasks.some(task => task.requirementIds.includes(requirement.id)), `${requirement.id} 应被开发任务覆盖`);
     }
   }
+});
+
+test('本地模块按已确认板块归属，显式数据契约跨组连接，无关同组模块可独立推进', () => {
+  const source = `# 预约系统
+## 功能需求
+### 账号权限
+- 用户可以登录。
+- 用户可以更换头像。
+### 预约服务
+- 用户可以查询时段。
+- 用户可以确认预约。（依赖：R-001、R-003）
+## 验收场景
+- 用户登录、查看时段并确认预约后能读取预约结果。`;
+  const spec = validatePlanningSpec(analyzeRequirements(source), source);
+  const tasks = generateTasks(spec);
+  const [login, avatar, lookup, confirm, release] = tasks;
+  assert.deepEqual(tasks.slice(0, 4).map(task => task.workflowModule.group), ['账号权限', '账号权限', '预约服务', '预约服务']);
+  assert.deepEqual(tasks.slice(0, 4).map(task => task.workflowModule.name), ['登录', '更换头像', '查询时段', '确认预约']);
+  assert.deepEqual(tasks.slice(0, 3).map(task => task.dependsOn), [[], [], []]);
+  assert.deepEqual(confirm.dependsOn, [login.id, lookup.id]);
+  assert.deepEqual(confirm.inputs.slice(1), [login.outputs[0], lookup.outputs[0]]);
+  assert.deepEqual(release.dependsOn, [avatar.id, confirm.id], '只依赖没有被其他模块继承验收的直接成果');
+  assert.deepEqual(release.acceptance, spec.acceptanceScenarios);
+  assert.match(renderTasks(spec, tasks), /功能板块 · 预约服务[\s\S]+模块输出/u);
+  assert.ok(spec.requirements[3].sourceQuote.includes('依赖：R-001、R-003'));
+  assert.ok(!spec.requirements[3].description.includes('依赖：'));
+
+  const invalid = analyzeRequirements(source.replace('R-003）', 'R-099）'));
+  assert.throws(() => validatePlanningSpec(invalid, source.replace('R-003）', 'R-099）')), /已确认的需求编号/u);
+  assert.ok(generateTasks(spec, { workflowVersion: 1 }).every(task => !Object.hasOwn(task, 'workflowModule')));
+});
+
+test('本地模块优先保存显式业务名，未命名时保留业务动作并省略主语套话', () => {
+  const spec = analyzeRequirements(`# 场地预约
+## 功能需求
+### 场地与规则
+- 可预约时段：管理员可设置每天可供预约的时段。
+- 管理员可关闭预约。
+- 用户可以完成签到。`);
+  const tasks = generateTasks(spec);
+  assert.deepEqual(tasks.map(task => task.workflowModule), [
+    { group: '场地与规则', name: '可预约时段' },
+    { group: '场地与规则', name: '关闭预约' },
+    { group: '场地与规则', name: '完成签到' },
+  ]);
+  assert.equal(tasks[0].description, '可预约时段：管理员可设置每天可供预约的时段。');
+  assert.equal(tasks[1].description, '管理员可关闭预约。');
+});
+
+test('同一行仅在每段明确命名时拆成功能，各自保留连续原文和验收', () => {
+  const source = `# 场地预约
+## 功能需求
+### 预约规则
+- 时段目录：会员能查询时段；预约配额：管理员能设置配额。
+- 用户可以申请预约；成功后可查看结果。
+- 取消预约：会员可以取消本人预约；异常：取消已结束时段应被拒绝。`;
+  const spec = validatePlanningSpec(analyzeRequirements(source), source);
+  assert.deepEqual(generateTasks(spec).map(task => task.workflowModule.name), ['时段目录', '预约配额', '申请预约', '取消预约']);
+  assert.deepEqual(spec.requirements.slice(0, 2).map(item => item.sourceQuote), ['时段目录：会员能查询时段', '预约配额：管理员能设置配额。']);
+  assert.match(spec.requirements[0].acceptance[0], /查询时段/u);
+  assert.match(spec.requirements[1].acceptance[0], /设置配额/u);
+  assert.match(spec.requirements[2].description, /成功后可查看结果/u);
+  assert.match(spec.requirements[3].description, /应被拒绝/u);
 });
 
 test('未决范围留在待确认问题，不生成承诺实现的开发任务', () => {

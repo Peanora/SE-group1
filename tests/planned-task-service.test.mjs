@@ -19,14 +19,18 @@ const hash = value => createHash('sha256').update(JSON.stringify(value)).digest(
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 // Measured: the graph took 43s and the full first case 130s; these waits do not change production budgets.
 async function until(read) { const deadline = Date.now() + 90000; for (;;) { const value = await read(); if (value) return value; assert.ok(Date.now() < deadline, 'task service did not reach expected state'); await new Promise(resolve => setTimeout(resolve, 20)); } }
-function planning(unsupported = false) {
+function planning(unsupported = false, modular = false) {
   const source = { filename: 'tasks.md', content: '实现基础、两个独立资源模块及最终集成。' };
   const spec = { title: 'Resources', summary: source.content, goals: ['实现资源'], roles: [], constraints: [], assumptions: [], questions: [], acceptanceScenarios: ['返回资源'], stack: { frontend: 'HTML/CSS/JavaScript', backend: 'Node.js', storage: 'SQLite' }, requirements: [{ id: 'R', title: '资源', description: source.content, sourceQuote: source.content, acceptance: ['返回资源'] }] };
   const tasks = [ { id: 'base', dependsOn: [], writePaths: ['src/app.mjs'] }, { id: 'alpha', dependsOn: ['base'], writePaths: ['src/alpha.mjs'] }, { id: 'beta', dependsOn: ['base'], writePaths: ['src/beta.mjs'] }, { id: 'final', dependsOn: ['alpha', 'beta'], writePaths: ['docs/README.md'] } ]
     .map(item => ({ ...item, title: item.id, description: `实现${item.id}`, requirementIds: ['R'], inputs: ['确认规格'], outputs: ['受控代码'], acceptance: ['固定检查通过'] }));
   if (unsupported) tasks[1].dependsOn = [];
+  if (modular) {
+    for (const task of tasks) task.workflowModule = { group: ['base', 'alpha'].includes(task.id) ? '资源目录' : '资源展示', name: task.id };
+  }
   const specRevision = contentRevision(spec), engineeringPlan = validateEngineeringPlan({ spec, binding: { ...ids, specRevision }, proposal: { version: 1, title: 'Resources plan', summary: source.content, entities: [], routes: [{ id: 'resources', method: 'GET', path: '/resources', roles: [], request: '无正文', response: '资源列表', requirementIds: ['R'], errors: [] }], views: [{ id: 'home', path: '/', title: '资源', requirementIds: ['R'], selectors: [{ testId: 'resources', role: 'list' }] }], tasks } });
   const run = { id: ids.runId, projectId: ids.projectId, workflowVersion: 2, sourceSnapshot: source, sourceRevision: contentRevision(source), sourceGeneration: 0, spec, specRevision, specQuestions: [], engineeringPlan, tasks: engineeringTasks(engineeringPlan), artifacts: [{ name: 'architecture.md', content: '确定工程结构' }], review: { passed: true, issues: [] }, status: 'succeeded', stages: [], approvals: { spec: { revision: specRevision } } };
+  if (modular) run.dependencyExecution = true;
   run.planRevision = planningRevision(run); run.approvals.plan = { revision: run.planRevision, specRevision };
   return { project: { id: ids.projectId, sourceGeneration: 0, currentSourceRevision: run.sourceRevision }, run };
 }
@@ -54,8 +58,8 @@ if (!process.env.TASKFLOW_TASK_SERVICE_CHILD) {
   const { readProjectFiles } = await import('../lib/project-files.mjs');
   const { inspectPlannedArchive } = await import('../lib/planned-archive.mjs');
   const { readWebArchiveEntries } = await import('../lib/web-archive.mjs');
-  async function fixture(t, pause = false, unsupported = false, priced = false) {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'planned-task-service-')), data = planning(unsupported), services = [], gate = deferred(), barrier = deferred(); let verification, service, approved;
+  async function fixture(t, pause = false, unsupported = false, priced = false, modular = false) {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'planned-task-service-')), data = planning(unsupported, modular), services = [], gate = deferred(), barrier = deferred(); let verification, service, approved;
     const f = active = { calls: [], models: 0, simultaneous: 0, gate, root, data };
     const query = sql => { const db = new DatabaseSync(path.join(root, 'planned', 'planned.sqlite'), { readOnly: true }); try { return db.prepare(sql).all(); } finally { db.close(); } };
     const open = async () => {
@@ -85,7 +89,7 @@ if (!process.env.TASKFLOW_TASK_SERVICE_CHILD) {
       async row(id) { return (await service.list(ids)).executions.find(item => item.id === id); }, async done(id) { return until(async () => { const row = await this.row(id); return row && !row.active ? row : null; }); } };
   }
   test('four tasks are reserved once, actual two-way coding/merge completes, full-run cost/history survives two close/reopen downloads', async t => {
-    const f = await fixture(t, false, false, true), started = await f.start(), row = await f.done(started.id);
+    const f = await fixture(t, false, false, true, true), started = await f.start(), row = await f.done(started.id);
     assert.equal(row.accepted, true, row.error || row.checkpoint.message); assert.equal(row.executionMode, 'task_dag'); assert.equal(row.maxConcurrentTasks, 2); assert.equal(row.tasks.length, 4); assert.ok(row.tasks.every(item => item.status === 'completed'));
     assert.equal(row.totalModelCalls, 8); assert.deepEqual(row.usage, { inputTokens: 20, outputTokens: 28 }); assert.equal(f.f.models, 8);
     assert.equal(row.costEstimate.known, true); assert.equal(row.costEstimate.amount, 0.000224);
@@ -114,6 +118,8 @@ if (!process.env.TASKFLOW_TASK_SERVICE_CHILD) {
       assert.deepEqual(restored.reviewHistory, row.reviewHistory);
       const zip = (await f.service.download({ ...ids, executionId: started.id })).buffer, entries = readWebArchiveEntries(zip).entries;
       const history = JSON.parse(entries.get('delivery/task-execution.json').content), summary = JSON.parse(entries.get('delivery/verification.json').content);
+      assert.deepEqual(history.tasks.map(task => task.workflowModule), f.data.run.tasks.map(task => task.workflowModule));
+      assert.deepEqual(restored.tasks.map(task => task.workflowModule), history.tasks.map(task => task.workflowModule));
       assert.equal(history.tasks.length, 4); assert.equal(history.totalModelCalls, 8); assert.equal(summary.modelCalls.length, 8); assert.deepEqual(summary.usage, { inputTokens: 20, outputTokens: 28 });
       assert.deepEqual(restored.costEstimate, row.costEstimate);
       assert.deepEqual(summary.costEstimate, row.costEstimate);
@@ -151,5 +157,15 @@ if (!process.env.TASKFLOW_TASK_SERVICE_CHILD) {
     const f = await fixture(t, false, true), state = await f.service.list(ids); assert.equal(state.capabilities.canStart, false); assert.deepEqual(state.capabilities.supportedProposalIds, []); assert.match(state.capabilities.reason, /统一基础/u);
     await assert.rejects(f.service.start(await f.input()), { code: 'unsupported_task_graph' }); assert.equal(f.f.models, 0); assert.deepEqual(f.f.calls, []);
     assert.equal(f.query('SELECT * FROM budgets').length, 0); assert.equal(f.query('SELECT * FROM executions').length, 0);
+  });
+  test('an approved multi-module design with disconnected roots stays inspectable and cannot start coding', async t => {
+    const f = await fixture(t, false, true, false, true);
+    const result = await f.service.list(ids);
+    assert.equal(result.capabilities.canStart, false);
+    assert.match(result.capabilities.reason, /基础入口/u);
+    await assert.rejects(f.service.start(await f.input()), { code: 'unsupported_task_graph' });
+    assert.equal(f.f.models, 0);
+    assert.equal(f.query('SELECT * FROM executions').length, 0);
+    assert.equal(f.query('SELECT * FROM budgets').length, 0);
   });
 }

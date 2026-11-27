@@ -68,9 +68,45 @@ test('规格批准后双分支共用一次模型设计，真实架构/任务/哈
   await approvePlan(x); await waitFor(() => run.status === 'succeeded');
   const exported = JSON.parse(run.artifacts.find(a => a.name === 'plan.json').content);
   assert.deepEqual(exported.engineeringPlan, run.engineeringPlan);
+  assert.deepEqual(exported.tasks[0].workflowModule, { group: '业务功能', name: '资源契约' });
+  assert.deepEqual(inspectVerificationPlanning(x.store.getPersistedRun(project.id, run.id), project.id, run.id).context.task.tasks[0].workflowModule,
+    exported.tasks[0].workflowModule);
   const publicText = JSON.stringify(run);
   for (const forbidden of [directory, '.private', 'engineering-receipts', config.apiKey, '"content":"{\\"version']) assert.equal(publicText.includes(forbidden), false, forbidden);
   assert.equal(exported.engineeringHistory, undefined);
+});
+
+test('新生成的多模块模型计划默认按图运行，执行准入之外的图也可确认和导出', async t => {
+  for (const sharedEntry of [true, false]) await t.test(sharedEntry ? '有效分叉与汇合' : '多个并列入口只通过规划确认', async t => {
+    const raw = proposal(), template = raw.tasks[0];
+    const module = (id, group, name, path, dependsOn, inputs, outputs) => ({
+      ...template, id, title: name, workflowModule: { group, name }, writePaths: [path], dependsOn, inputs, outputs,
+    });
+    raw.tasks = [
+      module('ENTRY', '访问与入口', '资源访问入口', 'src/app.mjs', [], ['已确认访问契约'], ['资源请求入口']),
+      module('FIND', '资源管理', '资源可用性查询', 'src/resources.mjs', sharedEntry ? ['ENTRY'] : [], ['资源请求入口'], ['可用资源清单']),
+      module('BOOK', '预约服务', '预约确认', 'src/booking.mjs', ['ENTRY'], ['资源请求入口'], ['已确认预约']),
+      module('RESULT', '交付验收', '预约结果展示', 'public/app.js', ['FIND', 'BOOK'], ['可用资源清单', '已确认预约'], ['可观察的预约结果']),
+    ];
+    const x = await setup(t, { fetchImpl: async () => reply(raw) });
+    await x.approve();
+    await waitFor(() => x.run.status === 'awaiting_review');
+    const { run, project, store } = x;
+    assert.equal(run.dependencyExecution, true);
+    assert.equal(run.approvals.plan, null);
+    assert.equal(run.planRevision, planningRevision(run));
+    assert.notEqual(run.planRevision, planningRevision({ ...run, dependencyExecution: undefined }));
+    assert.deepEqual(run.tasks.map(task => task.dependsOn), raw.tasks.map(task => task.dependsOn));
+    await approvePlan(x);
+    await waitFor(() => run.status === 'succeeded');
+    const exported = JSON.parse(run.artifacts.find(artifact => artifact.name === 'plan.json').content);
+    const expectedModules = raw.tasks.map(task => task.workflowModule);
+    assert.deepEqual(exported.tasks.map(task => task.workflowModule), expectedModules);
+    assert.equal(exported.dependencyExecution, true);
+    const confirmed = inspectVerificationPlanning(store.getPersistedRun(project.id, run.id), project.id, run.id);
+    assert.deepEqual(confirmed.context.task.tasks.map(task => task.workflowModule), expectedModules);
+    assert.equal(confirmed.context.task.dependencyExecution, true);
+  });
 });
 
 test('无效草案自动带校验原因重试一次，成功后两阶段继续且保留两次回执', async t => {
@@ -261,7 +297,7 @@ test('显式逐任务计划具有独立哈希、人工重审及可验证的持�
   const tasks = structuredClone(run.tasks);
   const base = tasks[0];
   base.writePaths = base.suggestedFiles = ['src/app.mjs'];
-  tasks.push({ ...base, id: 'INTEGRATE', title: '集成页面', dependsOn: [], writePaths: ['public/app.js'], suggestedFiles: ['public/app.js'] });
+  tasks.push({ ...base, id: 'INTEGRATE', title: '集成页面', workflowModule: { group: '交付验收', name: '集成页面' }, dependsOn: [], writePaths: ['public/app.js'], suggestedFiles: ['public/app.js'] });
   await assert.rejects(action(previousRevision, tasks, { dependencyExecution: true }), error => error.status === 409
     && error.code === 'unsupported_task_graph' && /基础入口/u.test(error.message));
   tasks[1].dependsOn = [base.id];

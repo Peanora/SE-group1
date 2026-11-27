@@ -1,27 +1,11 @@
-const STEPS = ['agent', 'self', 'http', 'browser', 'review', 'checkpoint'];
-const TITLES = {
-  self: '编码自检',
-  http: 'HTTP 验收',
-  browser: 'Edge 验收',
-  review: '审查智能体',
-  checkpoint: '验收检查点',
-  fork: '分叉',
-  join: '汇合',
-};
-const ROLE_HELP = {
-  agent: '按当前计划和已集成的前置结果编写代码。',
-  self: '执行编码自检并核对固定候选。',
-  http: '按已批准清单核对接口及业务结果。',
-  browser: '在 Edge 中验证已批准的可观察业务结果。',
-  review: '在独立测试通过后审查同一候选。',
-  checkpoint: '当前候选完成同版本验收并集成后才放行后继。',
-  fork: '检查点放行后，后继任务仍须各自满足其直接依赖。',
-  join: '任务须等全部直接前置任务通过检查点后才可派发。',
-};
-const ROLE_KIND = {
-  agent: 'agent', self: 'tool', http: 'tool', browser: 'tool',
-  review: 'review', checkpoint: 'checkpoint', fork: 'fork', join: 'join',
-};
+const OPERATIONS = [
+  { step: 'agent', title: '编码智能体', roleHelp: '按当前计划和已集成的前置结果编写代码。' },
+  { step: 'self', title: '编码自检', roleHelp: '执行编码自检并核对固定候选。' },
+  { step: 'http', title: 'HTTP 验收', roleHelp: '按已批准清单核对接口及业务结果。' },
+  { step: 'browser', title: 'Edge 验收', roleHelp: '在 Edge 中验证已批准的可观察业务结果。' },
+  { step: 'review', title: '审查智能体', roleHelp: '在独立测试通过后审查同一候选。' },
+];
+
 const COMMIT = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 
 function orderedRanks(ids, dependencies, dependants, savedOrder) {
@@ -95,7 +79,7 @@ function roleStates(base) {
   const planned = state('planned', '待执行');
   if (!observed) {
     return {
-      agent: base.gateState === 'planned' ? planned : state('waiting', '等待派发'),
+      agent: (base.gateState ?? 'planned') === 'planned' ? planned : state('waiting', '等待派发'),
       self: planned, http: planned, browser: planned, review: planned,
     };
   }
@@ -126,139 +110,114 @@ function roleStates(base) {
   };
 }
 
-function rankTitle(rank, count, last, hasJoin, hasUnresolved) {
-  if (hasUnresolved) return '任务关系待核对';
-  if (rank === 0) return count > 1 ? '任务入口 · 多个分支' : '任务入口';
-  if (last && hasJoin) return '交付汇合';
-  if (hasJoin) return '依赖汇合';
-  if (count > 1) return '并行分支';
-  return last ? '任务收尾' : '任务工作流';
+function label(value) {
+  return typeof value === 'string' ? value.trim().replace(/\s+/gu, ' ') : '';
 }
 
-/** Project task and evidence data to a vertical, editable workflow without changing any inputs. */
+function orderWithin(known, saved) {
+  const remaining = new Set(known);
+  const ordered = Array.isArray(saved) ? saved.filter(id => remaining.delete(id)) : [];
+  return [...ordered, ...remaining];
+}
+
+/** Project real tasks into horizontal depth columns and stable functional lanes. */
 export function projectWorkflow({ tasks, graph, narrow = false, nodes, edges, order }) {
-  const ids = [...new Set(tasks.map(task => task.id))];
-  const known = new Set(ids);
-  const dependencies = new Map(ids.map(id => [id, [...new Set(graph.dependencies.get(id) ?? [])].filter(parent => known.has(parent))]));
+  const definitions = new Map(tasks.map(task => [task.id, task]));
+  const ids = [...definitions.keys()];
+  const bases = new Map(nodes.map(node => [node.id, node]));
+  const dependencies = new Map(ids.map(id => [id, [...new Set(graph.dependencies.get(id) ?? [])].filter(parent => definitions.has(parent))]));
   const dependants = new Map(ids.map(id => [id, []]));
   for (const [id, parents] of dependencies) {
     for (const parent of parents) dependants.get(parent).push(id);
   }
-  const { orders, ranks, unresolved } = orderedRanks(ids, dependencies, dependants, order);
-  const bases = new Map(nodes.map(node => [node.id, node]));
-  const key = (...parts) => JSON.stringify(parts);
-  const trueEdges = new Map(edges.map(edge => [key(edge.source, edge.target), edge]));
-  const idPool = new Set(known);
-  function identity(step, ...parts) {
-    // Keep generated IDs safe for selectors and distinct from any real task ID.
-    const encoded = key(...parts).replace(/[^a-zA-Z0-9-]/gu, char => `_${char.codePointAt(0).toString(16)}_`);
-    let id = `workflow-${step}-${encoded}`;
-    while (idPool.has(id)) id += '-';
-    idPool.add(id);
-    return id;
-  }
-  const byTask = new Map(ids.map(id => [id, Object.fromEntries([
-    ['agent', id],
-    ...STEPS.slice(1).map(step => [step, identity(step, id)]),
-    ...(dependants.get(id).length > 1 ? [['fork', identity('fork', id)]] : []),
-    ...(dependencies.get(id).length > 1 ? [['join', identity('join', id)]] : []),
-  ])]));
+  const { orders: depthOrder, ranks, unresolved } = orderedRanks(ids, dependencies, dependants, Array.isArray(order) ? order : order?.ranks);
+  const terminals = ids.filter(id => dependants.get(id).length === 0);
+  const deliveryTask = unresolved.size === 0 && terminals.length === 1 ? terminals[0] : undefined;
+  const groupByTask = new Map(ids.map(id => {
+    const task = definitions.get(id);
+    return [id, label(task.workflowModule?.group) || label(task.category) || '工程开发'];
+  }));
+  const laneOrder = orderWithin(depthOrder.flat().map(id => groupByTask.get(id)), order?.lanes);
+  const nodeWidth = narrow ? 182 : 196, nodeHeight = 78;
+  const columnGap = narrow ? 54 : 52, columnStep = nodeWidth + columnGap;
+  const padding = narrow ? 22 : 24, laneGap = 9, stackGap = 9, headingHeight = 26;
+  const width = Math.max(320, padding * 2 + (depthOrder.length ? depthOrder.length * columnStep - columnGap : 0));
+  const rankLeft = rank => padding + rank * columnStep;
+  const modules = [], groups = [];
+  let top = 36;
 
-  const nodeWidth = narrow ? 212 : 220, nodeHeight = 72;
-  const laneGap = narrow ? 34 : 54, branchGap = narrow ? 14 : 16;
-  const stepWidth = (nodeWidth - branchGap) / 2;
-  const padding = narrow ? 48 : 54, topPadding = 18;
-  const laneStep = nodeWidth + laneGap, junctionWidth = 124, junctionHeight = 30;
-  const maximumSiblings = Math.max(1, ...orders.map(row => row.length));
-  const width = Math.max(narrow ? 318 : 520, padding * 2 + nodeWidth + (maximumSiblings - 1) * laneStep);
-  const visualNodes = [], visualEdges = [], groups = [];
-  const byVisualId = new Map();
-  let top = topPadding;
-  orders.forEach((row, rank) => {
-    const hasJoin = row.some(id => byTask.get(id).join !== undefined);
-    const hasFork = row.some(id => byTask.get(id).fork !== undefined);
-    const movableSiblings = row.filter(id => !unresolved.has(id)).length > 1;
-    const headingHeight = 38, joinSpace = hasJoin ? junctionHeight + 10 : 0;
-    const agentY = top + headingHeight + joinSpace;
-    const selfY = agentY + nodeHeight + 10;
-    const checksY = selfY + 36 + 14;
-    const reviewY = checksY + 40 + 14;
-    const checkpointY = reviewY + 40 + 10;
-    const forkY = checkpointY + 40 + 10;
-    const bottom = hasFork ? forkY + junctionHeight + 12 : checkpointY + 40 + 12;
-    groups.push({ rank, title: rankTitle(rank, row.length, rank === orders.length - 1, hasJoin, row.some(id => unresolved.has(id))), top,
-      height: bottom - top, left: 12, width: width - 24, count: row.length });
-    row.forEach((id, index) => {
-      const base = bases.get(id) ?? { id, title: id, gateState: 'planned', gateLabel: '验收通过后放行' };
-      const parts = byTask.get(id), evidence = roleStates(base);
+  laneOrder.forEach((group, rank) => {
+    const byDepth = depthOrder.map(row => row.filter(id => groupByTask.get(id) === group));
+    const slots = Math.max(1, ...byDepth.map(row => row.length));
+    const height = headingHeight + slots * nodeHeight + (slots - 1) * stackGap + 10;
+    groups.push({ id: group, rank, title: group, top, height, left: 10, width: width - 20, count: byDepth.flat().length });
+    byDepth.forEach((row, depth) => row.forEach((id, slot) => {
+      const task = definitions.get(id), base = bases.get(id) ?? {};
       const parents = dependencies.get(id), children = dependants.get(id);
-      const x = (width - nodeWidth) / 2 + (index - (row.length - 1) / 2) * laneStep;
-      const middle = x + (nodeWidth - junctionWidth) / 2;
-      const internalRelation = base.className?.includes('relation-upstream') ? 'upstream'
-        : base.className?.includes('relation-downstream') ? 'downstream' : 'muted';
-      const relationClasses = (base.className ?? '').split(/\s+/u).filter(value => value.startsWith('relation-')).join(' ');
-      function add(step, left, y, w, h, title, label, meta, evidenceState) {
-        const node = {
-          id: parts[step], taskId: id, kind: ROLE_KIND[step], step, role: step === 'agent' ? 'coding' : step,
-          title, label, meta, roleHelp: ROLE_HELP[step], position: { x: left, y }, width: w, height: h,
-          rank, movable: step === 'agent' && movableSiblings && !unresolved.has(id), selected: step === 'agent' && Boolean(base.selected),
-          className: step === 'agent' ? base.className ?? '' : relationClasses, ...evidenceState,
-        };
-        if (step === 'agent') node.topology = base.topology;
-        visualNodes.push(node);
-        byVisualId.set(node.id, node);
-      }
-      if (parts.join !== undefined) {
-        add('join', middle, top + headingHeight, junctionWidth, junctionHeight, TITLES.join, `${parents.length} 项前置`, '', joinState(parents, bases));
-      }
-      add('agent', x, agentY, nodeWidth, nodeHeight, base.title, base.label ?? '', base.meta ?? '', evidence.agent);
-      add('self', x, selfY, nodeWidth, 36, TITLES.self, evidence.self.gateLabel, '', evidence.self);
-      add('http', x, checksY, stepWidth, 40, TITLES.http, evidence.http.gateLabel, '', evidence.http);
-      add('browser', x + stepWidth + branchGap, checksY, stepWidth, 40, TITLES.browser, evidence.browser.gateLabel, '', evidence.browser);
-      add('review', x, reviewY, nodeWidth, 40, TITLES.review, evidence.review.gateLabel, '', evidence.review);
-      add('checkpoint', x, checkpointY, nodeWidth, 40, TITLES.checkpoint, base.gateLabel ?? '验收通过后放行', '',
-        state(base.gateState ?? 'planned', base.gateLabel ?? '验收通过后放行'));
-      if (parts.fork !== undefined) {
-        add('fork', middle, forkY, junctionWidth, junctionHeight, TITLES.fork, `${children.length} 项后继`, '', forkState(base.gateState));
-      }
-      const connect = (from, to, caption = '') => visualEdges.push({
-        id: identity('internal', id, from, to), source: parts[from], target: parts[to],
-        caption, relation: internalRelation, channel: null, internal: true, sourceSide: 'bottom', targetSide: 'top',
+      const evidence = roleStates(base);
+      const gateState = base.gateState ?? 'planned';
+      const gateLabel = base.gateLabel ?? '验收通过后放行';
+      const junction = children.length > 1 || parents.length > 1;
+      const delivery = id === deliveryTask;
+      const blocked = gateState !== 'passed'
+        && (base.observed?.status === 'blocked' || parents.some(parent => bases.get(parent)?.gateState === 'failed'));
+      modules.push({
+        id, taskId: id, kind: 'agent', step: 'agent', role: 'coding', roleLabel: '编码智能体',
+        title: label(task.workflowModule?.name) || task.title || base.title || id,
+        label: base.label ?? '', meta: base.meta ?? '', roleHelp: OPERATIONS[0].roleHelp,
+        group, rank: depth, movable: !unresolved.has(id) && depthOrder[depth].some(other => other !== id && !unresolved.has(other)),
+        position: { x: rankLeft(depth), y: top + headingHeight + slot * (nodeHeight + stackGap) },
+        width: nodeWidth, height: nodeHeight, selected: Boolean(base.selected), className: base.className ?? '',
+        gateState, gateLabel, reviewState: evidence.review.gateState, reviewLabel: evidence.review.gateLabel,
+        operations: OPERATIONS.map(operation => ({ ...operation, ...evidence[operation.step] })),
+        ...(parents.length > 1 ? { join: { count: parents.length, ...joinState(parents, bases) } } : {}),
+        ...(children.length > 1 ? { fork: { count: children.length, ...forkState(gateState) } } : {}),
+        ...(junction || delivery || blocked || gateState === 'failed' ? { checkpoint: { gateState, gateLabel, delivery, blocked } } : {}),
       });
-      if (parts.join !== undefined) connect('join', 'agent');
-      connect('agent', 'self');
-      connect('self', 'http');
-      connect('self', 'browser');
-      connect('http', 'review');
-      connect('browser', 'review');
-      connect('review', 'checkpoint');
-      if (parts.fork !== undefined) connect('checkpoint', 'fork');
-    });
-    top = bottom + 16;
+    }));
+    top += height + laneGap;
   });
-  const branchOrdinals = new Map();
-  for (const [target, parents] of dependencies) {
-    parents.forEach((source, index) => {
-      const visualSource = byTask.get(source).fork ?? byTask.get(source).checkpoint;
-      const visualTarget = byTask.get(target).join ?? byTask.get(target).agent;
-      const original = trueEdges.get(key(source, target));
-      const from = byVisualId.get(visualSource), to = byVisualId.get(visualTarget);
-      const adjacent = to.rank === from.rank + 1;
-      const left = from.position.x + from.width / 2 + to.position.x + to.width / 2 <= width;
-      const rail = 20 + (index % 3) * 6;
-      const channel = adjacent ? null : left ? rail : width - rail;
-      const branching = from.step === 'fork';
-      const incoming = to.step === 'join';
-      const ordinal = branching ? (branchOrdinals.get(source) ?? 0) + 1 : 0;
-      if (branching) branchOrdinals.set(source, ordinal);
-      const caption = branching ? `分支 ${ordinal}${incoming ? ' · 汇入' : ''}`
-        : incoming ? '汇入' : from.gateState === 'passed' ? '已放行' : '验收通过后';
-      visualEdges.push({
-        id: identity('dependency', source, target), source: visualSource, target: visualTarget,
-        fromTask: source, toTask: target, caption: original?.caption || caption,
-        relation: original?.relation ?? 'muted', channel, internal: false, sourceSide: 'bottom', targetSide: 'top',
-      });
-    });
-  }
-  return { nodes: visualNodes, edges: visualEdges, groups, width, height: Math.max(348, top), nodeWidth, nodeHeight, ranks, orders };
+
+  const byId = new Map(modules.map(node => [node.id, node]));
+  const laneById = new Map(groups.map(group => [group.id, group]));
+  const orders = depthOrder.map(row => [...row].sort((a, b) => byId.get(a).position.y - byId.get(b).position.y));
+  const columns = orders.map((row, rank) => ({
+    rank, title: `第 ${rank + 1} 层`, left: rankLeft(rank), width: nodeWidth, count: row.length,
+  }));
+  const keys = (source, target) => JSON.stringify([source, target]);
+  const originalEdges = new Map(edges.map(edge => [keys(edge.source, edge.target), edge]));
+  const idsInUse = new Set(ids);
+  const visualEdges = [...dependencies].flatMap(([target, parents]) => parents.map((source, index) => {
+    const from = byId.get(source), to = byId.get(target);
+    const original = originalEdges.get(keys(source, target));
+    const branch = from.fork ? dependants.get(source).indexOf(target) + 1 : 0;
+    const pendingTopology = unresolved.has(source) || unresolved.has(target);
+    const caption = pendingTopology ? '依赖待核对' : branch ? `分支 ${branch}${to.join ? ' · 汇入' : ''}`
+      : to.join ? '汇入' : from.gateState === 'passed' ? '已放行' : from.gateState === 'failed' ? '未放行' : '';
+    const lane = laneById.get(from.group);
+    const channel = to.rank === from.rank + 1 ? null : lane.top + lane.height + 2 + index % 3 * 2;
+    let id = 'workflow-dependency-' + keys(source, target).replace(/[^a-zA-Z0-9-]/gu, character => `_${character.codePointAt(0).toString(16)}_`);
+    while (idsInUse.has(id)) id += '-';
+    idsInUse.add(id);
+    return {
+      id, source, target, fromTask: source, toTask: target, caption: original?.caption || caption,
+      relation: original?.relation ?? 'muted', channel, internal: false, sourceSide: 'right', targetSide: 'left',
+    };
+  }));
+  return { nodes: modules, edges: visualEdges, groups, columns, width, height: Math.max(260, top), nodeWidth, nodeHeight, ranks, orders, laneOrder };
+}
+
+/** Swap same-depth modules, preserving lane ownership and dependency depth. */
+export function reorderWorkflow(layout, taskId, targetId) {
+  if (taskId === targetId) return null;
+  const source = layout.nodes.find(node => node.id === taskId);
+  const target = layout.nodes.find(node => node.id === targetId);
+  if (!source?.movable || !target?.movable || source.rank !== target.rank) return null;
+  const ranks = layout.orders.map(row => [...row]);
+  const lanes = [...layout.laneOrder];
+  const order = source.group === target.group ? ranks[source.rank] : lanes;
+  const from = order.indexOf(source.group === target.group ? taskId : source.group);
+  const to = order.indexOf(source.group === target.group ? targetId : target.group);
+  [order[from], order[to]] = [order[to], order[from]];
+  return { lanes, ranks };
 }

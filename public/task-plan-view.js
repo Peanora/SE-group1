@@ -79,6 +79,7 @@ function taskErrors(tasks) {
     if (id && seen.has(id)) errors.add(`任务编号 ${id} 重复，请为任务使用不同编号。`);
     seen.add(id);
     if (typeof task.title !== 'string' || !task.title.trim()) errors.add(`${label}需要填写标题。`);
+    if (task.workflowModule && (!identifier(task.workflowModule.group) || !identifier(task.workflowModule.name))) errors.add(`${label}需要同时填写功能板块和模块名称。`);
     if (typeof task.description !== 'string' || !task.description.trim()) errors.add(`${label}需要填写描述。`);
     if (!Array.isArray(task.acceptance) || !task.acceptance.length || task.acceptance.some(value => typeof value !== 'string' || !value.trim())) errors.add(`${label}需要至少一条非空验收条件。`);
     if (!Array.isArray(task.dependsOn)) {
@@ -128,6 +129,10 @@ export function summarizeTaskChanges(savedTasks, draftTasks, { includeWritePaths
       if (comparable(before?.[key], unordered) === comparable(after?.[key], unordered)) return [];
       return [{ key, label, before: before?.[key], after: after?.[key] }];
     });
+    for (const [key, label] of [['group', '功能板块'], ['name', '模块名称']]) {
+      const from = before?.workflowModule?.[key], to = after?.workflowModule?.[key];
+      if (identifier(from) !== identifier(to)) fields.push({ key: `workflowModule.${key}`, label, before: from, after: to });
+    }
     if (fields.length) changed.push({ id, title: after?.title || before?.title || id, fields });
   }
   const direct = new Set(changed.map(task => task.id));

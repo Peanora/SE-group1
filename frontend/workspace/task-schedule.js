@@ -17,7 +17,7 @@ export function renderTaskSchedule({ key, tasks, selected, simulation, preview, 
 
     return `<tr role="row" data-current="${picked}">
       <th role="rowheader" scope="row"><button type="button" class="task-schedule-pick" data-task="${escape(task.id)}" data-task-schedule data-focus-key="task-schedule-${escape(task.id)}" aria-pressed="${picked}" tabindex="${picked ? 0 : -1}">
-        <span>${escape(task.id)}</span><strong>${escape(task.title || task.id)}</strong>
+        <span>${escape(task.id)}${task.workflowModule?.group ? ' · ' + escape(task.workflowModule.group) : ''}</span><strong>${escape(task.workflowModule?.name || task.title || task.id)}</strong>
       </button></th>
       <td role="cell"><span class="task-schedule-label" aria-hidden="true">直接前置</span>${identifiers(task.dependsOn)}</td>
       <td role="cell"><span class="task-schedule-label" aria-hidden="true">关联需求</span>${identifiers(task.requirementIds)}</td>
