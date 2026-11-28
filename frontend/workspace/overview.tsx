@@ -3,6 +3,7 @@ import {
   Settings2, Workflow,
 } from 'lucide-react';
 import { Button } from '../components/button';
+import { NextStepPanel } from './tree-nav';
 
 export function ProjectHeading() {
   return (
@@ -29,12 +30,21 @@ export function ProjectHeading() {
 function ProjectLaunch() {
   return (
     <section id="onboarding" className="studio-launch" aria-labelledby="onboarding-title">
-      <div className="studio-launch-icon"><FileUp size={23} aria-hidden="true" /></div>
-      <h2 id="onboarding-title">从一份软件需求开始</h2>
-      <p>导入 Markdown、TXT、Word 文档，或粘贴需求正文。</p>
-      <div className="studio-launch-actions">
-        <Button id="onboarding-import"><FileUp size={16} aria-hidden="true" />导入需求文档</Button>
-        <button type="button" className="text-button" id="onboarding-sample">载入示例需求</button>
+      <div className="studio-launch-visual" aria-hidden="true"><span /><span /><span /></div>
+      <div className="studio-launch-copy">
+        <span className="studio-launch-eyebrow">快速开始</span>
+        <div className="studio-launch-icon"><FileUp size={23} aria-hidden="true" /></div>
+        <h2 id="onboarding-title">从一份软件需求开始</h2>
+        <p>导入 Markdown、TXT、Word 文档，或粘贴需求正文。</p>
+        <div className="studio-launch-actions">
+          <Button id="onboarding-import"><FileUp size={16} aria-hidden="true" />导入需求文档</Button>
+          <button type="button" className="text-button" id="onboarding-sample">载入示例需求</button>
+        </div>
+        <ol className="studio-launch-steps" aria-label="使用步骤">
+          <li><b>1</b>创建项目</li>
+          <li><b>2</b>编排任务</li>
+          <li><b>3</b>确认并交付</li>
+        </ol>
       </div>
     </section>
   );
@@ -94,6 +104,7 @@ function RunControls() {
 export function RunInspector() {
   return (
     <aside className="studio-inspector" aria-label="运行操作与历史">
+      <NextStepPanel />
       <ProjectLaunch />
       <section id="workspace-context" className="workspace-context studio-current" aria-label="当前进度与下一步" hidden>
         <div className="studio-current-brief">
