@@ -153,8 +153,14 @@
 .tf-workbench .studio-surface .task-orchestration-root :is(.task-graph-zone, .task-detail, .task-orchestration-group) { border-radius: 5px; }
 .tf-workbench .studio-surface .task-orchestration-root .task-orchestration-group { background: #f4f7fb; border-inline-start: 3px solid var(--surface-blue); }
 .tf-workbench .studio-surface .task-orchestration-root .task-graph-zone {
-  --task-board: #f1f5f8; --task-board-dot: #cbd6df;
+  --task-board: #f0f4ef; --task-board-dot: #c6d3c7; --task-line: #ced9cf;
+  --task-accent: #23684f; --task-accent-soft: #e3efe6;
+  border-radius: 12px;
 }
+.tf-workbench .studio-surface .task-workspace[data-graph-workspace] { grid-template-columns: minmax(0, 1fr); }
+.task-workspace[data-graph-workspace] > .task-detail[hidden] { display: none; }
+.tf-workbench .task-workspace[data-graph-workspace] .task-graph-scroll { block-size: clamp(350px, 58vh, 670px); }
+.task-expanded-slot { position: absolute; z-index: 4; transform-origin: top left; }
 .tf-workbench .studio-surface .task-orchestration-root .task-detail {
   padding: 16px; background: #fff; border-top: 3px solid var(--surface-blue); font-size: 14px;
 }
@@ -171,7 +177,6 @@
 .studio-surface .task-orchestration-root .task-detail .task-source-quote {
   color: #394d64; background: var(--surface-canvas); border-inline-start-color: #8ba2bc;
 }
-.tf-workbench .studio-surface .task-orchestration-root .dev-task { border-radius: 4px; }
 .studio-surface .sc-process-heading h2, .studio-surface .planned-execution .pe-head h2 { font: 660 18px/1.35 var(--display-type); }
 .studio-surface .source-changes .sc-inspector { padding: 15px; border: 1px solid var(--surface-line); border-top: 3px solid var(--surface-blue); border-radius: 4px; background: var(--surface-canvas); }
 .studio-surface .source-changes :is(.sc-publish-card, .sc-feature, .sc-current-card, .sc-draft-preview, .sc-change-detail, .sc-full-editor),

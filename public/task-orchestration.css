@@ -940,24 +940,6 @@
   stroke-dasharray: 2 5;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-edge[data-flow-motion="selected"],
-  .task-orchestration-root [data-focus-relations="true"] .task-graph-scroll[data-plan-canvas]
-    .task-edge[data-gate-state="planned"]:is(.relation-upstream, .relation-downstream) {
-    stroke-dasharray: 6 4;
-    animation: task-dependency-flow 2s linear infinite;
-  }
-
-  .task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-edge[data-flow-motion="active"] {
-    stroke-dasharray: 6 4;
-    animation: task-dependency-flow 1.45s linear infinite;
-  }
-
-  @keyframes task-dependency-flow {
-    to { stroke-dashoffset: -20; }
-  }
-}
-
 .task-orchestration-root .task-graph-scroll[data-plan-canvas] .dev-task.relation-upstream {
   box-shadow: inset 2px 0 var(--task-upstream), 0 3px 8px #23375915;
 }

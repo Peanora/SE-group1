@@ -90,14 +90,6 @@ async function panOverflowingCanvas(page, canvas) {
 const taskCard = (canvas, id) => canvas.locator(`.dev-task[data-task="${id}"]`);
 const dependency = (canvas, from, to) => canvas.locator(`.task-edge[data-from="${from}"][data-to="${to}"]`);
 
-async function layoutOf(locator) {
-  return locator.evaluate(element => {
-    const graph = element.closest('.task-graph-sizer').getBoundingClientRect();
-    const box = element.getBoundingClientRect();
-    return { x: box.x - graph.x, y: box.y - graph.y, width: box.width, height: box.height };
-  });
-}
-
 function assertSameSlot(actual, expected) {
   assert.ok(Math.abs(actual.x - expected.x) < 1 && Math.abs(actual.y - expected.y) < 1,
     `expected slot ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`);
@@ -120,7 +112,7 @@ async function waitForBranchOrder(page, upper, lower) {
   await page.waitForFunction(([upper, lower]) => {
     const before = document.querySelector(`.dev-task[data-task="${upper}"]`)?.getBoundingClientRect();
     const after = document.querySelector(`.dev-task[data-task="${lower}"]`)?.getBoundingClientRect();
-    return before && after && before.bottom <= after.top;
+    return before && after && before.right <= after.left + 1;
   }, [upper, lower], { timeout: 5000 });
 }
 
@@ -147,8 +139,10 @@ for (const width of [1440, 390]) test(`真实 Edge ${width}px：开发任务依�
   const control = name => root.getByRole('button', { name, exact: true });
   const task = taskCard(root, 'B');
   const noPageOverflow = () => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1);
+  assert.equal(await root.locator('.task-expanded-flow').count(), 0);
   await task.click();
   assert.equal(await task.getAttribute('aria-pressed'), 'true');
+  assert.equal(await root.locator('.task-expanded-flow [data-expanded-op]').count(), 8);
   const inspector = root.locator('.task-detail');
   assert.equal(await task.locator('.dev-task-title').innerText(), moduleNames.B);
   assert.equal(await inspector.getAttribute('data-inspected-module'), 'B');
@@ -221,32 +215,26 @@ for (const width of [1440, 390]) test(`真实 Edge ${width}px：开发任务依�
   assert.equal(await task.locator('[data-module-checkpoint]').count(), 0, '普通模块的校验细节由详情展示');
 
   await firstTask.click();
+  await root.locator('[data-collapse-module="A"]').click();
   await canvas.scrollIntoViewIfNeeded();
-  const start = await layoutOf(task), other = await layoutOf(sibling);
-  assert.ok(Math.abs(start.x - other.x) < 1 && start.y + start.height <= other.y, '同深度的分支保持相同列且不重叠');
-  assert.ok((await layoutOf(firstTask)).x < start.x && start.x < (await layoutOf(next)).x, '任务按真实前置关系从左到右排布');
+  const position = id => navigator.locator(`[data-map-task="${id}"]`).evaluate(el => ({ x: Number(el.getAttribute('x')), y: Number(el.getAttribute('y')) }));
+  const start = await position('B'), other = await position('C');
+  assert.ok(start.x < other.x && start.y === other.y, '同一功能板块的两个分支横向并列');
+  assert.ok((await position('A')).y < start.y && start.y < (await position('D')).y, '功能板块纵向排列');
 
   const edge = dependency(canvas, 'A', 'B');
   await edge.waitFor({ state: 'attached' });
   const startPath = await edge.getAttribute('d');
-  const mapTaskY = await navigator.locator('[data-map-task="B"]').getAttribute('y');
-  const grip = task.locator('.dev-task-grip');
-  const originGrip = await centerOf(grip), otherCenter = await centerOf(sibling), nextCenter = await centerOf(next);
-  await dragPointer(page, originGrip, { x: nextCenter.x, y: originGrip.y });
-  assertSameSlot(await layoutOf(task), start);
-  assertSameSlot(await layoutOf(sibling), other);
-  assert.deepEqual(await businessEdges(), savedEdges, '尝试跨深度只保留原有依赖');
-
-  await dragPointer(page, await centerOf(grip), { x: originGrip.x, y: otherCenter.y });
-  await waitForBranchOrder(page, 'C', 'B');
-  assertSameSlot(await layoutOf(task), other);
-  assertSameSlot(await layoutOf(sibling), start);
-  assert.equal(await task.getAttribute('data-workflow-group'), groups.B, '换位不改变模块所属板块');
-  assert.notEqual(await edge.getAttribute('d'), startPath, '业务连线跟随换位更新');
-  await page.waitForFunction(y => {
-    const marker = document.querySelector('[data-map-task="B"]');
-    return marker && marker.getAttribute('y') !== y;
-  }, mapTaskY);
+  const dragStart = await centerOf(task);
+  const scale = Number.parseFloat(await zoom.innerText()) / 100;
+  await dragPointer(page, dragStart, { x: dragStart.x + Math.max(8, 36 * scale), y: dragStart.y + Math.max(3, 14 * scale) });
+  await page.waitForFunction(x => Number(document.querySelector('[data-map-task="B"]').getAttribute('x')) !== x, start.x);
+  const moved = await position('B');
+  assert.notEqual(moved.y, start.y, '节点可以在两个方向调整位置');
+  assertSameSlot(await position('C'), other);
+  assert.equal(await task.getAttribute('data-workflow-group'), groups.B);
+  assert.notEqual(await edge.getAttribute('d'), startPath, '连线和小地图跟随拖动');
+  assert.equal(await root.locator('.task-expanded-flow').count(), 0, '拖动不会展开详情');
   assert.deepEqual(await businessEdges(), savedEdges);
   assert.deepEqual(run.tasks, originalTasks);
   assert.equal(await firstTask.getAttribute('aria-pressed'), 'true', '拖动未触发任务点选');
@@ -255,20 +243,21 @@ for (const width of [1440, 390]) test(`真实 Edge ${width}px：开发任务依�
   await page.getByRole('tab', { name: '计划清单' }).click();
   assert.equal(await root.locator('[data-task-schedule][data-task="B"]').getAttribute('aria-pressed'), 'true');
   await page.locator('#records-tab-tasks').click();
-  await waitForBranchOrder(page, 'C', 'B');
+  if (await root.locator('[data-collapse-module="B"]').count()) await root.locator('[data-collapse-module="B"]').click();
+  assertSameSlot(await position('B'), moved);
   await page.reload();
   await page.getByRole('tab', { name: /任务编排/ }).click();
-  await waitForBranchOrder(page, 'C', 'B');
+  await navigator.locator('[data-map-task="B"]').waitFor({ state: 'attached' });
   await control('适应画布').click();
-  assertSameSlot(await layoutOf(task), other);
+  assertSameSlot(await position('B'), moved);
   assert.deepEqual(await businessEdges(), savedEdges);
   await control('恢复节点位置').click();
   await waitForBranchOrder(page, 'B', 'C');
-  assertSameSlot(await layoutOf(task), start);
-  assertSameSlot(await layoutOf(sibling), other);
+  assertSameSlot(await position('B'), start);
+  assertSameSlot(await position('C'), other);
   await task.press('Alt+ArrowDown');
   await waitForBranchOrder(page, 'C', 'B');
-  assertSameSlot(await layoutOf(task), other);
+  assertSameSlot(await position('B'), other);
   await task.press('Alt+ArrowUp');
   await waitForBranchOrder(page, 'B', 'C');
   await task.press('End');
@@ -359,10 +348,19 @@ test('真实 Edge 390px：画布修改直接依赖，保存并重新确认按图
   assert.equal(await edge('B', 'D').count(), 1);
   assert.equal(await edge('C', 'D').count(), 1);
   assert.equal(await edge('D', 'E').count(), 1);
-  assert.equal(await edge('A', 'B').evaluate(node => getComputedStyle(node).animationName), 'task-dependency-flow');
-  assert.equal(await edge('D', 'E').evaluate(node => getComputedStyle(node).animationName), 'none');
-  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const pulse = canvas.locator('.task-edge-motion[data-from="A"][data-to="B"]');
   assert.equal(await edge('A', 'B').evaluate(node => getComputedStyle(node).animationName), 'none');
+  await pulse.scrollIntoViewIfNeeded();
+  const phase = await pulse.evaluate(node => getComputedStyle(node).strokeDashoffset);
+  await page.waitForFunction(before => {
+    const path = document.querySelector('.task-edge-motion[data-from="A"][data-to="B"]');
+    return path && getComputedStyle(path).strokeDashoffset !== before;
+  }, phase);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  // A straight SVG path can have zero geometric width while its stroke is painted.
+  assert.ok(await edge('A', 'B').evaluate(path => path.getTotalLength() > 0 &&
+    getComputedStyle(path).stroke !== 'none' && getComputedStyle(path).display !== 'none' && getComputedStyle(path).markerEnd !== 'none'));
+  assert.equal(await pulse.evaluate(node => getComputedStyle(node).animationName), 'none');
 
   await control('适应画布').click();
   await canvas.scrollIntoViewIfNeeded();

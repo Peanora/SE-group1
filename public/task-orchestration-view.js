@@ -1,8 +1,10 @@
 import { projectWorkflow, reorderWorkflow } from './task-workflow-layout.js';
 import { executionVersionEvidence } from './planned-execution.js';
 import { projectTaskReview, renderTaskReview } from './task-review-flow.js';
+import { renderExpandedFlow, bindExpandedFlow } from './task-expanded-flow.js';
 
 const ORDER_KEY = 'taskflow.workflow.lanes.v1';
+const POSITION_KEY = 'taskflow.workflow.positions.v1';
 const zoomLabel = zoom => `${Number((zoom * 100).toFixed(zoom < .01 ? 2 : zoom < .1 ? 1 : 0))}%`;
 const sizerStyle = (width, height, zoom) => `width:${Math.ceil(width * zoom)}px;height:${Math.ceil(height * zoom)}px`;
 
@@ -34,26 +36,35 @@ function reached(graph, root) {
 
 function fallbackCanvas(model, escape) {
   const byId = new Map(model.nodes.map(node => [node.id, node]));
+  function port(node, side) {
+    const { x, y } = node.position, { width: w, height: h } = node;
+    if (side === 'top' || side === 'bottom') return [x + w / 2, y + (side === 'bottom' ? h : 0)];
+    return [x + (side === 'right' ? w : 0), y + h / 2];
+  }
   const paths = model.edges.map(edge => {
     const from = byId.get(edge.source), to = byId.get(edge.target);
-    const x1 = from.position.x + from.width, x2 = to.position.x;
-    const y1 = from.position.y + from.height - 13.5, y2 = to.position.y + (to.height - 33) / 2;
-    const route = edge.channel == null ? `H${(x1 + x2) / 2} V${y2}` : `h8 V${edge.channel} H${x2 - 8} V${y2}`;
-    return `<path d="M${x1} ${y1} ${route} H${x2}" fill="none" stroke="currentColor" marker-end="url(#taskflow-end)"/>`;
+    const [x1, y1] = port(from, edge.sourceSide), [x2, y2] = port(to, edge.targetSide);
+    const route = edge.viaX != null ? `V${edge.channel} H${edge.viaX} V${edge.targetChannel} H${x2}`
+      : edge.channel != null ? `V${edge.channel} H${x2}` : `H${(x1+x2)/2} V${y2}`;
+    return `<path d="M${x1} ${y1} ${route} L${x2} ${y2}" fill="none" stroke="currentColor" marker-end="url(#taskflow-end)"/>`;
   });
   const cards = model.nodes.map(node => {
     const { x, y } = node.position;
     const agent = node.kind === 'agent';
     const id = escape(node.taskId);
-    return `<button type="button" class="task-fallback-card ${agent ? 'dev-task' : ''} ${escape(node.className)}" style="left:${x}px;top:${y}px;width:${node.width}px;height:${node.height - 33}px" data-focus-key="task-${escape(node.id)}" data-flow-node="${escape(node.id)}" data-flow-part="${node.kind}" data-owner-task="${id}" data-task="${id}" aria-pressed="${node.selected}"><small>${escape(node.group)}</small><strong>${escape(node.title)}</strong></button>
-      <button type="button" class="tr-fallback-gate" style="left:${x + 18}px;top:${y + node.height - 27}px;width:${node.width - 18}px" aria-label="${id} 独立 Review · ${escape(node.reviewLabel)}" data-task-review="${id}" data-review-state="${node.reviewState}" data-focus-key="review-${id}">独立 Review · ${escape(node.reviewLabel)}</button>`;
+    return `<button type="button" class="task-fallback-card ${agent ? 'dev-task' : ''} ${escape(node.className)}" style="left:${x}px;top:${y}px;width:${node.width}px;height:${node.height}px" data-focus-key="task-${escape(node.id)}" data-flow-node="${escape(node.id)}" data-flow-part="${node.kind}" data-owner-task="${id}" data-task="${id}" aria-pressed="${node.selected}" aria-expanded="${node.expanded}"><small>${id} · 编码任务</small><strong>${escape(node.title)}</strong></button>`;
   });
   return `<div class="task-graph" style="width:${model.width}px;height:${model.height}px;transform:scale(${model.zoom})"><svg class="task-edges" width="${model.width}" height="${model.height}" aria-hidden="true"><defs><marker id="taskflow-end" viewBox="0 0 8 8" refX="7" refY="4" orient="auto" markerWidth="6" markerHeight="6"><path d="M0 0L8 4L0 8Z" fill="currentColor"/></marker></defs>${paths.join('')}</svg>${cards.join('')}</div>`;
 }
 
-function loadOrder() {
-  try { return new Map(JSON.parse(sessionStorage.getItem(ORDER_KEY)) ?? []); }
+function loadViews(storageKey) {
+  try { return new Map(JSON.parse(sessionStorage.getItem(storageKey)) ?? []); }
   catch { return new Map(); }
+}
+
+function persistViews(storageKey, views) {
+  while (views.size > 12) views.delete(views.keys().next().value);
+  try { sessionStorage.setItem(storageKey, JSON.stringify([...views])); } catch { /* Local layout remains usable. */ }
 }
 
 export function createTaskOrchestration(host, { escape, onLayoutChange, onChangeDependency, onSaveGraph, onError }) {
@@ -67,7 +78,8 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
   let editingKey = '', editing = false;
   let orderKey;
   let model, focusedTaskKey;
-  const savedOrder = loadOrder();
+  const savedOrder = loadViews(ORDER_KEY), savedPositions = loadViews(POSITION_KEY);
+  let expandedId = null;
   let surface, canvas, observedViewport;
   let navigatorFrame, navigatorMap, navigatorNodes;
   const viewportObserver = typeof ResizeObserver === 'function'
@@ -82,7 +94,9 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
     const editingGraph = editable && editing;
     const graph = buildGraph(tasks);
     const layoutKey = `${key}/${narrow.matches ? 'narrow' : 'wide'}/${preview ? 'draft' : 'saved'}`;
-    orderKey = `${key}/${preview ? 'draft' : 'saved'}`;
+    const nextOrderKey = `${key}/${preview ? 'draft' : 'saved'}`;
+    if (nextOrderKey !== orderKey || expandedId !== selected.id || editingGraph) expandedId = null;
+    orderKey = nextOrderKey;
     const activeElement = document.activeElement;
     focusedTaskKey = layoutKey === contextKey && host.contains(activeElement) && activeElement.matches('[data-flow-node]')
       ? activeElement.dataset.focusKey : null;
@@ -136,23 +150,29 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
         gateState: releasedWithoutEvidence ? 'waiting' : gateState, gateLabel: releasedWithoutEvidence ? reviewFlow.release.label : gateLabel,
         className: [style, relation].filter(Boolean).join(' ') };
     });
-    const layout = projectWorkflow({ tasks, graph, nodes, edges, narrow: narrow.matches, order: savedOrder.get(orderKey) });
+    const positions = savedPositions.get(orderKey);
+    const layout = projectWorkflow({ tasks, graph, nodes, edges, narrow: narrow.matches, order: savedOrder.get(orderKey),
+      positions: positions?.cards, expandedId });
     const inspected = layout.nodes.find(node => node.id === selected.id);
     for (const node of layout.nodes) {
       node.selected = node === inspected;
+      node.expanded = node.id === expandedId;
       if (node.selected) node.className += ' selected';
     }
     const { width, height } = layout;
     model = { ...layout, key: layoutKey, vertical: false, zoom,
-      editing: editingGraph, onNodeMove: (id, position) => reorderByPosition(layoutKey, id, position.y),
+      editing: editingGraph, onNodeMove: (id, position) => saveNodePosition(layoutKey, id, position),
       onConnect: (from, to) => { if (layoutKey === contextKey) changeLink(from, to); } };
     const enhanced = typeof window.taskflowTaskCanvas === 'function';
     const diagram = enhanced ? '<div class="task-flow-slot"></div>' : fallbackCanvas(model, escape);
+    const expanded = layout.detailBounds && expandedId ? renderExpandedFlow({
+      task: { ...selected, title: inspected.title }, flow: reviews.get(expandedId), offsets: positions?.steps?.[expandedId] ?? {}, escape,
+    }) : '';
     const reviewContext = JSON.stringify([key, selected.id, execution?.id, Boolean(preview)]);
     const previousReview = host.querySelector('#task-review-flow');
     const historyOpen = previousReview?.dataset.reviewContext === reviewContext && previousReview.querySelector('[data-review-history]')?.open;
     return {
-      inspected, observed: activeTasks.get(selected.id), nextIds: graph.dependants.get(selected.id),
+      inspected, expanded: Boolean(expanded), observed: activeTasks.get(selected.id), nextIds: graph.dependants.get(selected.id),
       reviewChecks: reviews.get(selected.id).checks,
       reviewHtml: renderTaskReview(reviews.get(selected.id), { downstream: graph.dependants.get(selected.id),
         versions: execution ? executionVersionEvidence(execution) : [], escape, simulation, preview, contextKey: reviewContext, historyOpen }),
@@ -172,7 +192,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
         ${editingGraph ? graphEditor(tasks, selected, graph.dependencies.get(selected.id), preview, dependencyExecution) : ''}
         <div class="task-canvas-window">
           <div class="task-graph-scroll" data-plan-canvas role="region" aria-label="开发任务依赖画布" tabindex="0" data-focus-key="task-canvas" data-graph-context="${escape(layoutKey)}" data-graph-width="${width}" data-graph-height="${height}">
-            <div class="task-graph-sizer" style="${sizerStyle(width, height, zoom)}">${diagram}</div>
+            <div class="task-graph-sizer" style="${sizerStyle(width, height, zoom)}">${diagram}${expanded ? `<div class="task-expanded-slot" style="${expandedStyle()}">${expanded}</div>` : ''}</div>
           </div>
         </div>
         <div class="task-canvas-dock">
@@ -180,7 +200,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
             <div class="task-canvas-legend" aria-label="任务图图例">
               <span class="task-legend-selected">当前模块</span><span class="task-legend-upstream">前置路径</span><span class="task-legend-downstream">集成后核对后继</span><span class="task-legend-repair">Review 阻塞时退回编码</span>
             </div>
-            ${enhanced ? '<span class="task-canvas-note">同列模块可上下换位，或按 Alt + ↑ / ↓。点选查看详情。</span>' : ''}
+            <span class="task-canvas-note">单击编码任务展开流程${enhanced ? '，拖动节点调整位置' : ''}。流动方向表示依赖走向。</span>
           </div>
           <button type="button" class="task-navigator" data-focus-key="task-canvas-navigator" aria-label="任务图小地图，方向键平移，回车居中" title="点击定位，方向键平移，回车居中">
             <svg class="task-navigator-map" viewBox="0 0 ${width} ${height}" aria-hidden="true">
@@ -226,9 +246,15 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
     changeLink(form.get('source'), form.get('target'));
   });
 
-  function persistOrder() {
-    while (savedOrder.size > 12) savedOrder.delete(savedOrder.keys().next().value);
-    try { sessionStorage.setItem(ORDER_KEY, JSON.stringify([...savedOrder])); } catch { /* Session storage is optional. */ }
+  function expandedStyle() {
+    const { x, y, width, height } = model.detailBounds;
+    return `left:${x * zoom}px;top:${y * zoom}px;width:${width}px;height:${height}px;transform:scale(${zoom})`;
+  }
+
+  function storePositions(values) {
+    savedPositions.delete(orderKey);
+    savedPositions.set(orderKey, values);
+    persistViews(POSITION_KEY, savedPositions);
   }
 
   function moveToSlot(id, targetIndex) {
@@ -238,20 +264,16 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
     if (!next) return;
     savedOrder.delete(orderKey);
     savedOrder.set(orderKey, next);
-    persistOrder();
+    persistViews(ORDER_KEY, savedOrder);
   }
 
-  function reorderByPosition(key, id, y) {
-    if (key !== contextKey || !Number.isFinite(y)) return;
-    const slots = model.orders[model.ranks.get(id)];
-    if (!slots?.includes(id)) return;
-    const byId = new Map(model.nodes.map(node => [node.id, node.position.y]));
-    let nearest = slots.indexOf(id);
-    slots.forEach((other, index) => {
-      if (Math.abs(byId.get(other) - y) < Math.abs(byId.get(slots[nearest]) - y)) nearest = index;
-    });
-    moveToSlot(id, nearest);
-    // Re-render even when a drop must snap back into its original slot.
+  function saveNodePosition(key, id, position) {
+    if (key !== contextKey || !Number.isFinite(position?.x) || !Number.isFinite(position?.y)) return;
+    const node = model.nodes.find(n => n.id === id);
+    if (!node) return;
+    const values = savedPositions.get(orderKey) ?? {};
+    const offset = { x: position.x - node.basePosition.x, y: position.y - node.basePosition.y };
+    storePositions({ ...values, cards: { ...values.cards, [id]: offset } });
     onLayoutChange();
   }
 
@@ -308,6 +330,15 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
       if (viewport) viewportObserver?.observe(viewport);
     }
     if (viewport) scheduleNavigator();
+    const detail = viewport?.querySelector('.task-expanded-flow');
+    if (detail) {
+      const id = expandedId, key = orderKey;
+      bindExpandedFlow(detail, (step, offset) => {
+        if (key !== orderKey || id !== expandedId || !detail.isConnected) return;
+        const values = savedPositions.get(orderKey) ?? {};
+        storePositions({ ...values, steps: { ...values.steps, [id]: { ...values.steps?.[id], [step]: offset } } });
+      });
+    }
     const slot = host.querySelector('.task-flow-slot');
     if (!slot) {
       canvas?.destroy();
@@ -357,6 +388,8 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
     const centerY = (viewport.scrollTop + Math.min(viewport.clientHeight, sizer.offsetHeight) / 2) / oldZoom;
     sizer.style.cssText = sizerStyle(model.width, model.height, zoom);
     model = { ...model, zoom };
+    const panel = sizer.querySelector('.task-expanded-slot');
+    if (panel) panel.style.cssText = expandedStyle();
     if (canvas) canvas.render(model);
     else sizer.firstElementChild.style.transform = `scale(${zoom})`;
     host.querySelector('[data-task-zoom-value]').textContent = zoomLabel(zoom);
@@ -366,6 +399,12 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
   }
 
   host.addEventListener('click', event => {
+    if (event.target.closest('[data-collapse-module]')) {
+      expandedId = null;
+      onLayoutChange();
+      revealSelected();
+      return;
+    }
     const removeLink = event.target.closest('[data-link-from]');
     if (removeLink) {
       changeLink(removeLink.dataset.linkFrom, removeLink.dataset.linkTo, true);
@@ -400,7 +439,9 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
       action.setAttribute('aria-pressed', String(focusRelations));
     } else if (action.dataset.taskCanvas === 'reset') {
       savedOrder.delete(orderKey);
-      persistOrder();
+      savedPositions.delete(orderKey);
+      persistViews(ORDER_KEY, savedOrder);
+      persistViews(POSITION_KEY, savedPositions);
       onLayoutChange();
     } else if (action.dataset.taskCanvas === 'fit') {
       manualZoom = true;
@@ -414,7 +455,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
 
   host.addEventListener('pointerdown', event => {
     const viewport = event.target.closest('.task-graph-scroll');
-    if (!viewport || event.pointerType !== 'mouse' || event.button !== 0 || event.target.closest('button,[data-task-connector]')) return;
+    if (!viewport || event.pointerType !== 'mouse' || event.button !== 0 || event.target.closest('button,[data-task-connector],.task-expanded-flow')) return;
     const bounds = viewport.getBoundingClientRect();
     if (event.clientX >= bounds.left + viewport.clientWidth || event.clientY >= bounds.top + viewport.clientHeight) return;
     const { clientX, clientY, pointerId } = event;
@@ -482,5 +523,20 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
     node.focus({ preventScroll: true });
   }
 
-  return { render, revealSelected, sync };
+  function showModule(id, toggle = false) {
+    if (!model?.editing) expandedId = toggle && expandedId === id ? null : id;
+  }
+
+  function revealFlow() {
+    const panel = host.querySelector('.task-expanded-slot');
+    const viewport = observedViewport;
+    if (!panel || !viewport) return;
+    const box = panel.getBoundingClientRect(), view = viewport.getBoundingClientRect();
+    if (box.top < view.top + 8 || box.bottom > view.top + viewport.clientHeight - 8)
+      viewport.scrollTop += box.top - view.top - Math.max(8, (viewport.clientHeight - box.height) / 2);
+    if (box.left < view.left || box.right > view.left + viewport.clientWidth)
+      viewport.scrollLeft += box.left - view.left - Math.max(8, (viewport.clientWidth - box.width) / 2);
+  }
+
+  return { render, revealSelected, showModule, revealFlow, sync };
 }

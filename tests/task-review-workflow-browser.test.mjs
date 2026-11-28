@@ -24,7 +24,7 @@ const blocker = { id: 'REVIEW-1', severity: 'blocking', status: 'open', file: 's
 const flow = page => page.locator('#task-review-flow');
 const review = (page, id) => page.locator(`[data-task-review="${id}"]`);
 const task = (page, id) => page.locator(`.dev-task[data-task="${id}"]`);
-const returnPath = (page, id) => page.locator('.plan-task-node').filter({ has: review(page, id) }).locator('.task-review-return');
+const returnPath = page => page.locator('.task-expanded-flow [data-review-loop]');
 
 async function settle(app, run, status) {
   const deadline = Date.now() + 10000;
@@ -68,7 +68,29 @@ test('Edge 工作流从任务图核对同一候选的 Review，独立审查通�
     await page.route(`${url}${runPath}/development-executions`, route =>
       route.fulfill({ json: { capabilities: { canStart: false }, executions: execution ? [execution] : [] } }));
     await page.goto(`${url}/?project=${project.id}&run=${run.id}&view=tasks`);
+    await task(page, 'B').waitFor();
+    assert.equal(await page.locator('.task-expanded-flow').count(), 0);
+    if (width === 390) await task(page, 'B').tap();
+    else await task(page, 'B').press('Enter');
     await review(page, 'B').waitFor();
+    if (width === 1440) {
+      const panel = page.locator('.task-expanded-flow');
+      const code = panel.locator('[data-expanded-op="code"]');
+      const link = panel.locator('[data-wire="code-freeze"] .ef-base');
+      await code.scrollIntoViewIfNeeded();
+      const origin = await code.boundingBox(), before = await link.getAttribute('d');
+      const x = origin.x + origin.width / 2, y = origin.y + origin.height / 2;
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x + 9, y - 17, { steps: 8 });
+      await page.mouse.up();
+      const moved = await link.getAttribute('d');
+      assert.notEqual(moved, before);
+      assert.equal(await panel.locator('.ef-description').isVisible(), false);
+      await panel.getByRole('button', { name: '收起' }).click();
+      await task(page, 'B').press('Enter');
+      assert.equal(await link.getAttribute('d'), moved);
+    }
     if (width === 390) await review(page, 'B').tap();
     else await review(page, 'B').press('Enter');
     await page.locator('#task-review-flow[data-review-task="B"][data-review-state="planned"]').waitFor();
@@ -110,8 +132,10 @@ test('Edge 工作流从任务图核对同一候选的 Review，独立审查通�
     assert.equal(await task(page, 'D').getAttribute('data-gate-state'), 'waiting');
   });
   await inspect(async page => {
+    await task(page, 'C').press('Enter');
     await review(page, 'C').press('Enter');
     await page.locator(`#task-review-flow[data-review-task="C"][data-review-state="checking"][data-review-commit="${siblingCommit}"]`).waitFor();
+    await task(page, 'B').press('Enter');
     await review(page, 'B').press('Enter');
     await waitReview(page, '[data-review-state="waiting"]');
   });

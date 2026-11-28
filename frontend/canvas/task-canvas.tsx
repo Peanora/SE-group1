@@ -1,7 +1,7 @@
-import { memo, useId, useMemo, useState, type CSSProperties, type PointerEvent } from 'react';
+import { memo, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
-import { Bot, ClipboardCheck, GitBranch, GitMerge, Grip, Shield } from 'lucide-react';
+import { ChevronDown, Code2, GitBranch, GitMerge, Grip, Shield } from 'lucide-react';
 import {
   BaseEdge, getBezierPath, getSmoothStepPath, Handle, MarkerType, Position, ReactFlow,
   type Connection, type Edge, type EdgeProps, type Node, type NodeProps, type OnNodesChange, type XYPosition,
@@ -12,7 +12,7 @@ import './task-canvas.css';
 type Relation = 'muted' | 'upstream' | 'downstream';
 type GateState = 'planned' | 'waiting' | 'checking' | 'passed' | 'failed';
 type Side = 'bottom' | 'top' | 'left' | 'right';
-type EdgeMotion = 'selected' | 'active';
+type EdgeMotion = 'ambient' | 'selected' | 'active';
 
 type NodeIdentity = {
   id: string;
@@ -39,6 +39,8 @@ type PlanNode = NodeIdentity & {
   height?: number;
   rank: number;
   movable: boolean;
+  expanded?: boolean;
+  movementBounds?: { minX: number; minY: number; maxX: number; maxY: number };
   gateState?: GateState;
   gateLabel?: string;
 };
@@ -60,6 +62,8 @@ type ExecutionNode = NodeIdentity & {
 type PlanDependency = {
   relation: Relation;
   channel?: number | null;
+  viaX?: number;
+  targetChannel?: number;
   fromTask?: string;
   toTask?: string;
   caption?: string;
@@ -69,7 +73,7 @@ type PlanDependency = {
 };
 type DependencyData = (PlanDependency & { gateState: GateState; motion?: EdgeMotion }) | { focused: boolean; vertical: boolean };
 type CanvasEdge = { id?: string; source: string; target: string } & (PlanDependency | { focused: boolean });
-type PlanGroup = { id: string; rank: number; title: string; top: number; height: number; left: number; width: number; count: number };
+type PlanGroup = { headerSide?: 'left'; id: string; rank: number; title: string; top: number; height: number; left: number; width: number; count: number };
 type PlanColumn = { rank: number; title: string; left: number; width: number };
 
 type CanvasModel = {
@@ -92,31 +96,27 @@ type CanvasModel = {
 
 type TaskNode = Node<PlanTask | ExecutionNode, 'task'>;
 type DependencyEdge = Edge<DependencyData, 'dependency'>;
-type Move = { model: CanvasModel; taskId: string; y: number; dragging: boolean };
+type Move = { model: CanvasModel; taskId: string; position: XYPosition; dragging: boolean };
 
 const sidePositions: Record<Side, Position> = {
   top: Position.Top, bottom: Position.Bottom, left: Position.Left, right: Position.Right,
 };
 const markerColors: Record<Relation, string> = {
-  muted: '#7685a1',
-  upstream: '#197d79',
-  downstream: '#3846ce',
+  muted: '#739789',
+  upstream: '#356d5d',
+  downstream: '#4a837a',
 };
 const gateHelp = '同一代码版本的自检、独立 HTTP、Edge 和 Review 均通过且完成代码集成后，才释放后续任务。';
-const reviewHeight = 27;
-const reviewGap = 6;
-const portSize = 8;
+const portSize = 6;
 const editPortSize = 16;
 const planSizing = {
-  '--task-review-height': `${reviewHeight}px`,
-  '--task-review-gap': `${reviewGap}px`,
   '--task-port-size': `${portSize}px`,
   '--task-edit-port-size': `${editPortSize}px`,
 } as CSSProperties;
 
 function planPort(side: Side, type: 'source' | 'target', width: number, height: number, editing: boolean) {
   const x = { left: 0, right: width, top: width / 2, bottom: width / 2 }[side];
-  const y = { left: (height - reviewHeight - reviewGap) / 2, right: height - reviewHeight / 2, top: 0, bottom: height }[side];
+  const y = { left: height / 2, right: height / 2, top: 0, bottom: height }[side];
   const editable = editing && side === (type === 'source' ? 'right' : 'left');
   const size = editable ? editPortSize : portSize;
   return {
@@ -143,7 +143,7 @@ function PlanCard({ data }: { data: PlanTask }) {
   const explanation = `直接前置：${data.parents.join('、') || '无'}。${checkpoint ? gateHelp : ''}`;
   const checkpointLabel = checkpoint?.gateState === 'failed' ? '检查点阻断' : checkpoint?.blocked ? '前置阻断'
     : checkpoint?.delivery ? '交付检查点' : '验收检查点';
-  const reviewTitle = `${data.title}的代码审查 Review，${data.reviewLabel}`;
+  const status = data.label || { planned: '待开发', waiting: '等待中', checking: '执行中', passed: '已集成', failed: '未通过' }[gateState];
   return (
     <div className="plan-task-node" data-movable={movable} data-editing={editing} style={planSizing}>
       <button type="button" className={`task-flow-card dev-task ${data.className}`}
@@ -151,12 +151,16 @@ function PlanCard({ data }: { data: PlanTask }) {
         data-flow-rank={data.rank} data-task={taskId} data-focus-key={`task-${taskId}`}
         data-workflow-module={taskId} data-workflow-group={data.group}
         data-gate-state={gateState}
-        aria-pressed={selected} aria-description={explanation}
+        aria-pressed={selected} aria-expanded={Boolean(data.expanded)} aria-description={explanation}
         title={[data.title, data.group, data.roleLabel, data.reviewLabel, data.gateLabel, explanation].filter(Boolean).join(' · ')}>
+        <span className="task-code-symbol"><Code2 aria-hidden="true" /></span>
         <span className="task-flow-card-kicker">
-          <Bot aria-hidden="true" />
           <small>{taskId}</small>
-          <span className="task-module-note" title={data.label || data.roleLabel}>{data.label || '编码'}</span>
+          <span className="task-module-note" title={data.label || data.gateLabel}>{status}</span>
+        </span>
+        <span className="task-flow-card-title dev-task-title">{data.title}</span>
+        <span className="task-card-foot">
+          <span>编码任务</span>
           <span className="task-module-junctions">
             {join && <span data-module-join="" data-gate-state={join.gateState} title={`汇合 ${join.count} 项，${join.gateLabel}`}>
               <GitMerge aria-hidden="true" />{join.count}
@@ -170,23 +174,9 @@ function PlanCard({ data }: { data: PlanTask }) {
             </span>}
           </span>
           {movable && <Grip className="dev-task-grip" aria-hidden="true" />}
+          <ChevronDown className="task-card-chevron" aria-hidden="true" />
         </span>
-        <span className="task-flow-card-title dev-task-title">{data.title}</span>
       </button>
-      <span className="task-review-feed" aria-hidden="true" />
-      <button type="button" className="task-review-gate nodrag" data-task-review={taskId} data-review-state={data.reviewState}
-        data-focus-key={`review-${taskId}`} aria-label={reviewTitle} aria-controls="task-review-flow"
-        title={`${reviewTitle}。出现阻塞意见时返回编码修订。同版验收通过且完成集成后放行。`}>
-        <ClipboardCheck aria-hidden="true" />
-        <strong>Review</strong>
-        <span>{data.reviewLabel}</span>
-      </button>
-      <svg className="task-review-return" data-review-loop={data.reviewState === 'failed' ? 'blocked' : 'conditional'}
-        width="18" height="36" viewBox="0 0 18 36" aria-hidden="true">
-        <title>审查有阻塞意见时返回编码修订</title>
-        <path d="M18 24H11Q5 24 5 18V4" />
-        <path d="m2 7 3-3 3 3" />
-      </svg>
       {data.inputs.map(side => {
         const eligible = side === 'left';
         return <Handle key={side} id={`input-${side}`} type="target" position={sidePositions[side]}
@@ -252,10 +242,13 @@ const Dependency = memo(function Dependency(props: EdgeProps<DependencyEdge>) {
   if (plan && typeof plan.channel === 'number') {
     const sourceExit = outsideHandle(sourceX, sourceY, props.sourcePosition);
     const targetEntry = outsideHandle(targetX, targetY, props.targetPosition);
+    const bypass = plan.viaX != null && plan.targetChannel != null
+      ? [{ x: plan.viaX, y: plan.channel }, { x: plan.viaX, y: plan.targetChannel }] : [];
+    const entryChannel = bypass.at(-1)?.y ?? plan.channel;
     path = roundedPath([{ x: sourceX, y: sourceY }, sourceExit, { x: sourceExit.x, y: plan.channel },
-      { x: targetEntry.x, y: plan.channel }, targetEntry, { x: targetX, y: targetY }]);
-    labelX = (sourceExit.x + targetEntry.x) / 2;
-    labelY = plan.channel;
+      ...bypass, { x: targetEntry.x, y: entryChannel }, targetEntry, { x: targetX, y: targetY }]);
+    labelX = ((bypass[0]?.x ?? sourceExit.x) + targetEntry.x) / 2;
+    labelY = entryChannel;
   } else if (plan) {
     [path, labelX, labelY] = getSmoothStepPath({ ...props, sourceX, sourceY, targetX, targetY, borderRadius: 9, offset: 12 });
   } else {
@@ -263,26 +256,29 @@ const Dependency = memo(function Dependency(props: EdgeProps<DependencyEdge>) {
   }
 
   return (
-    <BaseEdge
-      className={execution ? 'pe-flow-edge' : plan?.internal ? 'task-flow-internal-edge' : `task-edge relation-${plan?.relation ?? 'muted'}`}
-      interactionWidth={0}
-      markerEnd={markerEnd}
-      data-focus={execution?.focused}
-      data-gate-state={plan?.internal ? undefined : plan?.gateState}
-      data-flow-motion={plan?.motion}
-      data-from={execution ? source : plan?.fromTask}
-      data-to={execution ? target : plan?.toTask}
-      data-visual-from={plan ? source : undefined}
-      data-visual-to={plan ? target : undefined}
-      data-flow-internal={plan ? plan.internal : undefined}
-      label={plan?.caption}
-      labelX={labelX}
-      labelY={labelY}
-      labelShowBg={Boolean(plan?.caption)}
-      labelBgPadding={[5, 3]}
-      labelBgBorderRadius={4}
-      path={path}
-    />
+    <>
+        <BaseEdge
+          className={execution ? 'pe-flow-edge' : plan?.internal ? 'task-flow-internal-edge' : `task-edge relation-${plan?.relation ?? 'muted'}`}
+          interactionWidth={0}
+          markerEnd={markerEnd}
+          data-focus={execution?.focused}
+          data-gate-state={plan?.internal ? undefined : plan?.gateState}
+          data-from={execution ? source : plan?.fromTask}
+          data-to={execution ? target : plan?.toTask}
+          data-visual-from={plan ? source : undefined}
+          data-visual-to={plan ? target : undefined}
+          data-flow-internal={plan ? plan.internal : undefined}
+          label={plan?.caption}
+          labelX={labelX}
+          labelY={labelY}
+          labelShowBg={Boolean(plan?.caption)}
+          labelBgPadding={[5, 3]}
+          labelBgBorderRadius={4}
+          path={path}
+        />
+        {plan?.motion && <path className="task-edge-motion" data-edge-motion={plan.motion} data-from={plan.fromTask}
+          data-to={plan.toTask} d={path} aria-hidden="true" />}
+    </>
   );
 });
 
@@ -299,8 +295,8 @@ function getPlanningData(nodes: CanvasModel['nodes'], edges: CanvasEdge[]) {
   for (const node of nodes) {
     if (!('kind' in node)) continue;
     planNodes.set(node.id, node);
-    inputs.set(node.id, new Set(['left']));
-    outputs.set(node.id, new Set(['right']));
+    inputs.set(node.id, new Set());
+    outputs.set(node.id, new Set());
   }
   for (const edge of edges) {
     if ('focused' in edge) continue;
@@ -323,7 +319,23 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
   const planning = variant !== 'execution';
   const editing = planning && model.editing === true && Boolean(model.onConnect);
   const { planNodes, inputs, outputs, parents } = useMemo(() => getPlanningData(nodes, edges), [nodes, edges]);
+  const extentRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const extent = extentRef.current;
+    if (!extent || !planning) return;
+    let inView = true;
+    const update = () => { extent.dataset.motionPaused = String(document.hidden || !inView); };
+    const observer = new IntersectionObserver(([entry]) => { inView = entry.isIntersecting; update(); });
+    observer.observe(extent);
+    document.addEventListener('visibilitychange', update);
+    update();
+    return () => {
+      observer.disconnect();
+      document.removeEventListener('visibilitychange', update);
+    };
+  }, [planning]);
   const [moved, setMoved] = useState<Move>();
+  const lastFree = useRef<{ key?: string; taskId: string; position: XYPosition } | null>(null);
   const moving = moved && (moved.model === model || moved.dragging && moved.model.key === model.key) ? moved : undefined;
 
   const flowNodes = useMemo<TaskNode[]>(() => nodes.map(node => {
@@ -332,6 +344,10 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
     const movingPart = plan && moving?.taskId === plan.taskId ? moving : undefined;
     const inputSides = [...(inputs.get(node.id) ?? [])];
     const outputSides = [...(outputs.get(node.id) ?? [])];
+    if (plan && editing) {
+      if (!inputSides.includes('left')) inputSides.push('left');
+      if (!outputSides.includes('right')) outputSides.push('right');
+    }
     const width = plan?.width ?? nodeWidth;
     const height = plan?.height ?? nodeHeight;
     return {
@@ -339,7 +355,7 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
       type: 'task',
       data: plan ? { ...plan, editing, inputs: inputSides, outputs: outputSides,
         parents: [...(parents.get(plan.taskId) ?? [])] } : node as ExecutionNode,
-      position: movingPart ? { x: node.position.x, y: movingPart.y } : node.position,
+      position: movingPart?.position ?? node.position,
       width,
       height,
       // Fixed ports stay attached while React Flow receives updated module positions.
@@ -361,6 +377,7 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
     for (const node of planNodes.values()) {
       if (node.gateState) gateByTask.set(node.taskId, node.gateState);
     }
+    let pulseCount = 0;
     return edges.map(edge => {
       const { source, target } = edge;
       const execution = 'focused' in edge;
@@ -374,21 +391,38 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
       const gateState = fromTask ? gateByTask.get(fromTask) ?? 'planned' : 'planned';
       const targetGate = toTask ? gateByTask.get(toTask) : undefined;
       const related = selectedTask && (selectedTask.taskId === fromTask || selectedTask.taskId === toTask);
-      const motion: EdgeMotion | undefined = gateState === 'planned' && related ? 'selected'
-        : gateState === 'passed' && targetGate === 'checking' ? 'active' : undefined;
-      const color = edge.internal ? '#92a0bb' : gateState === 'passed' ? '#19734f' : markerColors[edge.relation];
+      let motion: EdgeMotion | undefined;
+      if (!edge.internal && pulseCount < 32) {
+        if (gateState === 'passed' && targetGate === 'checking') motion = 'active';
+        else if (gateState === 'planned' && (related || edges.length <= 32)) motion = related ? 'selected' : 'ambient';
+        if (motion) pulseCount++;
+      }
+      const color = { failed: '#a83245', checking: '#9a5c10', waiting: '#66758a', passed: '#19734f', planned: markerColors[edge.relation] }[gateState];
       return {
         id, type: 'dependency', source, target,
         sourceHandle: `output-${edge.sourceSide ?? 'right'}`, targetHandle: `input-${edge.targetSide ?? 'left'}`,
         data: { ...edge, fromTask, toTask, gateState, motion },
-        markerEnd: edge.internal || gateState === 'planned' || gateState === 'passed'
-          ? { type: MarkerType.ArrowClosed, width: 11, height: 11, color } : undefined,
+        markerEnd: { type: MarkerType.ArrowClosed, width: 10, height: 10, color: edge.internal ? '#92a0bb' : color },
       };
     });
   }, [edges, nodes, planNodes, vertical]);
 
-  function clampMotion(node: PlanNode, y: number) {
-    return Math.max(12, Math.min(height - 12 - (node.height ?? nodeHeight), y));
+  function clampMotion(node: PlanNode, point: XYPosition) {
+    const bounds = node.movementBounds ?? { minX: 12, minY: 12,
+      maxX: width - 12 - (node.width ?? nodeWidth), maxY: height - 12 - (node.height ?? nodeHeight) };
+    const x = Math.max(bounds.minX, Math.min(bounds.maxX, point.x));
+    const y = Math.max(bounds.minY, Math.min(bounds.maxY, point.y));
+    const right = x + (node.width ?? nodeWidth), bottom = y + (node.height ?? nodeHeight);
+    for (const peer of planNodes.values()) {
+      if (peer.id === node.id || peer.group !== node.group) continue;
+      if (x < peer.position.x + (peer.width ?? nodeWidth) + 6 && right + 6 > peer.position.x
+          && y < peer.position.y + (peer.height ?? nodeHeight) + 6 && bottom + 6 > peer.position.y) {
+        const previous = lastFree.current;
+        return previous?.taskId === node.taskId && previous.key === model.key ? previous.position : node.position;
+      }
+    }
+    lastFree.current = { key: model.key, taskId: node.taskId, position: { x, y } };
+    return lastFree.current.position;
   }
 
   const onNodesChange: OnNodesChange<TaskNode> = changes => {
@@ -396,7 +430,7 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
       if (change.type !== 'position' || !change.position) continue;
       const node = planNodes.get(change.id);
       if (!node?.movable) continue;
-      setMoved({ model, taskId: node.taskId, y: clampMotion(node, change.position.y), dragging: change.dragging === true });
+      setMoved({ model, taskId: node.taskId, position: clampMotion(node, change.position), dragging: change.dragging === true });
     }
   };
 
@@ -409,15 +443,15 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
   const viewport = useMemo(() => ({ x: 0, y: 0, zoom }), [zoom]);
   // React Flow owns node interaction and zoom. Native scroll owns panning.
   return (
-    <div className="task-flow-extent" style={planning
+    <div ref={extentRef} className="task-flow-extent" style={planning
       ? { width: Math.ceil(width * zoom), height: Math.ceil(height * zoom) }
       : { width, height, transform: `scale(${zoom})` }}>
       {planning && groups?.length && (
         <div className="task-flow-groups" style={{ width, height, transform: `scale(${zoom})` }}>
           {groups.map(group => (
-            <div className="task-flow-group" data-flow-group={group.id} key={group.id}
+            <div className="task-flow-group" data-header-side={group.headerSide} data-flow-group={group.id} key={group.id}
               style={{ left: group.left, width: group.width, top: group.top, height: group.height }}>
-              <div className="task-flow-group-heading"><strong title={group.title}>{group.title}</strong><span>{group.count} 个模块</span></div>
+              <div className="task-flow-group-heading"><i aria-hidden="true">{String(group.rank + 1).padStart(2, '0')}</i><strong title={group.title}>{group.title}</strong><span>{group.count} 个功能</span></div>
             </div>
           ))}
           {columns?.map(column => (
@@ -436,10 +470,11 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
         edgeTypes={edgeTypes}
         nodesDraggable={planning}
         onNodesChange={planning ? onNodesChange : undefined}
+        onNodeDragStart={planning ? () => { lastFree.current = null; } : undefined}
         onNodeDragStop={planning ? (_event, node) => {
           const original = planNodes.get(node.id);
           if (!original?.movable) return;
-          model.onNodeMove?.(original.taskId, { x: original.position.x, y: clampMotion(original, node.position.y) });
+          model.onNodeMove?.(original.taskId, clampMotion(original, node.position));
         } : undefined}
         nodeDragThreshold={5}
         nodeExtent={planning ? [[12, 12], [width - 12, height - 12]] : undefined}

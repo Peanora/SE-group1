@@ -128,8 +128,41 @@ function orderWithin(known, saved) {
   return [...ordered, ...remaining];
 }
 
-/** Project real tasks into horizontal depth columns and stable functional lanes. */
-export function projectWorkflow({ tasks, graph, narrow = false, nodes, edges, order }) {
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+function offsetPosition(base, offset, bounds) {
+  return {
+    x: clamp(base.x + (Number.isFinite(offset?.x) ? offset.x : 0), bounds.minX, bounds.maxX),
+    y: clamp(base.y + (Number.isFinite(offset?.y) ? offset.y : 0), bounds.minY, bounds.maxY),
+  };
+}
+
+// Use the gap between phases for adjacent tasks and the outside rails for long
+// links. The inner rail under the coding row stays above the expanded details.
+function dependencyRoute(from, to, lanes, width, track) {
+  const start = lanes.get(from.group), end = lanes.get(to.group);
+  if (start === end) {
+    if (from === to) return { sourceSide: 'right', targetSide: 'left', channel: start.rowBottom - 5 };
+    const right = from.position.x <= to.position.x;
+    if (Math.abs(from.slot - to.slot) === 1) {
+      return { sourceSide: right ? 'right' : 'left', targetSide: right ? 'left' : 'right', channel: null };
+    }
+    return { sourceSide: 'bottom', targetSide: 'bottom', channel: start.rowBottom - 9 + track };
+  }
+  const down = start.rank < end.rank;
+  const sourceSide = down ? 'bottom' : 'top', targetSide = down ? 'top' : 'bottom';
+  const channel = down ? start.rowBottom - 9 + track : start.top - 12 - track;
+  const targetChannel = down ? end.top - 12 - track : end.rowBottom - 9 + track;
+  if (Math.abs(start.rank - end.rank) === 1 && !(down ? start.expanded : end.expanded)) {
+    return { sourceSide, targetSide, channel: down ? start.top + start.height + 13 + track : end.top + end.height + 13 + track };
+  }
+  const leftRail = 151 - track, rightRail = width - 22 + track;
+  const meanX = (from.position.x + from.width / 2 + to.position.x + to.width / 2) / 2;
+  return { sourceSide, targetSide, channel, targetChannel, viaX: meanX < (leftRail + rightRail) / 2 ? leftRail : rightRail };
+}
+
+/** Project each real functional group into one horizontal coding row. */
+export function projectWorkflow({ tasks, graph, narrow = false, nodes, edges, order, expandedId, positions = {} }) {
   const definitions = new Map(tasks.map(task => [task.id, task]));
   const ids = [...definitions.keys()];
   const bases = new Map(nodes.map(node => [node.id, node]));
@@ -146,21 +179,37 @@ export function projectWorkflow({ tasks, graph, narrow = false, nodes, edges, or
     return [id, label(task.workflowModule?.group) || label(task.category) || '工程开发'];
   }));
   const laneOrder = orderWithin(depthOrder.flat().map(id => groupByTask.get(id)), order?.lanes);
-  const nodeWidth = narrow ? 182 : 196, nodeHeight = 78;
-  const columnGap = narrow ? 54 : 52, columnStep = nodeWidth + columnGap;
-  const padding = narrow ? 22 : 24, laneGap = 9, stackGap = 9, headingHeight = 26;
-  const width = Math.max(320, padding * 2 + (depthOrder.length ? depthOrder.length * columnStep - columnGap : 0));
-  const rankLeft = rank => padding + rank * columnStep;
+  const members = new Map(laneOrder.map(group => [group, []]));
+  for (const row of depthOrder) for (const id of row) members.get(groupByTask.get(id)).push(id);
+  const nodeWidth = narrow ? 196 : 212, nodeHeight = 84, step = nodeWidth + (narrow ? 60 : 74);
+  const slots = Math.max(1, ...laneOrder.map(group => members.get(group).length));
+  const firstX = 184, rowHeight = 168, laneGap = 40, detailWidth = 860, detailHeight = 260;
+  const hasDetail = definitions.has(expandedId);
+  const rowWidth = Math.max(620, firstX + (slots - 1) * step + nodeWidth + 76);
+  const width = Math.max(rowWidth, hasDetail ? firstX + detailWidth + 56 : 0);
   const modules = [], groups = [];
-  let top = 36;
+  const slotById = new Map();
+  let top = 16, detailBounds = null;
 
   laneOrder.forEach((group, rank) => {
-    const byDepth = depthOrder.map(row => row.filter(id => groupByTask.get(id) === group));
-    const slots = Math.max(1, ...byDepth.map(row => row.length));
-    const height = headingHeight + slots * nodeHeight + (slots - 1) * stackGap + 10;
-    groups.push({ id: group, rank, title: group, top, height, left: 10, width: width - 20, count: byDepth.flat().length });
-    byDepth.forEach((row, depth) => row.forEach((id, slot) => {
+    const row = members.get(group), expanded = hasDetail && groupByTask.get(expandedId) === group;
+    const height = rowHeight + (expanded ? detailHeight + 26 : 0);
+    const parentsInPriorGroups = row.flatMap(id => dependencies.get(id)).map(id => slotById.get(id)).filter(Number.isFinite);
+    const parentCenter = parentsInPriorGroups.reduce((sum, slot) => sum + slot, 0) / (parentsInPriorGroups.length || 1);
+    const firstSlot = clamp(Math.round(parentCenter - (row.length - 1) / 2), 0, slots - row.length);
+    const movementBounds = { minX: 159, maxX: rowWidth - 40 - nodeWidth, minY: top + 14, maxY: top + rowHeight - nodeHeight - 20 };
+    groups.push({ id: group, rank, title: group, top, height, left: 10, width: width - 20,
+      rowBottom: top + rowHeight, headerSide: 'left', count: row.length, expanded });
+    row.forEach((id, index) => {
       const task = definitions.get(id), base = bases.get(id) ?? {};
+      const slot = firstSlot + index;
+      slotById.set(id, slot);
+      const basePosition = { x: firstX + slot * step, y: top + (rowHeight - nodeHeight) / 2 };
+      const position = offsetPosition(basePosition, Object.hasOwn(positions ?? {}, id) ? positions[id] : null, movementBounds);
+      if (id === expandedId) {
+        detailBounds = { x: clamp(position.x + (nodeWidth - detailWidth) / 2, firstX - 20, width - 40 - detailWidth),
+          y: top + rowHeight + 3, width: detailWidth, height: detailHeight };
+      }
       const parents = dependencies.get(id), children = dependants.get(id);
       const evidence = roleStates(base);
       const gateState = base.gateState ?? 'planned';
@@ -173,8 +222,7 @@ export function projectWorkflow({ tasks, graph, narrow = false, nodes, edges, or
         id, taskId: id, kind: 'agent', step: 'agent', role: 'coding', roleLabel: '编码智能体',
         title: label(task.workflowModule?.name) || task.title || base.title || id,
         label: base.label ?? '', meta: base.meta ?? '', roleHelp: OPERATIONS[0].roleHelp,
-        group, rank: depth, movable: !unresolved.has(id) && depthOrder[depth].some(other => other !== id && !unresolved.has(other)),
-        position: { x: rankLeft(depth), y: top + headingHeight + slot * (nodeHeight + stackGap) },
+        group, slot, rank: ranks.get(id), movable: true, expanded: id === expandedId, basePosition, position, movementBounds,
         width: nodeWidth, height: nodeHeight, selected: Boolean(base.selected), className: base.className ?? '',
         gateState, gateLabel, reviewState: evidence.review.gateState, reviewLabel: evidence.review.gateLabel,
         operations: OPERATIONS.map(operation => ({ ...operation, ...evidence[operation.step] })),
@@ -182,16 +230,13 @@ export function projectWorkflow({ tasks, graph, narrow = false, nodes, edges, or
         ...(children.length > 1 ? { fork: { count: children.length, ...forkState(gateState) } } : {}),
         ...(junction || delivery || blocked || gateState === 'failed' ? { checkpoint: { gateState, gateLabel, delivery, blocked } } : {}),
       });
-    }));
+    });
     top += height + laneGap;
   });
 
   const byId = new Map(modules.map(node => [node.id, node]));
   const laneById = new Map(groups.map(group => [group.id, group]));
-  const orders = depthOrder.map(row => [...row].sort((a, b) => byId.get(a).position.y - byId.get(b).position.y));
-  const columns = orders.map((row, rank) => ({
-    rank, title: `第 ${rank + 1} 层`, left: rankLeft(rank), width: nodeWidth, count: row.length,
-  }));
+  const orders = depthOrder.map(row => [...row].sort((a, b) => laneById.get(groupByTask.get(a)).rank - laneById.get(groupByTask.get(b)).rank));
   const keys = (source, target) => JSON.stringify([source, target]);
   const originalEdges = new Map(edges.map(edge => [keys(edge.source, edge.target), edge]));
   const idsInUse = new Set(ids);
@@ -202,17 +247,16 @@ export function projectWorkflow({ tasks, graph, narrow = false, nodes, edges, or
     const pendingTopology = unresolved.has(source) || unresolved.has(target);
     const caption = pendingTopology ? '依赖待核对' : branch ? `分支 ${branch}${to.join ? ' · 汇入' : ''}`
       : to.join ? '汇入' : from.gateState === 'passed' ? '已放行' : from.gateState === 'failed' ? '未放行' : '';
-    const lane = laneById.get(from.group);
-    const channel = to.rank === from.rank + 1 ? null : lane.top + lane.height + 2 + index % 3 * 2;
     let id = 'workflow-dependency-' + keys(source, target).replace(/[^a-zA-Z0-9-]/gu, character => `_${character.codePointAt(0).toString(16)}_`);
     while (idsInUse.has(id)) id += '-';
     idsInUse.add(id);
     return {
       id, source, target, fromTask: source, toTask: target, caption: original?.caption || caption,
-      relation: original?.relation ?? 'muted', channel, internal: false, sourceSide: 'right', targetSide: 'left',
+      relation: original?.relation ?? 'muted', internal: false, ...dependencyRoute(from, to, laneById, width, index % 3 * 3),
     };
   }));
-  return { nodes: modules, edges: visualEdges, groups, columns, width, height: Math.max(260, top), nodeWidth, nodeHeight, ranks, orders, laneOrder };
+  return { nodes: modules, edges: visualEdges, groups, columns: [], detailBounds, width,
+    height: Math.max(200, top - laneGap + 16), nodeWidth, nodeHeight, ranks, orders, laneOrder };
 }
 
 /** Swap same-depth modules, preserving lane ownership and dependency depth. */

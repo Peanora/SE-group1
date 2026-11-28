@@ -1,0 +1,69 @@
+.task-expanded-flow {
+  box-sizing: border-box;
+  width: 100%;
+  position: relative;
+  color: #243d34;
+  background: #fbfcf9;
+  border: 1px solid #afc6b7;
+  border-radius: 12px;
+  box-shadow: 0 3px 12px #244e3910, inset 0 1px #fff;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.task-expanded-flow > header {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  margin: 0 4px;
+  border-bottom: 1px solid #e2e9e2;
+}
+.task-expanded-flow > header code { white-space: nowrap; max-width: 25%; overflow: hidden; text-overflow: ellipsis; color: #497460; font-size: 10.5px; }
+.task-expanded-flow > header strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 14px; }
+.task-expanded-flow > header button, .ef-description button {
+  width: auto; min-height: 0; min-width: 32px; margin: 0 0 0 auto; padding: 4px 9px;
+  border: 1px solid #cddbd0; border-radius: 6px; background: #f3f7f2; color: #405d4d;
+  font-size: 12px; line-height: 1.3; cursor: pointer;
+}
+.ef-canvas { display: block; width: 100%; height: auto; }
+.ef-canvas [data-expanded-op] { outline: none; cursor: grab; touch-action: none; }
+.ef-canvas [data-expanded-op]:active { cursor: grabbing; }
+.ef-canvas [data-expanded-op]:focus-visible .ef-face, .ef-canvas [data-expanded-op]:hover .ef-face { stroke: #377d67; stroke-width: 1.8px; }
+.ef-face { fill: #fff; stroke: #bccdc4; }
+.ef-canvas text { pointer-events: none; user-select: none; }
+.ef-title { font-size: 12px; fill: #253e33; font-weight: 650; }
+.ef-state { font-size: 10.5px; fill: #5d7166; }
+.ef-icon { fill: none; stroke: #526f61; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.ef-icon-bg { fill: #edf3ee; }
+.ef-canvas [data-expanded-op="freeze"] .ef-face { fill: #f1f8f4; stroke: #89b5a0; }
+.ef-canvas [data-expanded-op="gate"] .ef-face { fill: #f0f5f3; }
+.ef-canvas [data-status="failed"] .ef-face { fill: #fff5ed; stroke: #c9997a; }
+.ef-canvas [data-status="failed"] .ef-state { fill: #995337; }
+.ef-canvas [data-status="passed"] .ef-state { fill: #287357; }
+.ef-canvas [data-status="checking"] .ef-state { fill: #2d6692; }
+.ef-wire, .ef-arrow { pointer-events: none; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.ef-neutral { --ef-ink: #738f88; }
+.ef-candidate { --ef-ink: #518d77; }
+.ef-revision { --ef-ink: #bc8067; }
+.ef-retry { --ef-ink: #b58d50; }
+.ef-arrow { stroke: var(--ef-ink); stroke-width: 1.5; }
+.ef-base { stroke: var(--ef-ink); stroke-width: 1.6; }
+.ef-caption { font-size: 9px; fill: var(--ef-ink); text-anchor: middle; stroke: #fbfcf9; stroke-width: 3px; paint-order: stroke; }
+.ef-retry .ef-base { stroke-dasharray: 4 4; }
+.ef-pulse {
+  stroke: color-mix(in srgb, var(--ef-ink) 65%, #daf9df); stroke-width: 3; stroke-dasharray: 4 96; opacity: .95;
+  animation: tf-step-flow 5.2s linear infinite;
+  animation-delay: calc(var(--ef-clock, 0ms) + var(--stagger, 0ms));
+}
+.ef-revision .ef-pulse, .ef-retry .ef-pulse { opacity: .55; }
+@keyframes tf-step-flow { to { stroke-dashoffset: -100; } }
+@media (prefers-reduced-motion: reduce) { .ef-canvas .ef-pulse { display: none; animation: none; } }
+.ef-description {
+  position: absolute; top: 40px; right: 10px; width: min(275px, 65%); padding: 12px;
+  border: 1px solid #c4d5c8; border-radius: 9px; background: #fcfefa;
+  box-shadow: 0 3px 14px #263c3224; font-size: 12px; line-height: 1.6;
+}
+.ef-description[hidden] { display: none; }
+.ef-description button { min-width: 22px; padding: 1px 4px; float: right; }
+.ef-description p { font-size: 12px; margin: 5px 0 0; color: #53695b; }

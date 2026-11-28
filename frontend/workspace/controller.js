@@ -912,9 +912,9 @@ function renderTaskWorkspace(simulation, preview, owner, tools) {
   const keepStepsOpen = currentDetail?.dataset.graphContext === detailKey && currentDetail.querySelector('.module-operation-details')?.open;
   const steps = `<details class="module-operation-details" ${keepStepsOpen ? 'open' : ''}><summary data-focus-key="module-operations">执行步骤与证据</summary><ol>${operations}</ol></details>`;
   return `${renderTaskHandoff(run, simulation, preview, owner, tools)}
-    <div class="task-workspace">
+    <div class="task-workspace" ${state.tab === 'tasks' ? 'data-graph-workspace' : ''}>
       ${taskView}
-      <aside class="task-detail" aria-label="所选任务详情" data-graph-context="${escape(detailKey)}" data-inspected-step="agent" data-inspected-module="${escape(selected.id)}">
+      <aside class="task-detail" ${state.tab === 'tasks' && !graph.expanded ? 'hidden' : ''} aria-label="所选任务详情" data-graph-context="${escape(detailKey)}" data-inspected-step="agent" data-inspected-module="${escape(selected.id)}">
         <div class="task-detail-summary">
           <p class="task-detail-id">${escape(module.group)} · ${escape(selected.id)}</p>
           <h3>${escape(module.title)}</h3>
@@ -1432,10 +1432,9 @@ document.addEventListener('click', (event) => {
   }
   if (task) {
     state.taskId = task.dataset.ownerTask ?? task.dataset.task;
+    if (state.tab === 'tasks') taskOrchestration.showModule(state.taskId, task.hasAttribute('data-flow-node'));
     renderRecords(); rememberSelection();
-    if (event.detail && task.hasAttribute('data-flow-node') && matchMedia('(max-width: 850px)').matches) {
-      document.querySelector('.task-detail')?.scrollIntoView({ block: 'start' });
-    }
+    if (task.hasAttribute('data-flow-node')) taskOrchestration.revealFlow();
     if (!task.hasAttribute('data-flow-node') && !task.hasAttribute('data-task-schedule')) taskOrchestration.revealSelected();
   }
   const artifact = event.target.closest('[data-artifact]'); if (artifact) showArtifact(artifact.dataset.artifact);
