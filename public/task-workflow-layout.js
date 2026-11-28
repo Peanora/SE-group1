@@ -140,6 +140,18 @@ function offsetPosition(base, offset, bounds) {
 // Merge consecutive rows owned by the same group. If dependencies return to a
 // group later, open a continuation band instead of drawing a normal handoff backwards.
 function phaseBands(depthOrder, groupByTask, laneOrder, capacity) {
+  if (laneOrder.length === 1 && depthOrder.length > 1) {
+    const first = depthOrder.slice(0, 1);
+    const rest = depthOrder.slice(1);
+    const stages = [
+      { title: '起始任务', layers: first },
+      { title: '后续任务', layers: rest.length > 1 ? rest.slice(0, -1) : rest },
+    ];
+    if (rest.length > 1) stages.push({ title: '末层任务', layers: rest.slice(-1) });
+    return stages.map(({ title, layers }) => ({
+      name: laneOrder[0], title, inferred: true, rows: layers.flatMap(ids => chunkRows(ids, capacity)),
+    }));
+  }
   const priority = new Map(laneOrder.map((name, index) => [name, index]));
   const bands = [];
   for (const layer of depthOrder) {
@@ -153,10 +165,16 @@ function phaseBands(depthOrder, groupByTask, laneOrder, capacity) {
       const ids = byGroup.get(name);
       if (bands.at(-1)?.name !== name) bands.push({ name, rows: [] });
       const band = bands.at(-1);
-      for (let i = 0; i < ids.length; i += capacity) band.rows.push(ids.slice(i, i + capacity));
+      band.rows.push(...chunkRows(ids, capacity));
     }
   }
   return bands;
+}
+
+function chunkRows(ids, capacity) {
+  const rows = [];
+  for (let index = 0; index < ids.length; index += capacity) rows.push(ids.slice(index, index + capacity));
+  return rows;
 }
 
 // Route long links along outer rails instead of crossing intervening cards or details.
@@ -197,8 +215,8 @@ export function projectWorkflow({ tasks, graph, narrow = false, nodes, edges, or
   const bands = phaseBands(depthOrder, groupByTask, laneOrder, narrow ? 2 : 3);
   const nodeWidth = narrow ? 196 : 212, nodeHeight = 84, step = nodeWidth + (narrow ? 60 : 74);
   const slots = Math.max(1, ...bands.flatMap(band => band.rows.map(row => row.length)));
-  const firstX = narrow ? 26 : 184, rowHeight = 150, laneGap = 32, detailWidth = 860, detailHeight = 260;
-  const rowWidth = Math.max(narrow ? 296 : 575, firstX + (slots - 1) * step + nodeWidth + 58);
+  const firstX = narrow ? 26 : 166, rowHeight = 138, laneGap = 37, detailWidth = 860, detailHeight = 260;
+  const rowWidth = Math.max(narrow ? 296 : 1120, firstX + (slots - 1) * step + nodeWidth + 58);
   const width = Math.max(rowWidth, definitions.has(expandedId) ? firstX + detailWidth + 36 : 0);
   const modules = [], groups = [];
   const rowById = new Map(), columnCenters = new Map(), appearances = new Map();
@@ -207,6 +225,7 @@ export function projectWorkflow({ tasks, graph, narrow = false, nodes, edges, or
   for (const [bandIndex, band] of bands.entries()) {
     const group = band.name, bandTop = top;
     const previous = appearances.get(group) ?? 0;
+    const phaseId = JSON.stringify([group, previous]);
     appearances.set(group, previous + 1);
     if (narrow) top += 30; // The compact header sits above the first row.
     let count = 0, expanded = false;
@@ -243,7 +262,7 @@ export function projectWorkflow({ tasks, graph, narrow = false, nodes, edges, or
           id, taskId: id, kind: 'agent', step: 'agent', role: 'coding', roleLabel: '编码智能体',
           title: label(task.workflowModule?.name) || task.title || base.title || id,
           label: base.label ?? '', meta: base.meta ?? '', roleHelp: OPERATIONS[0].roleHelp,
-          group, slot, rank: ranks.get(id), movable: true, expanded: id === expandedId, basePosition, position, movementBounds,
+          group, phaseId, slot, rank: ranks.get(id), movable: true, expanded: id === expandedId, basePosition, position, movementBounds,
           width: nodeWidth, height: nodeHeight, selected: Boolean(base.selected), className: base.className ?? '',
           gateState, gateLabel, reviewState: evidence.review.gateState, reviewLabel: evidence.review.gateLabel,
           operations: OPERATIONS.map(operation => ({ ...operation, ...evidence[operation.step] })),
@@ -254,9 +273,9 @@ export function projectWorkflow({ tasks, graph, narrow = false, nodes, edges, or
       }
       top = geometry.bottom + (opensHere ? detailHeight + 20 : 0);
     }
-    groups.push({ id: JSON.stringify([group, previous]), rank: bandIndex, title: previous ? group + '（续）' : group, group,
+    groups.push({ id: phaseId, rank: bandIndex, title: band.title ?? (previous ? group + '（续）' : group), group,
       top: bandTop, height: top - bandTop, left: 10, width: width - 20,
-      headerSide: narrow ? undefined : 'left', count, expanded });
+      headerSide: narrow ? undefined : 'left', count, expanded, inferred: Boolean(band.inferred) });
     top += laneGap;
   }
 

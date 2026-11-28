@@ -45,13 +45,15 @@ test('every real task starts collapsed in its functional phase, with siblings ar
   assert.deepEqual(module(model, 'left').operations.map(item => item.step), ['agent', 'self', 'http', 'browser', 'review']);
 });
 
-test('a legacy chain remains a single vertical phase and expands immediately under the selected task', () => {
+test('a single-board chain gets three visible phases and expands immediately under the selected task', () => {
   const plan = Array.from({ length: 80 }, (_, i) => ({ id: 'T' + i, dependsOn: i ? ['T' + (i - 1)] : [] }));
   for (const narrow of [false, true]) {
     const model = diagram({ plan, narrow }), expanded = diagram({ plan, narrow, expandedId: 'T30' });
-    assert.equal(model.groups.length, 1);
-    assert.equal(expanded.groups.length, 1);
-    assert.ok(model.width <= (narrow ? 320 : 620));
+    assert.deepEqual(model.groups.map(({ title, count, inferred }) => [title, count, inferred]), [
+      ['起始任务', 1, true], ['后续任务', 78, true], ['末层任务', 1, true],
+    ]);
+    assert.deepEqual(expanded.groups.map(group => group.id), model.groups.map(group => group.id));
+    assert.ok(model.width <= (narrow ? 320 : 1120));
     assert.equal(new Set(model.nodes.map(n => n.position.x)).size, 1);
     for (const [i, n] of model.nodes.entries()) {
       const e = expanded.nodes[i];
@@ -60,6 +62,23 @@ test('a legacy chain remains a single vertical phase and expands immediately und
     }
     assert.ok(expanded.detailBounds.y + expanded.detailBounds.height < module(expanded, 'T31').position.y);
   }
+});
+
+test('a single functional board preserves actual branch levels within three separate frames', () => {
+  const plan = [
+    { id: 'A', dependsOn: [] }, { id: 'B', dependsOn: ['A'] },
+    { id: 'C', dependsOn: ['B'] }, { id: 'D', dependsOn: ['B'] },
+    { id: 'E', dependsOn: ['C', 'D'] }, { id: 'F', dependsOn: ['D'] },
+    { id: 'G', dependsOn: ['E', 'F', 'A'] },
+  ].map(task => ({ ...task, workflowModule: { group: '业务开发' } }));
+  const layout = diagram({ plan, expandedId: 'D' });
+  assert.deepEqual(layout.laneOrder, ['业务开发']);
+  assert.deepEqual(layout.groups.map(phase => layout.nodes
+    .filter(node => node.phaseId === phase.id).map(node => node.id).sort()), [['A'], ['B', 'C', 'D', 'E', 'F'], ['G']]);
+  assert.deepEqual(layout.edges.map(edge => [edge.source, edge.target]), plan.flatMap(task => task.dependsOn.map(id => [id, task.id])));
+  const selected = layout.groups.find(phase => phase.id === module(layout, 'D').phaseId);
+  assert.ok(selected.expanded && selected.top < layout.detailBounds.y);
+  assert.ok(layout.detailBounds.y + layout.detailBounds.height < selected.top + selected.height);
 });
 
 test('wide independent sets wrap; their dependent starts below every row', () => {
@@ -153,11 +172,11 @@ test('expanding reserves space in exactly one group; links skirt the detail fram
 
 test('saved two-axis offsets survive collapse, stay within their phase, and never modify logical order', () => {
   const original = diagram();
-  const positions = { base: {x: 42, y: 12}, left: {x: Infinity, y: 1e7}, right: {x: 1e7, y: -1e7} };
+  const positions = { base: {x: 42, y: 8}, left: {x: Infinity, y: 1e7}, right: {x: 1e7, y: -1e7} };
   const moved = diagram({ positions }), expanded = diagram({ positions, expandedId: 'base' });
   const first = module(moved, 'base');
   assert.deepEqual(first.basePosition, module(original, 'base').position);
-  assert.deepEqual(first.position, {x:first.basePosition.x + 42,y:first.basePosition.y + 12});
+  assert.deepEqual(first.position, {x:first.basePosition.x + 42,y:first.basePosition.y + 8});
   for (const id of ['base','left','right']) {
     const current = module(moved, id), afterExpand = module(expanded, id);
     assert.equal(current.position.x, afterExpand.position.x);

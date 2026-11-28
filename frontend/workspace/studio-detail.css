@@ -159,7 +159,10 @@
 }
 .tf-workbench .studio-surface .task-workspace[data-graph-workspace] { grid-template-columns: minmax(0, 1fr); }
 .task-workspace[data-graph-workspace] > .task-detail[hidden] { display: none; }
-.tf-workbench .task-workspace[data-graph-workspace] .task-graph-scroll { block-size: clamp(350px, 58vh, 670px); }
+.tf-workbench .task-workspace[data-graph-workspace] .task-graph-scroll { block-size: clamp(420px, 72dvh, 790px); }
+@media (max-width: 850px) {
+  .tf-workbench .task-workspace[data-graph-workspace] .task-graph-scroll { block-size: clamp(350px, 58dvh, 620px); }
+}
 .task-expanded-slot { position: absolute; z-index: 4; transform-origin: top left; }
 .tf-workbench .studio-surface .task-orchestration-root .task-detail {
   padding: 16px; background: #fff; border-top: 3px solid var(--surface-blue); font-size: 14px;

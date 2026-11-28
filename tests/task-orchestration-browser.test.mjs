@@ -301,6 +301,8 @@ test('真实 Edge 390px：80 项长链可适应到 10% 以下并完整显示', {
   const root = await openTasks(page, origin);
   const canvas = root.locator('.task-graph-scroll');
   assert.equal(await canvas.locator('.dev-task').count(), 80);
+  assert.deepEqual(await canvas.locator('[data-phase-frame] .task-flow-group-heading strong').allTextContents(),
+    ['起始任务', '后续任务', '末层任务']);
   const chain = await canvas.locator('.dev-task').evaluateAll(nodes => nodes
     .map(el => ({ id: Number(el.dataset.task.slice(2)), box: el.getBoundingClientRect() }))
     .sort((a, b) => a.id - b.id).map(({ box }) => ({ x: box.x, top: box.top, bottom: box.bottom })));

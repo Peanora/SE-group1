@@ -36,6 +36,14 @@ function reached(graph, root) {
 
 function fallbackCanvas(model, escape) {
   const byId = new Map(model.nodes.map(node => [node.id, node]));
+  const frames = model.groups.map(phase => `
+    <div class="task-flow-group" data-phase-frame="${escape(phase.id)}" data-flow-group="${escape(phase.id)}"
+      data-phase-expanded="${phase.expanded}" data-header-side="${phase.headerSide || 'top'}"
+      style="left:${phase.left}px;top:${phase.top}px;width:${phase.width}px;height:${phase.height}px">
+      <div class="task-flow-group-heading"><i aria-hidden="true">${String(phase.rank + 1).padStart(2, '0')}</i>
+        <strong>${escape(phase.title)}</strong><span>${phase.count} 个任务</span>
+      </div>
+    </div>`);
   function port(node, side) {
     const { x, y } = node.position, { width: w, height: h } = node;
     if (side === 'top' || side === 'bottom') return [x + w / 2, y + (side === 'bottom' ? h : 0)];
@@ -52,9 +60,9 @@ function fallbackCanvas(model, escape) {
     const { x, y } = node.position;
     const agent = node.kind === 'agent';
     const id = escape(node.taskId);
-    return `<button type="button" class="task-fallback-card ${agent ? 'dev-task' : ''} ${escape(node.className)}" style="left:${x}px;top:${y}px;width:${node.width}px;height:${node.height}px" data-focus-key="task-${escape(node.id)}" data-flow-node="${escape(node.id)}" data-flow-part="${node.kind}" data-owner-task="${id}" data-task="${id}" aria-pressed="${node.selected}" aria-expanded="${node.expanded}"><small>${id} · 编码任务</small><strong>${escape(node.title)}</strong></button>`;
+    return `<button type="button" class="task-fallback-card ${agent ? 'dev-task' : ''} ${escape(node.className)}" style="left:${x}px;top:${y}px;width:${node.width}px;height:${node.height}px" data-focus-key="task-${escape(node.id)}" data-flow-node="${escape(node.id)}" data-phase-id="${escape(node.phaseId)}" data-flow-part="${node.kind}" data-owner-task="${id}" data-task="${id}" aria-pressed="${node.selected}" aria-expanded="${node.expanded}"><small>${id} · 编码任务</small><strong>${escape(node.title)}</strong></button>`;
   });
-  return `<div class="task-graph" style="width:${model.width}px;height:${model.height}px;transform:scale(${model.zoom})"><svg class="task-edges" width="${model.width}" height="${model.height}" aria-hidden="true"><defs><marker id="taskflow-end" viewBox="0 0 8 8" refX="7" refY="4" orient="auto" markerWidth="6" markerHeight="6"><path d="M0 0L8 4L0 8Z" fill="currentColor"/></marker></defs>${paths.join('')}</svg>${cards.join('')}</div>`;
+  return `<div class="task-graph task-flow-surface" data-plan-canvas style="width:${model.width}px;height:${model.height}px;transform:scale(${model.zoom})">${frames.join('')}<svg class="task-edges" width="${model.width}" height="${model.height}" aria-hidden="true"><defs><marker id="taskflow-end" viewBox="0 0 8 8" refX="7" refY="4" orient="auto" markerWidth="6" markerHeight="6"><path d="M0 0L8 4L0 8Z" fill="currentColor"/></marker></defs>${paths.join('')}</svg>${cards.join('')}</div>`;
 }
 
 function loadViews(storageKey) {
@@ -178,7 +186,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
         versions: execution ? executionVersionEvidence(execution) : [], escape, simulation, preview, contextKey: reviewContext, historyOpen }),
       html: `<div class="task-graph-zone" data-focus-relations="${focusRelations}">
         <div class="task-orchestration-bar">
-          <div class="task-orchestration-heading"><h3>模块工作流</h3><p>${layout.laneOrder.length} 个板块 · ${tasks.length} 个模块 · ${edges.length} 条依赖${simulation ? ' · 模拟运行' : execution ? ' · 正在查看执行记录' : dependencyExecution ? engineeringReady ? ' · 按图运行' : ' · 按图计划，待工程契约' : ' · 编排设计'}</p></div>
+          <div class="task-orchestration-heading"><h3>模块工作流</h3><p>${layout.groups.length} 个阶段 · ${tasks.length} 个模块 · ${edges.length} 条依赖${simulation ? ' · 模拟运行' : execution ? ' · 正在查看执行记录' : dependencyExecution ? engineeringReady ? ' · 按图运行' : ' · 按图计划，待工程契约' : ' · 编排设计'}</p></div>
           ${editable ? `<button type="button" class="task-canvas-relations" data-task-canvas="edit-links" data-focus-key="task-canvas-edit-links" aria-pressed="${editingGraph}">编辑连线</button>` : ''}
           <button type="button" class="task-canvas-relations" data-task-canvas="relations" data-focus-key="task-canvas-relations" aria-pressed="${focusRelations}">突出关联</button>
           <div class="task-orchestration-tools" role="group" aria-label="画布缩放">
@@ -192,7 +200,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
         ${editingGraph ? graphEditor(tasks, selected, graph.dependencies.get(selected.id), preview, dependencyExecution) : ''}
         <div class="task-canvas-window">
           <div class="task-graph-scroll" data-plan-canvas role="region" aria-label="开发任务依赖画布" tabindex="0" data-focus-key="task-canvas" data-graph-context="${escape(layoutKey)}" data-graph-width="${width}" data-graph-height="${height}">
-            <div class="task-graph-sizer" style="${sizerStyle(width, height, zoom)}">${diagram}${expanded ? `<div class="task-expanded-slot" style="${expandedStyle()}">${expanded}</div>` : ''}</div>
+            <div class="task-graph-sizer" style="${sizerStyle(width, height, zoom)}">${diagram}${expanded ? `<div class="task-expanded-slot" data-phase-id="${escape(inspected.phaseId)}" style="${expandedStyle()}">${expanded}</div>` : ''}</div>
           </div>
         </div>
         <div class="task-canvas-dock">
@@ -204,6 +212,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
           </div>
           <button type="button" class="task-navigator" data-focus-key="task-canvas-navigator" aria-label="任务图小地图，方向键平移，回车居中" title="点击定位，方向键平移，回车居中">
             <svg class="task-navigator-map" viewBox="0 0 ${width} ${height}" aria-hidden="true">
+              <g class="task-navigator-phases"></g>
               <g class="task-navigator-nodes"></g>
               <path class="task-navigator-shade" fill-rule="evenodd"></path>
               <rect class="task-navigator-viewport" vector-effect="non-scaling-stroke"></rect>
@@ -287,10 +296,13 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
     const viewport = observedViewport;
     if (!viewport?.isConnected || !viewport.clientWidth) return;
     const map = viewport.closest('.task-graph-zone').querySelector('.task-navigator-map');
-    const { width, height, nodes } = model;
+    const { width, height, nodes, groups } = model;
     if (map !== navigatorMap || nodes !== navigatorNodes) {
       navigatorMap = map;
       navigatorNodes = nodes;
+      map.querySelector('.task-navigator-phases').innerHTML = groups.map(phase =>
+        `<rect x="${phase.left}" y="${phase.top}" width="${phase.width}" height="${phase.height}" rx="12" vector-effect="non-scaling-stroke"></rect>`
+      ).join('');
       map.querySelector('.task-navigator-nodes').innerHTML = nodes.map(node => {
         const { x, y } = node.position;
         const state = node.selected ? 'selected' : node.className.includes('relation-upstream') ? 'upstream'
@@ -364,7 +376,9 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
   function fitWidth(viewport) {
     if (viewport.clientWidth < 3) return;
     if (!manualZoom && !narrow.matches) {
-      const fit = Math.max(.8, Math.min(1, (viewport.clientWidth - 2) / model.width));
+      const compactOverview = !expandedId && model.groups.length <= 3 && model.height <= 820;
+      const fitHeight = compactOverview ? (viewport.clientHeight - 2) / model.height : 1;
+      const fit = Math.max(.76, Math.min(1, (viewport.clientWidth - 2) / model.width, fitHeight));
       if (Math.abs(fit - zoom) > .0005) setZoom(viewport, fit, true);
     }
     if (centerPending) {

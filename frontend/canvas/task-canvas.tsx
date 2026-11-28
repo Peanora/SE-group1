@@ -25,6 +25,7 @@ type PlanNode = NodeIdentity & {
   taskId: string;
   kind: 'agent';
   group: string;
+  phaseId: string;
   roleLabel: string;
   roleHelp?: string;
   reviewState: GateState;
@@ -73,7 +74,18 @@ type PlanDependency = {
 };
 type DependencyData = (PlanDependency & { gateState: GateState; motion?: EdgeMotion }) | { focused: boolean; vertical: boolean };
 type CanvasEdge = { id?: string; source: string; target: string } & (PlanDependency | { focused: boolean });
-type PlanGroup = { headerSide?: 'left'; id: string; rank: number; title: string; top: number; height: number; left: number; width: number; count: number };
+type PlanGroup = {
+  id: string;
+  title: string;
+  rank: number;
+  count: number;
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+  headerSide?: 'left';
+  expanded?: boolean;
+};
 type PlanColumn = { rank: number; title: string; left: number; width: number };
 type DetailBounds = XYPosition & { width: number; height: number };
 
@@ -151,7 +163,7 @@ function PlanCard({ data }: { data: PlanTask }) {
       <button type="button" className={`task-flow-card dev-task ${data.className}`}
         data-flow-node={data.id} data-flow-part="agent" data-flow-role="coding" data-owner-task={taskId}
         data-flow-rank={data.rank} data-task={taskId} data-focus-key={`task-${taskId}`}
-        data-workflow-module={taskId} data-workflow-group={data.group}
+        data-workflow-module={taskId} data-workflow-group={data.group} data-phase-id={data.phaseId}
         data-gate-state={gateState}
         aria-pressed={selected} aria-expanded={Boolean(data.expanded)} aria-description={explanation}
         title={[data.title, data.group, data.roleLabel, data.reviewLabel, data.gateLabel, explanation].filter(Boolean).join(' · ')}>
@@ -470,9 +482,14 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
       {planning && groups?.length && (
         <div className="task-flow-groups" style={{ width, height, transform: `scale(${zoom})` }}>
           {groups.map(group => (
-            <div className="task-flow-group" data-header-side={group.headerSide} data-flow-group={group.id} key={group.id}
+            <div className="task-flow-group" data-header-side={group.headerSide} data-flow-group={group.id}
+              data-phase-frame={group.id} data-phase-expanded={Boolean(group.expanded)} key={group.id}
               style={{ left: group.left, width: group.width, top: group.top, height: group.height }}>
-              <div className="task-flow-group-heading"><i aria-hidden="true">{String(group.rank + 1).padStart(2, '0')}</i><strong title={group.title}>{group.title}</strong><span>{group.count} 个功能</span></div>
+              <div className="task-flow-group-heading">
+                <i aria-hidden="true">{String(group.rank + 1).padStart(2, '0')}</i>
+                <strong title={group.title}>{group.title}</strong>
+                <span>{group.count} 个任务</span>
+              </div>
             </div>
           ))}
           {columns?.map(column => (

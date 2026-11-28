@@ -38,6 +38,7 @@
   pointer-events: none;
 }
 
+.task-navigator-phases { fill: #fff; stroke: #c7d9ed; stroke-width: .65px; }
 .task-navigator-nodes { fill: #a5b4ce; }
 .task-navigator-nodes [data-relation="selected"] { fill: var(--task-accent, #245fbb); }
 .task-navigator-nodes [data-relation="upstream"] { fill: var(--task-upstream, #477bb6); }
