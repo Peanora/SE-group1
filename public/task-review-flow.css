@@ -1,0 +1,108 @@
+#task-review-flow {
+  --tr-ink: #243955;
+  --tr-line: #ccd7e2;
+  min-width: 0;
+  border: 1px solid var(--tr-line);
+  border-radius: 5px;
+  padding: 12px;
+  background: white;
+  color: var(--tr-ink);
+  scroll-margin-block: 6rem;
+}
+#task-review-flow:focus-visible, .tr-fallback-gate:focus-visible {
+  outline: 2px solid #2856c9;
+  outline-offset: 2px;
+}
+#task-review-flow .tr-heading {
+  display: flex;
+  gap: 6px 12px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+}
+#task-review-flow .tr-heading h4 { margin: 0; font-size: 15px; }
+#task-review-flow [data-state] { --tr-tone: #465c73; --tr-wash: #f1f4f7; }
+#task-review-flow [data-state="checking"] { --tr-tone: #2457a5; --tr-wash: #eaf2ff; }
+#task-review-flow [data-state="passed"] { --tr-tone: #176749; --tr-wash: #edf8f1; }
+#task-review-flow [data-state="failed"] { --tr-tone: #a03145; --tr-wash: #fff0f1; }
+#task-review-flow [data-state="unknown"] { --tr-tone: #795011; --tr-wash: #fff6e2; }
+#task-review-flow .tr-heading > span {
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--tr-wash);
+  color: var(--tr-tone);
+  font-size: 12px;
+  font-weight: 650;
+}
+#task-review-flow .tr-context, #task-review-flow .tr-next { margin: 7px 0; font-size: 12px; }
+#task-review-flow .tr-route, #task-review-flow .tr-parallel ul {
+  display: grid;
+  position: relative;
+  gap: 7px;
+  list-style: none;
+  padding: 0;
+  margin: 10px 0;
+}
+#task-review-flow .tr-route::before {
+  content: "";
+  position: absolute;
+  inset: 10px auto 10px 12px;
+  border-left: 1px solid #8ea1b5;
+}
+#task-review-flow .tr-route > li { position: relative; }
+#task-review-flow [data-review-step] {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 5px;
+  padding: 4px 7px;
+  border: 1px solid var(--tr-line);
+  border-left: 3px solid var(--tr-tone);
+  border-radius: 3px;
+  background: var(--tr-wash);
+  line-height: 1.4;
+}
+#task-review-flow [data-review-step] strong { color: var(--tr-ink); font-size: 13px; }
+#task-review-flow [data-review-step] small { color: var(--tr-tone); font-size: 12px; }
+#task-review-flow [data-review-step="review"] { border-color: var(--tr-tone); }
+#task-review-flow .tr-parallel {
+  padding: 5px 6px;
+  border: 1px dashed #aebdcd;
+  border-radius: 4px;
+  background: white;
+}
+#task-review-flow .tr-parallel > span { color: #52657a; font-size: 11px; }
+#task-review-flow .tr-parallel ul { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; margin: 3px 0 0; }
+#task-review-flow .tr-parallel li { display: grid; align-content: start; justify-content: start; }
+#task-review-flow .tr-repair {
+  margin: 8px 0;
+  padding: 5px 0 5px 8px;
+  border-left: 2px dashed #8a9aad;
+  font-size: 12px;
+}
+#task-review-flow .tr-identity { margin: 10px 0; padding-top: 6px; border-top: 1px solid var(--tr-line); }
+#task-review-flow .tr-identity dt, #task-review-flow .tr-history small { color: #51657c; font-size: 12px; }
+#task-review-flow .tr-identity dd { margin: 0 0 3px; }
+#task-review-flow code { overflow-wrap: anywhere; color: #243f63; font: 12px/1.45 var(--mono-type, Consolas, monospace); }
+#task-review-flow .tr-issues, #task-review-flow .tr-history { list-style: none; margin: 6px 0; padding: 0; }
+#task-review-flow .tr-issues li { margin: 4px 0; padding-left: 7px; border-left: 2px solid #8fa0b3; font-size: 13px; overflow-wrap: anywhere; }
+#task-review-flow .tr-issues small, #task-review-flow .tr-history code, #task-review-flow .tr-history small { display: block; }
+#task-review-flow .tr-issues [data-blocking="true"] { border-color: #b53a4f; }
+#task-review-flow .tr-issues [data-blocking="true"] b, #task-review-flow .tr-error { color: #9d3142; }
+#task-review-flow details { margin-top: 10px; border-top: 1px solid var(--tr-line); padding-top: 6px; }
+#task-review-flow summary, #task-review-flow .tr-evidence-link { cursor: pointer; font-size: 13px; color: #244f99; }
+#task-review-flow .tr-evidence-link { padding: 4px 0; border: 0; background: transparent; text-decoration: underline; text-underline-offset: 3px; }
+#task-review-flow .tr-history > li + li { margin-top: 7px; border-top: 1px solid var(--tr-line); padding-top: 6px; }
+.task-graph .tr-fallback-gate {
+  position: absolute;
+  height: 27px;
+  border: 1px solid #9cb2cb;
+  border-radius: 3px;
+  background: #eef3fa;
+  color: #253f63;
+  font-size: 12px;
+  cursor: pointer;
+}
+.task-graph .tr-fallback-gate[data-review-state="passed"] { background: #edf8f1; color: #176749; }
+.task-graph .tr-fallback-gate[data-review-state="failed"] { background: #fff0f1; color: #a03145; }

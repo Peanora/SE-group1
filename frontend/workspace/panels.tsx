@@ -98,15 +98,17 @@ export function TaskPanel() {
   return (
     <section id="workspace-tasks" className="workspace-panel studio-surface" data-workspace-panel="tasks"
       role="tabpanel" aria-labelledby="tab-tasks" tabIndex={-1} hidden>
-      <SurfaceHeader title="开发任务编排" icon={Network}><span id="records-hint">任务依赖与详情</span></SurfaceHeader>
-      <nav className="tabs studio-subnav" role="tablist" aria-label="查看运行内容">
-        {taskViews.map(({ id, tabId, title, icon: Icon, countId }) => (
-          <button key={id} type="button" role="tab" id={tabId} data-tab={id}
-            aria-selected={id === 'tasks'} aria-controls="records-body">
-            <Icon aria-hidden="true" />{title}{countId && <span id={countId}>0</span>}
-          </button>
-        ))}
-      </nav>
+      <div className="task-view-heading">
+        <SurfaceHeader title="开发任务编排" icon={Network}><span id="records-hint" className="visually-hidden">任务依赖与详情</span></SurfaceHeader>
+        <nav className="tabs studio-subnav" role="tablist" aria-label="查看运行内容">
+          {taskViews.map(({ id, tabId, title, icon: Icon, countId }) => (
+            <button key={id} type="button" role="tab" id={tabId} data-tab={id}
+              aria-selected={id === 'tasks'} aria-controls="records-body">
+              <Icon aria-hidden="true" />{title}{countId && <span id={countId}>0</span>}
+            </button>
+          ))}
+        </nav>
+      </div>
       <div id="records-body" className="records-body studio-records" role="tabpanel" aria-labelledby="records-tab-tasks" />
       <details id="simulation-tools" className="studio-simulation">
         <summary>模拟调度实验</summary><div id="simulation-panel-host" className="simulation-panel" hidden />

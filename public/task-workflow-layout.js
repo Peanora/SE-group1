@@ -75,6 +75,14 @@ function observedChecks(checks, { active, complete }) {
 }
 
 function roleStates(base) {
+  if (base.reviewFlow) {
+    const flow = base.reviewFlow;
+    const forCanvas = step => state(step.state === 'unknown' ? 'waiting' : step.state, step.label);
+    const self = flow.checks?.self?.length ? observedChecks(flow.checks.self, { active: false, complete: Boolean(flow.commit) })
+      : flow.planned ? state('planned', '待执行') : base.observed?.stage === 'self_check' && flow.coding.state === 'checking'
+        ? state('checking', '正在自检') : state('waiting', '自检明细待回查');
+    return { agent: forCanvas(flow.coding), self, http: forCanvas(flow.http), browser: forCanvas(flow.browser), review: forCanvas(flow.review) };
+  }
   const observed = base.observed;
   const planned = state('planned', '待执行');
   if (!observed) {

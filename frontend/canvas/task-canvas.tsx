@@ -1,4 +1,4 @@
-import { memo, useId, useMemo, useState, type PointerEvent } from 'react';
+import { memo, useId, useMemo, useState, type CSSProperties, type PointerEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import { Bot, ClipboardCheck, GitBranch, GitMerge, Grip, Shield } from 'lucide-react';
@@ -103,6 +103,27 @@ const markerColors: Record<Relation, string> = {
   downstream: '#3846ce',
 };
 const gateHelp = '同一代码版本的自检、独立 HTTP、Edge 和 Review 均通过且完成代码集成后，才释放后续任务。';
+const reviewHeight = 27;
+const reviewGap = 6;
+const portSize = 8;
+const editPortSize = 16;
+const planSizing = {
+  '--task-review-height': `${reviewHeight}px`,
+  '--task-review-gap': `${reviewGap}px`,
+  '--task-port-size': `${portSize}px`,
+  '--task-edit-port-size': `${editPortSize}px`,
+} as CSSProperties;
+
+function planPort(side: Side, type: 'source' | 'target', width: number, height: number, editing: boolean) {
+  const x = { left: 0, right: width, top: width / 2, bottom: width / 2 }[side];
+  const y = { left: (height - reviewHeight - reviewGap) / 2, right: height - reviewHeight / 2, top: 0, bottom: height }[side];
+  const editable = editing && side === (type === 'source' ? 'right' : 'left');
+  const size = editable ? editPortSize : portSize;
+  return {
+    id: `${type === 'source' ? 'output' : 'input'}-${side}`,
+    type, position: sidePositions[side], x: x - size / 2, y: y - size / 2, width: size, height: size,
+  };
+}
 
 const stopCanvasPan = (event: PointerEvent) => event.stopPropagation();
 
@@ -120,41 +141,52 @@ const TaskCard = memo(function TaskCard({ data, sourcePosition, targetPosition }
 function PlanCard({ data }: { data: PlanTask }) {
   const { taskId, selected, editing, movable, gateState = 'planned', checkpoint, join, fork } = data;
   const explanation = `直接前置：${data.parents.join('、') || '无'}。${checkpoint ? gateHelp : ''}`;
+  const checkpointLabel = checkpoint?.gateState === 'failed' ? '检查点阻断' : checkpoint?.blocked ? '前置阻断'
+    : checkpoint?.delivery ? '交付检查点' : '验收检查点';
+  const reviewTitle = `${data.title}的代码审查 Review，${data.reviewLabel}`;
   return (
-    <div className="plan-task-node" data-movable={movable} data-editing={editing}>
+    <div className="plan-task-node" data-movable={movable} data-editing={editing} style={planSizing}>
       <button type="button" className={`task-flow-card dev-task ${data.className}`}
         data-flow-node={data.id} data-flow-part="agent" data-flow-role="coding" data-owner-task={taskId}
         data-flow-rank={data.rank} data-task={taskId} data-focus-key={`task-${taskId}`}
         data-workflow-module={taskId} data-workflow-group={data.group}
-        data-gate-state={gateState} data-review-state={data.reviewState}
+        data-gate-state={gateState}
         aria-pressed={selected} aria-description={explanation}
         title={[data.title, data.group, data.roleLabel, data.reviewLabel, data.gateLabel, explanation].filter(Boolean).join(' · ')}>
         <span className="task-flow-card-kicker">
-          <Bot aria-hidden="true" /><span>{data.roleLabel} <small>{taskId}</small></span>
+          <Bot aria-hidden="true" />
+          <small>{taskId}</small>
+          <span className="task-module-note" title={data.label || data.roleLabel}>{data.label || '编码'}</span>
+          <span className="task-module-junctions">
+            {join && <span data-module-join="" data-gate-state={join.gateState} title={`汇合 ${join.count} 项，${join.gateLabel}`}>
+              <GitMerge aria-hidden="true" />{join.count}
+            </span>}
+            {fork && <span data-module-fork="" data-gate-state={fork.gateState} title={`分叉 ${fork.count} 路，${fork.gateLabel}`}>
+              <GitBranch aria-hidden="true" />{fork.count}
+            </span>}
+            {checkpoint && <span className="task-module-checkpoint" data-module-checkpoint="" data-gate-state={checkpoint.gateState}
+              data-blocked={checkpoint.blocked} title={`${checkpointLabel}，${checkpoint.gateLabel}`}>
+              <Shield aria-hidden="true" />
+            </span>}
+          </span>
           {movable && <Grip className="dev-task-grip" aria-hidden="true" />}
         </span>
         <span className="task-flow-card-title dev-task-title">{data.title}</span>
-        <span className="task-flow-card-meta">
-          {data.reviewState !== 'planned' && <span className="task-module-review" data-review-state={data.reviewState}
-            title={`审查智能体：${data.reviewLabel}`}>
-            <ClipboardCheck aria-hidden="true" /><span>审查 · {data.reviewLabel}</span>
-          </span>}
-          {data.label && <span className="task-module-note" title={data.label}>{data.label}</span>}
-          {checkpoint && <span className="task-module-checkpoint" data-module-checkpoint=""
-            data-gate-state={checkpoint.gateState} data-blocked={checkpoint.blocked} title={checkpoint.gateLabel}>
-            <Shield aria-hidden="true" />
-            <span>{checkpoint.gateState === 'failed' ? '检查点阻断' : checkpoint.blocked ? '前置阻断' : checkpoint.delivery ? '交付检查点' : '验收检查点'}</span>
-          </span>}
-        </span>
-        {(join || fork) && <span className="task-module-junctions">
-          {join && <span data-module-join="" data-gate-state={join.gateState} title={join.gateLabel}>
-            <GitMerge aria-hidden="true" />汇合 {join.count} 项
-          </span>}
-          {fork && <span data-module-fork="" data-gate-state={fork.gateState} title={fork.gateLabel}>
-            <GitBranch aria-hidden="true" />分叉 {fork.count} 路
-          </span>}
-        </span>}
       </button>
+      <span className="task-review-feed" aria-hidden="true" />
+      <button type="button" className="task-review-gate nodrag" data-task-review={taskId} data-review-state={data.reviewState}
+        data-focus-key={`review-${taskId}`} aria-label={reviewTitle} aria-controls="task-review-flow"
+        title={`${reviewTitle}。出现阻塞意见时返回编码修订。同版验收通过且完成集成后放行。`}>
+        <ClipboardCheck aria-hidden="true" />
+        <strong>Review</strong>
+        <span>{data.reviewLabel}</span>
+      </button>
+      <svg className="task-review-return" data-review-loop={data.reviewState === 'failed' ? 'blocked' : 'conditional'}
+        width="18" height="36" viewBox="0 0 18 36" aria-hidden="true">
+        <title>审查有阻塞意见时返回编码修订</title>
+        <path d="M18 24H11Q5 24 5 18V4" />
+        <path d="m2 7 3-3 3 3" />
+      </svg>
       {data.inputs.map(side => {
         const eligible = side === 'left';
         return <Handle key={side} id={`input-${side}`} type="target" position={sidePositions[side]}
@@ -298,14 +330,23 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
     const plan = 'kind' in node ? node : null;
     const canMove = Boolean(plan?.movable);
     const movingPart = plan && moving?.taskId === plan.taskId ? moving : undefined;
+    const inputSides = [...(inputs.get(node.id) ?? [])];
+    const outputSides = [...(outputs.get(node.id) ?? [])];
+    const width = plan?.width ?? nodeWidth;
+    const height = plan?.height ?? nodeHeight;
     return {
       id: node.id,
       type: 'task',
-      data: plan ? { ...plan, editing, inputs: [...(inputs.get(node.id) ?? [])],
-        outputs: [...(outputs.get(node.id) ?? [])], parents: [...(parents.get(plan.taskId) ?? [])] } : node as ExecutionNode,
+      data: plan ? { ...plan, editing, inputs: inputSides, outputs: outputSides,
+        parents: [...(parents.get(plan.taskId) ?? [])] } : node as ExecutionNode,
       position: movingPart ? { x: node.position.x, y: movingPart.y } : node.position,
-      width: plan?.width ?? nodeWidth,
-      height: plan?.height ?? nodeHeight,
+      width,
+      height,
+      // Fixed ports stay attached while React Flow receives updated module positions.
+      handles: plan ? [
+        ...inputSides.map(side => planPort(side, 'target', width, height, editing)),
+        ...outputSides.map(side => planPort(side, 'source', width, height, editing)),
+      ] : undefined,
       draggable: canMove,
       dragHandle: canMove ? '.dev-task' : undefined,
       zIndex: plan ? movingPart?.dragging ? 5 : plan.selected ? 3 : 2 : undefined,

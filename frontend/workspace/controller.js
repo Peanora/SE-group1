@@ -834,17 +834,23 @@ function renderInspector() {
 }
 function emptyContent(icon, title, description) { return `<div class="empty-records">${ICONS[icon] || ICONS.log}<strong>${escape(title)}</strong><p>${escape(description)}</p></div>`; }
 function currentTaskExecution() {
+  if (state.selectionPending || !state.run || historicalRun()) return null;
   const execution = plannedPanel?.workflowProgress().execution;
-  return execution?.executionMode === 'task_dag' && execution.binding?.planRevision === state.run?.planRevision
-    && execution.binding?.specRevision === state.run?.specRevision ? execution : null;
+  return execution?.executionMode === 'task_dag' && execution.projectId === state.project?.id
+    && execution.runId === state.run.id && execution.binding?.planRevision === state.run.planRevision
+    && execution.binding?.specRevision === state.run.specRevision ? execution : null;
 }
 function updateTaskExecutionView() {
   const execution = currentTaskExecution();
-  const signature = execution ? JSON.stringify([execution.id, execution.status,
-    execution.tasks.map(task => [task.id, task.status, task.stage, task.candidateCommit, task.checks])]) : '';
+  const signature = execution ? JSON.stringify([
+    execution.id, execution.status, execution.active, execution.budget,
+    execution.tasks.map(task => [task.id, task.status, task.stage, task.attemptId, task.candidateCommit, task.checks, task.history]),
+    execution.reviewHistory, execution.modelCalls?.map(call => [call.role, call.taskId, call.attemptId,
+      call.attempt, call.candidateCommit, call.dispatched, call.finishedAt, call.requestState]),
+  ]) : '';
   if (signature === taskExecutionSignature) return;
   taskExecutionSignature = signature;
-  if (state.tab === 'tasks' && !$('#workspace-tasks').hidden) renderRecords();
+  if (['tasks', 'schedule'].includes(state.tab) && !$('#workspace-tasks').hidden) renderRecords();
 }
 function canEditTaskGraph(simulation = simulatedTasks.selection()) {
   return (!state.health?.teamAccess?.enabled || state.actorRole === 'owner') && !simulation && !historicalRun()
@@ -858,14 +864,19 @@ function renderTasks() {
   const simulation = simulatedTasks.selection(), preview = simulation ? null : planningReview.taskDraft();
   const owner = !state.health?.teamAccess?.enabled || state.actorRole === 'owner';
   const editable = owner && !simulation && !historicalRun() && !automaticOwnsRun() && canEditPlanTasks(state.run);
-  const note = preview ? '蓝色是改动的任务，橙色是需要一起核对的下游任务。' : !owner ? '当前账户只能查看任务。' : simulation ? '正在查看模拟记录。请返回开发任务图修改计划。'
-    : historicalRun() ? '历史需求版本只读。' : editable && state.run.status === 'succeeded' ? '修改后保存为新计划版本，再重新确认计划和验收清单。' : editable ? '选中任务即可修改。' : '计划生成并进入审阅后可以修改任务。';
-  const toolbar = `<div class="task-change-toolbar"><div><strong>开发任务</strong><p>${note}</p></div><div>${simulation ? '<button type="button" class="button button-outline" data-return-task-plan>返回任务计划</button>' : ''}<button type="button" class="button button-outline" data-edit-selected-task ${!editable || state.busy || state.selectionPending ? 'disabled' : ''}>修改此任务</button><button type="button" class="button button-primary" data-add-feature ${!owner || !state.project || state.busy || state.selectionPending ? 'disabled' : ''}>新增功能</button></div></div>`;
-  return `<section class="task-orchestration-root" aria-label="开发任务编排">${toolbar}${renderTaskWorkspace(simulation, preview, owner)}</section>`;
+  const note = preview ? '蓝色标记改动的任务，橙色标记受影响的下游。'
+    : simulation ? '正在查看模拟调度。' : historicalRun() ? '正在查看历史需求版本。'
+      : !owner ? '当前账户只能查看任务。' : '';
+  const tools = `<div class="task-plan-tools">
+    ${simulation ? '<button type="button" class="button button-outline" data-return-task-plan>返回任务计划</button>' : ''}
+    <button type="button" class="button button-outline" data-edit-selected-task ${!editable || state.busy || state.selectionPending ? 'disabled' : ''}>修改此任务</button>
+    <button type="button" class="button button-outline" data-add-feature ${!owner || !state.project || state.busy || state.selectionPending ? 'disabled' : ''}>新增功能</button>
+  </div>`;
+  return `<section class="task-orchestration-root" aria-label="开发任务编排">${note ? `<p class="task-plan-mode-note">${note}</p>` : ''}${renderTaskWorkspace(simulation, preview, owner, tools)}</section>`;
 }
-function renderTaskWorkspace(simulation, preview, owner) {
+function renderTaskWorkspace(simulation, preview, owner, tools) {
   const tasks = simulation ? simulation.tasks.map(task => task.definition) : preview?.tasks || state.run?.tasks || [];
-  if (!tasks.length) return emptyContent('graph', '开发任务将在这里展开', '任务拆解完成后，可检查依赖关系、验收条件与需求来源。');
+  if (!tasks.length) return tools + emptyContent('graph', '等待开发计划', '任务拆解完成后，可查看模块依赖和每项任务的 Review 流程。');
   if (!tasks.some((task) => task.id === state.taskId)) state.taskId = tasks[0].id;
   const selected = tasks.find((task) => task.id === state.taskId);
   const run = state.run;
@@ -888,7 +899,7 @@ function renderTaskWorkspace(simulation, preview, owner) {
   const files = (selected.suggestedFiles || []).map(file => `<span class="pill">${escape(file)}</span>`).join('');
   const sourceDetails = sources.map(source => `<div class="task-source-quote"><strong>${escape(source.id)} ${escape(source.title)}</strong><br>${escape(source.sourceQuote || source.description)}</div>`).join('');
   const module = graph.inspected;
-  const currentChecks = ['generating', 'proposal_rejected'].includes(graph.observed?.stage) ? null : graph.observed?.checks;
+  const currentChecks = graph.reviewChecks;
   const operations = module.operations.map(operation => {
     const checks = ['checking', 'passed', 'failed'].includes(operation.gateState) ? currentChecks?.[operation.step] : null;
     const results = Array.isArray(checks) && checks.length
@@ -900,7 +911,7 @@ function renderTaskWorkspace(simulation, preview, owner) {
   const currentDetail = document.querySelector('.task-detail');
   const keepStepsOpen = currentDetail?.dataset.graphContext === detailKey && currentDetail.querySelector('.module-operation-details')?.open;
   const steps = `<details class="module-operation-details" ${keepStepsOpen ? 'open' : ''}><summary data-focus-key="module-operations">执行步骤与证据</summary><ol>${operations}</ol></details>`;
-  return `${renderTaskHandoff(run, simulation, preview, owner)}
+  return `${renderTaskHandoff(run, simulation, preview, owner, tools)}
     <div class="task-workspace">
       ${taskView}
       <aside class="task-detail" aria-label="所选任务详情" data-graph-context="${escape(detailKey)}" data-inspected-step="agent" data-inspected-module="${escape(selected.id)}">
@@ -912,6 +923,7 @@ function renderTaskWorkspace(simulation, preview, owner) {
           ${simulatedTasks.detail(selected.id)}
           ${state.tab === 'tasks' ? '<button type="button" class="text-button module-back" data-module-back>返回任务图</button>' : ''}
         </div>
+        ${graph.reviewHtml}
         ${detailGroup('验收检查点', `<p>${escape(release)}${escape(module.gateLabel)}。</p>`)}
         ${steps}
         ${detailGroup('前置任务', '<div>' + taskLinks(selected.dependsOn || [], '无前置任务') + '</div>')}
@@ -922,7 +934,7 @@ function renderTaskWorkspace(simulation, preview, owner) {
       </aside>
     </div>`;
 }
-function renderTaskHandoff(run, simulation, preview, owner) {
+function renderTaskHandoff(run, simulation, preview, owner, tools) {
   const specRevision = simulation ? simulation.specRevision : run.specRevision;
   const planRevision = simulation ? simulation.planRevision : run.planRevision;
   const confirmedSpec = specRevision && (simulation || run.approvals?.spec?.revision === specRevision);
@@ -944,6 +956,7 @@ function renderTaskHandoff(run, simulation, preview, owner) {
       <div><strong>${planLabel}</strong><small>${escape(revision(planVersion, planRevision))}</small></div>
     </div>
     <div class="task-orchestration-actions">
+      ${tools}
       ${canOpenSpec ? '<button type="button" class="button button-outline" data-artifact="spec.md" data-focus-key="task-open-spec">查看设计规格</button>' : ''}
       ${review ? '<button type="button" class="button button-primary" data-task-handoff="plan-approval" data-focus-key="task-approve-plan">去确认计划</button>' : ''}
       ${verification ? '<button type="button" class="button button-primary" data-task-handoff="verification" data-focus-key="task-go-verification">准备验收与开发</button>' : ''}
@@ -1331,14 +1344,14 @@ $('#studio-trace-host').addEventListener('click', event => {
     return;
   }
   const target = event.target.closest('[data-trace-candidates]');
-  const execution = target?.dataset.traceCandidates;
-  if (execution && plannedPanel?.traceExecutions()?.some(item => item.id === execution)) {
-    workspaceLayout.show('execution');
-    selectDeliverySurface('candidates');
-    const { traceCommit: commit, traceTask: taskId, traceAttempt: attemptId } = target.dataset;
-    focusWorkspaceTarget(plannedPanel.focusTraceExecution(execution, commit ? { commit, taskId, attemptId } : undefined));
-  }
+  if (target) openExecutionEvidence(target.dataset.traceCandidates, target.dataset);
 });
+function openExecutionEvidence(executionId, { traceCommit: commit, traceTask: taskId, traceAttempt: attemptId }) {
+  if (!plannedPanel?.traceExecutions()?.some(item => item.id === executionId)) return;
+  workspaceLayout.show('execution');
+  selectDeliverySurface('candidates');
+  focusWorkspaceTarget(plannedPanel.focusTraceExecution(executionId, commit ? { commit, taskId, attemptId } : undefined));
+}
 $('#delivery-station-tabs').addEventListener('click', event => {
   const button = event.target.closest('[data-delivery-surface]');
   if (button) selectDeliverySurface(button.dataset.deliverySurface);
@@ -1395,6 +1408,22 @@ document.addEventListener('click', (event) => {
   const stage = event.target.closest('[data-stage]'); if (stage) { state.stageId = stage.dataset.stage; renderWorkflow(); renderInspector(); }
   const handoff = event.target.closest('[data-task-handoff]');
   if (handoff) { openDeliveryStage(handoff.dataset.taskHandoff); return; }
+  const evidence = event.target.closest('[data-task-review-evidence]');
+  if (evidence) {
+    if (!state.selectionPending && !state.busy && currentTaskExecution()?.id === evidence.dataset.taskReviewEvidence) {
+      openExecutionEvidence(evidence.dataset.taskReviewEvidence, evidence.dataset);
+    }
+    return;
+  }
+  const reviewGate = event.target.closest('[data-task-review]');
+  if (reviewGate) {
+    if (state.selectionPending || !state.run) return;
+    state.taskId = reviewGate.dataset.taskReview;
+    renderRecords();
+    rememberSelection();
+    focusWorkspaceTarget($('#task-review-flow'));
+    return;
+  }
   const task = event.target.closest('[data-task],[data-flow-node]');
   if (event.target.closest('[data-module-back]')) {
     taskOrchestration.revealSelected();

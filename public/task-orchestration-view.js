@@ -1,4 +1,6 @@
 import { projectWorkflow, reorderWorkflow } from './task-workflow-layout.js';
+import { executionVersionEvidence } from './planned-execution.js';
+import { projectTaskReview, renderTaskReview } from './task-review-flow.js';
 
 const ORDER_KEY = 'taskflow.workflow.lanes.v1';
 const zoomLabel = zoom => `${Number((zoom * 100).toFixed(zoom < .01 ? 2 : zoom < .1 ? 1 : 0))}%`;
@@ -35,14 +37,16 @@ function fallbackCanvas(model, escape) {
   const paths = model.edges.map(edge => {
     const from = byId.get(edge.source), to = byId.get(edge.target);
     const x1 = from.position.x + from.width, x2 = to.position.x;
-    const y1 = from.position.y + from.height / 2, y2 = to.position.y + to.height / 2;
+    const y1 = from.position.y + from.height - 13.5, y2 = to.position.y + (to.height - 33) / 2;
     const route = edge.channel == null ? `H${(x1 + x2) / 2} V${y2}` : `h8 V${edge.channel} H${x2 - 8} V${y2}`;
     return `<path d="M${x1} ${y1} ${route} H${x2}" fill="none" stroke="currentColor" marker-end="url(#taskflow-end)"/>`;
   });
   const cards = model.nodes.map(node => {
     const { x, y } = node.position;
     const agent = node.kind === 'agent';
-    return `<button type="button" class="task-fallback-card ${agent ? 'dev-task' : ''} ${escape(node.className)}" style="left:${x}px;top:${y}px;width:${node.width}px;height:${node.height}px" data-focus-key="task-${escape(node.id)}" data-flow-node="${escape(node.id)}" data-flow-part="${node.kind}" data-owner-task="${escape(node.taskId)}" data-task="${escape(node.taskId)}" aria-pressed="${node.selected}"><small>${escape(node.group)}</small><strong>${escape(node.title)}</strong></button>`;
+    const id = escape(node.taskId);
+    return `<button type="button" class="task-fallback-card ${agent ? 'dev-task' : ''} ${escape(node.className)}" style="left:${x}px;top:${y}px;width:${node.width}px;height:${node.height - 33}px" data-focus-key="task-${escape(node.id)}" data-flow-node="${escape(node.id)}" data-flow-part="${node.kind}" data-owner-task="${id}" data-task="${id}" aria-pressed="${node.selected}"><small>${escape(node.group)}</small><strong>${escape(node.title)}</strong></button>
+      <button type="button" class="tr-fallback-gate" style="left:${x + 18}px;top:${y + node.height - 27}px;width:${node.width - 18}px" aria-label="${id} 独立 Review · ${escape(node.reviewLabel)}" data-task-review="${id}" data-review-state="${node.reviewState}" data-focus-key="review-${id}">独立 Review · ${escape(node.reviewLabel)}</button>`;
   });
   return `<div class="task-graph" style="width:${model.width}px;height:${model.height}px;transform:scale(${model.zoom})"><svg class="task-edges" width="${model.width}" height="${model.height}" aria-hidden="true"><defs><marker id="taskflow-end" viewBox="0 0 8 8" refX="7" refY="4" orient="auto" markerWidth="6" markerHeight="6"><path d="M0 0L8 4L0 8Z" fill="currentColor"/></marker></defs>${paths.join('')}</svg>${cards.join('')}</div>`;
 }
@@ -95,6 +99,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
     const affected = new Set(preview?.downstreamIds);
     const simulated = new Map((simulation?.tasks ?? []).map(task => [task.id, task.status]));
     const activeTasks = new Map((execution?.tasks ?? []).map(task => [task.id, task]));
+    const reviews = new Map(tasks.map(task => [task.id, projectTaskReview(execution, task)]));
     const edges = tasks.flatMap(task => graph.dependencies.get(task.id).map(id => ({
       source: id,
       target: task.id,
@@ -125,7 +130,10 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
             : status === 'verified' || status === 'accepted' ? '已有候选 · 待集成'
               : gateState === 'checking' ? '任务执行或验收中'
                 : gateState === 'waiting' ? blocked.length ? `等待 ${blocked.join('、')} 通过` : '等待派发' : '验收通过后放行';
-      return { id: task.id, title: task.title, label, meta, topology, selected: active, gateState, gateLabel, observed,
+      const reviewFlow = reviews.get(task.id);
+      const releasedWithoutEvidence = gateState === 'passed' && reviewFlow.release.state !== 'passed';
+      return { id: task.id, title: task.title, label, meta, topology, selected: active, observed, reviewFlow,
+        gateState: releasedWithoutEvidence ? 'waiting' : gateState, gateLabel: releasedWithoutEvidence ? reviewFlow.release.label : gateLabel,
         className: [style, relation].filter(Boolean).join(' ') };
     });
     const layout = projectWorkflow({ tasks, graph, nodes, edges, narrow: narrow.matches, order: savedOrder.get(orderKey) });
@@ -140,8 +148,14 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
       onConnect: (from, to) => { if (layoutKey === contextKey) changeLink(from, to); } };
     const enhanced = typeof window.taskflowTaskCanvas === 'function';
     const diagram = enhanced ? '<div class="task-flow-slot"></div>' : fallbackCanvas(model, escape);
+    const reviewContext = JSON.stringify([key, selected.id, execution?.id, Boolean(preview)]);
+    const previousReview = host.querySelector('#task-review-flow');
+    const historyOpen = previousReview?.dataset.reviewContext === reviewContext && previousReview.querySelector('[data-review-history]')?.open;
     return {
       inspected, observed: activeTasks.get(selected.id), nextIds: graph.dependants.get(selected.id),
+      reviewChecks: reviews.get(selected.id).checks,
+      reviewHtml: renderTaskReview(reviews.get(selected.id), { downstream: graph.dependants.get(selected.id),
+        versions: execution ? executionVersionEvidence(execution) : [], escape, simulation, preview, contextKey: reviewContext, historyOpen }),
       html: `<div class="task-graph-zone" data-focus-relations="${focusRelations}">
         <div class="task-orchestration-bar">
           <div class="task-orchestration-heading"><h3>模块工作流</h3><p>${layout.groups.length} 个板块 · ${tasks.length} 个模块 · ${edges.length} 条依赖${simulation ? ' · 模拟运行' : execution ? ' · 正在查看执行记录' : dependencyExecution ? engineeringReady ? ' · 按图运行' : ' · 按图计划，待工程契约' : ' · 编排设计'}</p></div>
@@ -164,7 +178,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
         <div class="task-canvas-dock">
           <div>
             <div class="task-canvas-legend" aria-label="任务图图例">
-              <span class="task-legend-selected">当前模块</span><span class="task-legend-upstream">前置路径</span><span class="task-legend-downstream">后续路径</span>
+              <span class="task-legend-selected">当前模块</span><span class="task-legend-upstream">前置路径</span><span class="task-legend-downstream">集成后核对后继</span><span class="task-legend-repair">Review 阻塞时退回编码</span>
             </div>
             ${enhanced ? '<span class="task-canvas-note">同列模块可上下换位，或按 Alt + ↑ / ↓。点选查看详情。</span>' : ''}
           </div>

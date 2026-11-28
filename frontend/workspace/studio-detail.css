@@ -133,6 +133,17 @@
 }
 .tf-workbench .studio-subnav button span { color: var(--surface-muted); font-size: 11px; padding: 0 4px; background: #eef2f7; }
 .tf-workbench .studio-surface .studio-records { border: 0; overflow: visible; border-radius: 0; }
+.task-view-heading {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 10px 18px; padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--surface-line);
+}
+.task-view-heading .studio-surface-header, .tf-workbench .task-view-heading .studio-subnav {
+  padding: 0; margin: 0; border: 0;
+}
+.task-view-heading .studio-surface-header { position: relative; }
+.task-view-heading #records-hint { inset-inline-start: 0; margin: 0; }
+.tf-workbench .task-plan-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.tf-workbench .task-plan-mode-note { margin: 5px 0 8px; font-size: 12px; color: var(--surface-muted); }
 .studio-simulation[open] .simulation-panel { margin: 0; padding: 14px; }
 .tf-workbench .studio-surface .task-orchestration-root {
   --task-accent: var(--surface-blue); --task-accent-soft: var(--surface-selected); --task-ink: var(--surface-ink);

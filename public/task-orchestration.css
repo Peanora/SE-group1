@@ -298,6 +298,10 @@
   background: var(--task-accent);
 }
 
+.task-orchestration-root .task-canvas-legend .task-legend-repair::before {
+  background: repeating-linear-gradient(to right, #96764d 0 3px, transparent 3px 5px);
+}
+
 .task-orchestration-root .task-orchestration-tools {
   gap: 2px;
   padding: 2px;
@@ -719,8 +723,8 @@
 }
 
 .task-orchestration-root .task-graph-zone:has(.task-graph-scroll[data-plan-canvas]) {
-  --task-board: #f6f9ff;
-  --task-board-dot: #c7d4eb;
+  --task-board: #f3f7fa;
+  --task-board-dot: #becfdd;
   --task-upstream: #197d79;
 }
 
@@ -752,6 +756,25 @@
 .task-graph .task-fallback-card[data-flow-part="review"] { background: #f1edfa; }
 .task-graph .task-fallback-card:is([data-flow-part="fork"], [data-flow-part="join"]) { background: #ecf0fb; }
 .task-graph .task-fallback-card[aria-pressed="true"] { outline: 2px solid var(--task-accent); }
+
+.task-graph .tr-fallback-gate {
+  position: absolute;
+  block-size: 27px;
+  padding-inline: 6px;
+  overflow: hidden;
+  border: 1px solid #80b5ad;
+  border-inline-start: 3px solid currentColor;
+  border-radius: 5px;
+  background: #eaf7f5;
+  color: #175c55;
+  text-align: start;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.task-graph .tr-fallback-gate[data-review-state="checking"] { border-color: #c9aa69; background: #ffefd0; color: #80510f; }
+.task-graph .tr-fallback-gate[data-review-state="passed"] { border-color: #8ebda0; background: #e8f6e9; color: #216445; }
+.task-graph .tr-fallback-gate[data-review-state="failed"] { border-color: #d59aa3; background: #feebec; color: #922c3f; }
 
 .task-orchestration-root .task-graph-scroll[data-plan-canvas] .dev-task {
   --task-topology-mark: #a4b6d3;
