@@ -6,6 +6,7 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { WorkspaceDialogs } from './dialogs';
 import { ProjectHeading, RunInspector, RunOverview } from './overview';
 import { DeliveryPanel, PlanningPanel, RequirementsPanel, TaskPanel } from './panels';
+import { FocusModeToggle, WorkspaceBreadcrumb, WorkspaceTree } from './tree-nav';
 
 const views = [
   { id: 'source', label: '需求版本', icon: FileText },
@@ -92,6 +93,7 @@ function ProjectTopbar() {
         <div className="studio-appbar-tools">
           <span className="connection-status studio-connection" id="connection-status" role="status"><span />正在连接服务</span>
           <a id="team-link" className="studio-account" href="/team.html" hidden>团队账号</a>
+          <FocusModeToggle />
           <button type="button" className="studio-tool-button" id="refresh-button" aria-label="刷新工作区" title="刷新工作区">
             <RefreshCw size={17} aria-hidden="true" />
           </button>
@@ -132,23 +134,27 @@ export function Workspace() {
       <a className="skip-link" href="#main">跳到工作区</a>
       <div className="app-shell studio-app">
         <ProjectTopbar />
-        <main id="main" className="workspace studio-main" tabIndex={-1}>
-          <div id="error-banner" className="error-banner" role="alert" hidden>
-            <span id="error-text" />
-            <button type="button" id="dismiss-error" aria-label="关闭错误提示">×</button>
-          </div>
-          <ProjectHeading />
-          <div id="workspace-run-summary" className="studio-run-summary">
-            <RunOverview />
-            <RunInspector />
-          </div>
-          <WorkAreaNavigation />
-          <WorkAreas />
-          <details className="workspace-scope studio-scope">
-            <summary>平台范围</summary>
-            <p className="field-note" id="platform-default-notice">统一按浏览器网页应用规划。平台提供技术方案，无需填写。</p>
-          </details>
-        </main>
+        <div className="studio-layout">
+          <WorkspaceTree />
+          <main id="main" className="workspace studio-main" tabIndex={-1}>
+            <WorkspaceBreadcrumb />
+            <div id="error-banner" className="error-banner" role="alert" hidden>
+              <span id="error-text" />
+              <button type="button" id="dismiss-error" aria-label="关闭错误提示">×</button>
+            </div>
+            <ProjectHeading />
+            <div id="workspace-run-summary" className="studio-run-summary">
+              <RunOverview />
+              <RunInspector />
+            </div>
+            <WorkAreaNavigation />
+            <WorkAreas />
+            <details className="workspace-scope studio-scope">
+              <summary>平台范围</summary>
+              <p className="field-note" id="platform-default-notice">统一按浏览器网页应用规划。平台提供技术方案，无需填写。</p>
+            </details>
+          </main>
+        </div>
       </div>
       <WorkspaceDialogs />
     </>

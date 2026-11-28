@@ -1,0 +1,518 @@
+/* 工作台视觉统一层：只调整呈现，不改变 DOM 契约与交互逻辑。 */
+body.tf-workbench {
+  --tf-canvas: #eef2f8;
+  --tf-ink: #16243a;
+  --tf-muted: #5a6b82;
+  --tf-line: #d9e2ee;
+  --tf-accent: #2f5fd0;
+  --tf-accent-hover: #20499f;
+  --tf-accent-soft: #eaf1ff;
+  --tf-rail: #f7f9fd;
+  --refresh-shadow: 0 1px 2px rgba(19, 42, 74, 0.04), 0 14px 34px -24px rgba(19, 42, 74, 0.38);
+  background:
+    radial-gradient(900px 420px at 6% -10%, #e0ebff 0%, transparent 62%),
+    radial-gradient(760px 400px at 98% 2%, #e3f4ef 0%, transparent 60%),
+    var(--tf-canvas);
+  background-attachment: fixed;
+}
+
+/* 顶栏 */
+.tf-workbench .studio-appbar {
+  background: linear-gradient(102deg, #0b1728 0%, #142b48 52%, #183c64 100%);
+  box-shadow: 0 10px 26px -18px rgba(8, 22, 42, 0.9);
+}
+.tf-workbench .studio-appbar-inner { min-height: 64px; }
+.tf-workbench .studio-brand-mark {
+  border-color: #5c8ddb;
+  color: #fff;
+  background: linear-gradient(145deg, #3d79dc, #274c9e);
+  box-shadow: 0 5px 14px -6px rgba(9, 24, 48, 0.9);
+}
+.tf-workbench .studio-brand strong { font-size: 19px; letter-spacing: -0.025em; }
+.tf-workbench .studio-appbar :is(.studio-menu > summary, .studio-tool-button, .studio-new-project) { border-radius: 8px; }
+.tf-workbench .studio-new-project {
+  border-color: #4d7fd5;
+  background: linear-gradient(180deg, #3a70cf, #2a5bb3);
+}
+.tf-workbench .studio-new-project:hover { background: linear-gradient(180deg, #447bd9, #2f63bd); }
+.tf-workbench .studio-appbar #connection-status.connected > span { box-shadow: 0 0 0 3px rgba(96, 215, 174, 0.2); }
+.tf-workbench .studio-popover {
+  padding: 9px;
+  border-radius: 12px;
+  box-shadow: 0 22px 50px -20px rgba(11, 28, 50, 0.45);
+}
+.tf-workbench .studio-settings-links :is(a, button) { border-radius: 8px; }
+
+/* 页面标题 */
+.tf-workbench .studio-heading { margin-bottom: 22px; }
+.tf-workbench .studio-project-mark {
+  width: 52px;
+  height: 52px;
+  border-color: #c7d9f2;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #f0f6ff, #dce9ff);
+  box-shadow: 0 8px 18px -14px rgba(47, 95, 208, 0.9);
+}
+.tf-workbench .studio-project-mark svg { color: #26539f; }
+.tf-workbench .studio-heading h1 { font-weight: 730; letter-spacing: -0.03em; }
+.tf-workbench .studio-heading .page-description { color: var(--tf-muted); }
+
+/* 流程总览 */
+.tf-workbench .studio-workflow {
+  overflow: clip;
+  border-radius: 14px;
+  border-color: var(--tf-line);
+  box-shadow: var(--refresh-shadow);
+}
+.tf-workbench .studio-workflow > summary { min-height: 58px; padding: 10px 18px; }
+.tf-workbench .studio-workflow-title { font-size: 17px; }
+.tf-workbench .studio-workflow-title svg { color: var(--tf-accent); }
+.tf-workbench .studio-workflow-current #delivery-current-state { border-radius: 999px; padding: 3px 9px; }
+.tf-workbench .studio-workflow-tools #delivery-done-count {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #f1f5fb;
+  color: #38537a;
+  font-weight: 650;
+}
+.tf-workbench .studio-workflow > #delivery-steps {
+  padding: 22px 30px 24px;
+  background-color: #f7faff;
+  background-image: radial-gradient(#d5e1f0 1px, transparent 1.2px);
+}
+.tf-workbench .studio-lane h2 { color: #3f5b7c; letter-spacing: 0.02em; }
+.tf-workbench .studio-lane h2::before {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-inline-end: 8px;
+  border-radius: 2px;
+  background: #8fb0dd;
+  content: "";
+  vertical-align: middle;
+}
+.tf-workbench .studio-route .studio-step {
+  padding: 11px;
+  border-radius: 11px;
+  box-shadow: 0 2px 8px rgba(27, 55, 88, 0.05);
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+.tf-workbench .studio-route .studio-step:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px -12px rgba(36, 71, 123, 0.5);
+}
+.tf-workbench .studio-route .studio-step > .studio-step-icon { border-radius: 9px; }
+.tf-workbench .studio-workflow .studio-route .studio-step > strong { font-size: 14px; }
+.tf-workbench .studio-map-legend {
+  padding: 10px 18px;
+  border-top: 1px solid var(--tf-line);
+  background: #fbfcff;
+}
+
+/* 右侧操作区 */
+.tf-workbench .studio-main .studio-current,
+.tf-workbench .studio-main .studio-run-tools,
+.tf-workbench .studio-launch {
+  padding: 18px;
+  border-color: var(--tf-line);
+  border-radius: 14px;
+  box-shadow: var(--refresh-shadow);
+}
+.tf-workbench .studio-main .studio-current { border-inline-start: 3px solid var(--tf-accent); }
+.tf-workbench .studio-region-label { color: #35537c; }
+.tf-workbench .studio-region-label svg { color: var(--tf-accent); }
+.tf-workbench .studio-main .studio-current h2 { font-size: 20px; line-height: 1.35; }
+.tf-workbench .studio-run-tools .workflow-controls { padding-top: 3px; }
+.tf-workbench #start-run:not(:disabled) {
+  border-color: #2859b4;
+  background: linear-gradient(180deg, #3a70d3, #2859b4);
+  color: #fff;
+}
+.tf-workbench #start-run:not(:disabled):hover { background: linear-gradient(180deg, #3267c6, #214d9e); }
+.tf-workbench .studio-run-history {
+  padding: 10px 14px;
+  border: 1px solid var(--tf-line);
+  border-radius: 12px;
+  background: var(--tf-paper);
+  box-shadow: var(--refresh-shadow);
+}
+
+/* 空状态与引导 */
+.tf-workbench .studio-launch {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(150deg, #fff 0%, #f4f8ff 100%);
+}
+.tf-workbench .studio-launch::after {
+  position: absolute;
+  right: -60px;
+  bottom: -96px;
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #dceaff 0%, transparent 70%);
+  content: "";
+  pointer-events: none;
+}
+.tf-workbench .studio-launch-visual { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.tf-workbench .studio-launch-visual span {
+  position: absolute;
+  width: 118px;
+  height: 88px;
+  border: 1px solid #d9e6fa;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 10px 24px -18px rgba(40, 83, 164, 0.7);
+  transform: rotate(-9deg);
+}
+.tf-workbench .studio-launch-visual span:nth-child(1) { top: -28px; right: 46px; }
+.tf-workbench .studio-launch-visual span:nth-child(2) { top: 18px; right: -38px; transform: rotate(7deg); }
+.tf-workbench .studio-launch-visual span:nth-child(3) { bottom: -42px; right: 96px; transform: rotate(12deg); }
+.tf-workbench .studio-launch-copy { position: relative; z-index: 1; }
+.tf-workbench .studio-launch-eyebrow {
+  display: inline-flex;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #e5efff;
+  color: #2b5ba8;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.tf-workbench .studio-launch-icon {
+  border: 0;
+  background: linear-gradient(145deg, #3d78d7, #2853a4);
+  color: #fff;
+  box-shadow: 0 8px 18px -10px rgba(40, 83, 164, 0.85);
+}
+.tf-workbench .studio-launch h2 { margin-top: 11px; font-size: 20px; letter-spacing: -0.02em; }
+.tf-workbench .studio-launch p { max-width: 46ch; line-height: 1.7; }
+.tf-workbench .studio-launch-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 14px;
+  margin: 17px 0 0;
+  padding: 13px 0 0;
+  border-top: 1px solid var(--tf-line);
+  list-style: none;
+}
+.tf-workbench .studio-launch-steps li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--tf-muted);
+  font-size: 12px;
+}
+.tf-workbench .studio-launch-steps b {
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: #e7effc;
+  color: #2b5ba8;
+  font-size: 11px;
+}
+
+/* 视图切换与内容面板 */
+.tf-workbench .studio-views {
+  padding: 5px;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px -12px rgba(27, 55, 88, 0.55);
+}
+.tf-workbench .studio-views button { border-radius: 8px; }
+.tf-workbench .studio-views button[aria-selected="true"] {
+  background: linear-gradient(180deg, #fff, #edf4ff);
+  box-shadow: 0 2px 8px rgba(36, 71, 123, 0.12);
+}
+.tf-workbench .studio-views button span { padding: 0 6px; border-radius: 999px; }
+.tf-workbench .studio-panels > .workspace-panel {
+  border-radius: 14px;
+  box-shadow: var(--refresh-shadow);
+}
+.tf-workbench .workspace-scope { margin-top: 18px; }
+.tf-workbench .workspace-scope > summary { font-weight: 650; cursor: pointer; }
+
+/* 按钮、表单与弹窗 */
+.tf-workbench .button,
+.tf-workbench .icon-button { min-height: 38px; border-radius: 8px; font-weight: 600; }
+.tf-workbench .button-primary {
+  border-color: #2859b4;
+  background: linear-gradient(180deg, #3a70d3, #2859b4);
+  box-shadow: 0 5px 12px -8px rgba(32, 80, 168, 0.95);
+}
+.tf-workbench .button-primary:hover { background: linear-gradient(180deg, #3267c6, #214d9e); }
+.tf-workbench input:not([type="radio"], [type="checkbox"], [type="file"]),
+.tf-workbench select,
+.tf-workbench textarea {
+  min-height: 38px;
+  border-color: #d3deeb;
+  border-radius: 8px;
+}
+.tf-workbench :is(a, button, input, select, textarea, summary):focus-visible {
+  outline: 3px solid rgba(103, 150, 224, 0.35);
+  outline-offset: 1px;
+}
+.tf-workbench dialog.studio-dialog {
+  border-color: #d7e2ef;
+  border-radius: 18px;
+  box-shadow: 0 32px 80px -26px rgba(11, 28, 50, 0.55);
+}
+.tf-workbench dialog::backdrop {
+  background: rgba(11, 23, 40, 0.62);
+  backdrop-filter: blur(3px);
+}
+.tf-workbench .studio-dialog-title {
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid #e5ebf3;
+}
+.tf-workbench .studio-dialog-icon { border-radius: 10px; background: #eaf1ff; color: #2c5db8; }
+.tf-workbench .studio-dialog-actions { padding-top: 14px; border-top: 1px solid #e5ebf3; }
+.tf-workbench .toast { border-radius: 12px; box-shadow: 0 18px 44px -18px rgba(11, 28, 50, 0.5); }
+
+@media (max-width: 1050px) {
+  .tf-workbench .studio-run-summary { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .tf-workbench .studio-appbar { box-shadow: none; }
+  .tf-workbench .studio-appbar-inner { min-height: 56px; }
+  .tf-workbench .studio-project-mark { width: 42px; height: 42px; border-radius: 12px; }
+  .tf-workbench .studio-heading { margin-bottom: 14px; }
+  .tf-workbench .studio-workflow > #delivery-steps { padding: 16px 14px 18px; }
+  .tf-workbench .studio-launch { padding: 16px; }
+  .tf-workbench .studio-launch-steps { margin-top: 13px; padding-top: 11px; }
+  .tf-workbench .studio-views { overflow-x: auto; }
+}
+@media (max-width: 520px) {
+  .tf-workbench .studio-launch-steps { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .tf-workbench .studio-workflow-tools { gap: 6px; }
+  .tf-workbench .studio-map-legend { justify-content: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tf-workbench .studio-route .studio-step { transition: none; }
+  .tf-workbench .studio-route .studio-step:hover:not(:disabled) { transform: none; }
+}
+
+/* 目录树导航：复用原有 #workspace-nav，不新增第二套视图按钮。 */
+.studio-layout { display: flex; align-items: flex-start; min-height: calc(100dvh - 64px); }
+.tf-workbench .studio-main { flex: 1 1 auto; min-width: 0; }
+#workspace-tree { display: none; }
+body[data-studio-project="selected"] #workspace-tree {
+  display: block;
+  position: sticky;
+  top: 0;
+  z-index: 28;
+  flex: 0 0 248px;
+  width: 248px;
+  height: 100dvh;
+  overflow: auto;
+  padding: 18px 12px 26px;
+  border-inline-end: 1px solid var(--tf-line);
+  background: #f8fbff;
+  transition: width 0.18s ease, flex-basis 0.18s ease;
+}
+body[data-studio-project="selected"].tree-collapsed #workspace-tree { flex-basis: 58px; width: 58px; }
+.tree-heading { display: flex; align-items: center; gap: 8px; min-height: 34px; margin: 0 4px 14px; color: #35537c; font-size: 13px; font-weight: 700; }
+.tree-heading-icon { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 8px; color: #2f5fd0; background: #e8f0ff; }
+.tree-collapse { display: grid; place-items: center; width: 28px; height: 28px; margin-inline-start: auto; border: 0; border-radius: 7px; color: #5a6b82; background: transparent; }
+.tree-collapse:hover { background: #e8f0ff; color: #2f5fd0; }
+.tree-collapse-open { display: block; }
+.tree-collapse-closed, body.tree-collapsed .tree-collapse-open { display: none; }
+body.tree-collapsed .tree-collapse-closed { display: block; }
+body.tree-collapsed .tree-heading-text, body.tree-collapsed .tree-children,
+body.tree-collapsed #workspace-nav [data-workspace-view] span { display: none; }
+body.tree-collapsed .tree-heading { margin-inline: auto; }
+
+#workspace-tree #workspace-nav {
+  position: static;
+  display: block;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+#workspace-tree #workspace-nav > [data-workspace-view] {
+  display: flex;
+  width: 100%;
+  min-height: 38px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 9px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #435a75;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+#workspace-tree #workspace-nav > [data-workspace-view]::before {
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  content: "";
+  transform: rotate(45deg);
+}
+#workspace-tree #workspace-nav > [data-workspace-view][aria-selected="true"] {
+  border-color: #cbdcf4;
+  background: #e9f1ff;
+  color: #235aa8;
+  box-shadow: none;
+}
+#workspace-tree #workspace-nav > [data-workspace-view]:disabled { opacity: 0.5; }
+#workspace-tree .tree-children {
+  display: grid;
+  gap: 2px;
+  margin: 2px 0 10px 15px;
+  padding-inline-start: 10px;
+  border-inline-start: 1px solid #dbe5f2;
+}
+.tree-leaf {
+  display: block;
+  width: 100%;
+  min-height: 31px;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 7px;
+  color: #5d6d82;
+  background: transparent;
+  font-size: 12px;
+  text-align: start;
+}
+.tree-leaf:hover { background: #eef4fd; color: #2f5fd0; }
+.tree-leaf[aria-current="page"] { background: #dfeaff; color: #1f5299; font-weight: 650; }
+
+#workspace-breadcrumb { display: none; }
+body[data-studio-project="selected"] #workspace-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 30px;
+  margin-bottom: 10px;
+  color: var(--tf-muted);
+  font-size: 12px;
+}
+#workspace-breadcrumb button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  font-size: 12px;
+}
+#workspace-breadcrumb button:hover { background: #eaf1ff; color: #235aa8; }
+#workspace-breadcrumb [aria-current="page"] { color: #235aa8; font-weight: 650; }
+.tree-mobile-toggle { display: none !important; }
+
+@media (max-width: 1100px) {
+  .studio-layout { display: block; }
+  body[data-studio-project="selected"] #workspace-tree {
+    position: static;
+    display: block;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+    padding: 7px 10px;
+    border-inline-end: 0;
+    border-bottom: 1px solid var(--tf-line);
+    box-shadow: none;
+    transform: none;
+  }
+  body[data-studio-project="selected"].tree-collapsed #workspace-tree { width: 100%; }
+  .tree-heading { display: none; }
+  #workspace-tree #workspace-nav { display: flex; gap: 5px; overflow-x: auto; padding-bottom: 2px; }
+  #workspace-tree #workspace-nav > [data-workspace-view] {
+    flex: 0 0 auto;
+    width: auto;
+    min-height: 34px;
+    padding: 4px 10px;
+  }
+  #workspace-tree .tree-children { display: none; }
+  #workspace-breadcrumb { margin-top: 10px; }
+}
+@media (max-width: 760px) {
+  #workspace-breadcrumb { margin-bottom: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #workspace-tree, body[data-studio-project="selected"] #workspace-tree { transition: none; }
+}
+
+/* 专注模式：保留全部可操作节点，只压缩次要信息的视觉占用。 */
+body.focus-mode .studio-workflow { --studio-node-height: 56px; --studio-lane-gap: 10px; }
+body.focus-mode .studio-workflow > summary { min-height: 46px; }
+body.focus-mode .studio-workflow > #delivery-steps { padding: 10px 18px 12px; }
+body.focus-mode .studio-route .studio-step { gap: 2px 7px; padding: 6px 8px; }
+body.focus-mode .studio-workflow .studio-route .studio-step > strong { font-size: 12px; }
+body.focus-mode .studio-workflow .studio-route .studio-step > .delivery-state { font-size: 11px; }
+body.focus-mode .studio-workflow .studio-route .studio-step > small { display: none; }
+body.focus-mode .studio-map-legend,
+body.focus-mode .workspace-scope { display: none; }
+body.focus-mode #focus-toggle { border-color: #405871; background: #263d55; color: #cfe2ff; }
+body.focus-mode #focus-toggle:hover { background: #31507a; }
+
+/* 三栏工作台：左目录 / 中内容 / 右下一步。 */
+#next-step-panel {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--tf-line);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: var(--refresh-shadow);
+}
+.next-step-status > strong { display: block; margin-top: 6px; font-size: 16px; line-height: 1.4; }
+.next-step-status p { margin: 4px 0 0; color: var(--tf-muted); font-size: 12px; line-height: 1.65; }
+#next-step-primary { width: 100%; }
+.next-step-form { display: flex; gap: 6px; }
+.next-step-form input { flex: 1 1 auto; min-width: 0; }
+.next-step-form button {
+  display: grid; place-items: center; flex: 0 0 38px; min-height: 38px;
+  border: 1px solid #2859b4; border-radius: 8px; color: #fff;
+  background: linear-gradient(180deg, #3a70d3, #2859b4);
+}
+.next-step-shortcuts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.next-step-shortcuts button {
+  min-height: 32px; border: 1px solid var(--tf-line); border-radius: 8px;
+  color: #35537c; background: #f8fbff; font-size: 12px;
+}
+.next-step-shortcuts button:hover { border-color: #b9d0ef; background: #eaf1ff; color: #235aa8; }
+
+@media (min-width: 1101px) {
+  body.focus-mode .studio-main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    grid-template-areas:
+      "crumb inspector"
+      "heading inspector"
+      "workflow inspector"
+      "panels inspector";
+    column-gap: 18px;
+    align-items: start;
+  }
+  body.focus-mode .studio-main > #error-banner { grid-column: 1 / -1; }
+  body.focus-mode #workspace-breadcrumb { grid-area: crumb; }
+  body.focus-mode .studio-heading { grid-area: heading; }
+  body.focus-mode #workspace-run-summary { display: contents; }
+  body.focus-mode .studio-workflow { grid-area: workflow; }
+  body.focus-mode .studio-inspector { grid-area: inspector; position: sticky; top: 12px; max-height: calc(100dvh - 24px); overflow: auto; }
+  body.focus-mode #workspace-panels { grid-area: panels; min-width: 0; }
+}
+
+.studio-workflow > #delivery-steps { display: flex; gap: 8px; overflow-x: auto; padding: 9px 14px 11px; }
+.studio-workflow .studio-lane { display: flex; min-width: max-content; align-items: center; gap: 8px; }
+.studio-workflow .studio-lane h2 {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+.studio-workflow .studio-lane-steps { display: flex; gap: 6px; }
+.studio-workflow .studio-route .studio-step { min-width: 98px; min-height: 46px; padding: 5px 7px; }
+.studio-workflow .studio-route .studio-step > small { display: none; }
+body.focus-mode .studio-inspector > :not(#next-step-panel) { display: none; }
