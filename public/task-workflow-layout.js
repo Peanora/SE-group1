@@ -137,31 +137,46 @@ function offsetPosition(base, offset, bounds) {
   };
 }
 
-// Use the gap between phases for adjacent tasks and the outside rails for long
-// links. The inner rail under the coding row stays above the expanded details.
-function dependencyRoute(from, to, lanes, width, track) {
-  const start = lanes.get(from.group), end = lanes.get(to.group);
-  if (start === end) {
-    if (from === to) return { sourceSide: 'right', targetSide: 'left', channel: start.rowBottom - 5 };
-    const right = from.position.x <= to.position.x;
-    if (Math.abs(from.slot - to.slot) === 1) {
-      return { sourceSide: right ? 'right' : 'left', targetSide: right ? 'left' : 'right', channel: null };
+// Merge consecutive rows owned by the same group. If dependencies return to a
+// group later, open a continuation band instead of drawing a normal handoff backwards.
+function phaseBands(depthOrder, groupByTask, laneOrder, capacity) {
+  const priority = new Map(laneOrder.map((name, index) => [name, index]));
+  const bands = [];
+  for (const layer of depthOrder) {
+    const byGroup = new Map();
+    for (const id of layer) {
+      const name = groupByTask.get(id);
+      if (!byGroup.has(name)) byGroup.set(name, []);
+      byGroup.get(name).push(id);
     }
-    return { sourceSide: 'bottom', targetSide: 'bottom', channel: start.rowBottom - 9 + track };
+    for (const name of [...byGroup.keys()].sort((a, b) => priority.get(a) - priority.get(b))) {
+      const ids = byGroup.get(name);
+      if (bands.at(-1)?.name !== name) bands.push({ name, rows: [] });
+      const band = bands.at(-1);
+      for (let i = 0; i < ids.length; i += capacity) band.rows.push(ids.slice(i, i + capacity));
+    }
   }
-  const down = start.rank < end.rank;
-  const sourceSide = down ? 'bottom' : 'top', targetSide = down ? 'top' : 'bottom';
-  const channel = down ? start.rowBottom - 9 + track : start.top - 12 - track;
-  const targetChannel = down ? end.top - 12 - track : end.rowBottom - 9 + track;
-  if (Math.abs(start.rank - end.rank) === 1 && !(down ? start.expanded : end.expanded)) {
-    return { sourceSide, targetSide, channel: down ? start.top + start.height + 13 + track : end.top + end.height + 13 + track };
-  }
-  const leftRail = 151 - track, rightRail = width - 22 + track;
-  const meanX = (from.position.x + from.width / 2 + to.position.x + to.width / 2) / 2;
-  return { sourceSide, targetSide, channel, targetChannel, viaX: meanX < (leftRail + rightRail) / 2 ? leftRail : rightRail };
+  return bands;
 }
 
-/** Project each real functional group into one horizontal coding row. */
+// Route long links along outer rails instead of crossing intervening cards or details.
+function dependencyRoute(from, to, rows, width, leftRail, track) {
+  const start = rows.get(from.id), end = rows.get(to.id);
+  // Only unresolved topology can have an edge within a single depth layer.
+  if (start === end) return { sourceSide: 'right', targetSide: 'left', channel: start.bottom - 5 };
+  const down = start.index < end.index;
+  const sourceSide = down ? 'bottom' : 'top', targetSide = down ? 'top' : 'bottom';
+  const channel = down ? start.bottom - 7 + track : start.top + 7 - track;
+  const targetChannel = down ? end.top + 7 - track : end.bottom - 7 + track;
+  if (Math.abs(start.index - end.index) === 1 && !(down ? start.expanded : end.expanded)) {
+    return { sourceSide, targetSide, channel: (channel + targetChannel) / 2 + track };
+  }
+  const rightRail = width - 15 + track;
+  const meanX = (from.position.x + from.width / 2 + to.position.x + to.width / 2) / 2;
+  return { sourceSide, targetSide, channel, targetChannel, viaX: meanX < (leftRail + rightRail) / 2 ? leftRail - track : rightRail };
+}
+
+/** Layer dependencies vertically; reserve horizontal space for parallel tasks. */
 export function projectWorkflow({ tasks, graph, narrow = false, nodes, edges, order, expandedId, positions = {} }) {
   const definitions = new Map(tasks.map(task => [task.id, task]));
   const ids = [...definitions.keys()];
@@ -179,64 +194,74 @@ export function projectWorkflow({ tasks, graph, narrow = false, nodes, edges, or
     return [id, label(task.workflowModule?.group) || label(task.category) || '工程开发'];
   }));
   const laneOrder = orderWithin(depthOrder.flat().map(id => groupByTask.get(id)), order?.lanes);
-  const members = new Map(laneOrder.map(group => [group, []]));
-  for (const row of depthOrder) for (const id of row) members.get(groupByTask.get(id)).push(id);
+  const bands = phaseBands(depthOrder, groupByTask, laneOrder, narrow ? 2 : 3);
   const nodeWidth = narrow ? 196 : 212, nodeHeight = 84, step = nodeWidth + (narrow ? 60 : 74);
-  const slots = Math.max(1, ...laneOrder.map(group => members.get(group).length));
-  const firstX = 184, rowHeight = 168, laneGap = 40, detailWidth = 860, detailHeight = 260;
-  const hasDetail = definitions.has(expandedId);
-  const rowWidth = Math.max(620, firstX + (slots - 1) * step + nodeWidth + 76);
-  const width = Math.max(rowWidth, hasDetail ? firstX + detailWidth + 56 : 0);
+  const slots = Math.max(1, ...bands.flatMap(band => band.rows.map(row => row.length)));
+  const firstX = narrow ? 26 : 184, rowHeight = 150, laneGap = 32, detailWidth = 860, detailHeight = 260;
+  const rowWidth = Math.max(narrow ? 296 : 575, firstX + (slots - 1) * step + nodeWidth + 58);
+  const width = Math.max(rowWidth, definitions.has(expandedId) ? firstX + detailWidth + 36 : 0);
   const modules = [], groups = [];
-  const slotById = new Map();
-  let top = 16, detailBounds = null;
+  const rowById = new Map(), columnCenters = new Map(), appearances = new Map();
+  let top = 16, rowIndex = 0, detailBounds = null;
 
-  laneOrder.forEach((group, rank) => {
-    const row = members.get(group), expanded = hasDetail && groupByTask.get(expandedId) === group;
-    const height = rowHeight + (expanded ? detailHeight + 26 : 0);
-    const parentsInPriorGroups = row.flatMap(id => dependencies.get(id)).map(id => slotById.get(id)).filter(Number.isFinite);
-    const parentCenter = parentsInPriorGroups.reduce((sum, slot) => sum + slot, 0) / (parentsInPriorGroups.length || 1);
-    const firstSlot = clamp(Math.round(parentCenter - (row.length - 1) / 2), 0, slots - row.length);
-    const movementBounds = { minX: 159, maxX: rowWidth - 40 - nodeWidth, minY: top + 14, maxY: top + rowHeight - nodeHeight - 20 };
-    groups.push({ id: group, rank, title: group, top, height, left: 10, width: width - 20,
-      rowBottom: top + rowHeight, headerSide: 'left', count: row.length, expanded });
-    row.forEach((id, index) => {
-      const task = definitions.get(id), base = bases.get(id) ?? {};
-      const slot = firstSlot + index;
-      slotById.set(id, slot);
-      const basePosition = { x: firstX + slot * step, y: top + (rowHeight - nodeHeight) / 2 };
-      const position = offsetPosition(basePosition, Object.hasOwn(positions ?? {}, id) ? positions[id] : null, movementBounds);
-      if (id === expandedId) {
-        detailBounds = { x: clamp(position.x + (nodeWidth - detailWidth) / 2, firstX - 20, width - 40 - detailWidth),
-          y: top + rowHeight + 3, width: detailWidth, height: detailHeight };
+  for (const [bandIndex, band] of bands.entries()) {
+    const group = band.name, bandTop = top;
+    const previous = appearances.get(group) ?? 0;
+    appearances.set(group, previous + 1);
+    if (narrow) top += 30; // The compact header sits above the first row.
+    let count = 0, expanded = false;
+    for (const row of band.rows) {
+      const opensHere = row.includes(expandedId);
+      expanded ||= opensHere;
+      count += row.length;
+      const geometry = { index: rowIndex++, top, bottom: top + rowHeight, expanded: opensHere };
+      const parentCenters = row.flatMap(id => dependencies.get(id)).map(id => columnCenters.get(id)).filter(Number.isFinite);
+      const right = rowWidth - 58;
+      const center = parentCenters.length ? parentCenters.reduce((sum, x) => sum + x, 0) / parentCenters.length : (firstX + right) / 2;
+      const span = (row.length - 1) * step + nodeWidth;
+      const startX = clamp(center - span / 2, firstX, right - span);
+      const movementBounds = { minX: firstX - 7, maxX: rowWidth - 16 - nodeWidth, minY: top + 14, maxY: geometry.bottom - nodeHeight - 18 };
+      for (const [slot, id] of row.entries()) {
+        const task = definitions.get(id), base = bases.get(id) ?? {};
+        const basePosition = { x: startX + slot * step, y: top + (rowHeight - nodeHeight) / 2 };
+        columnCenters.set(id, basePosition.x + nodeWidth / 2);
+        rowById.set(id, geometry);
+        const position = offsetPosition(basePosition, Object.hasOwn(positions ?? {}, id) ? positions[id] : null, movementBounds);
+        if (id === expandedId) {
+          detailBounds = { x: clamp(position.x + (nodeWidth - detailWidth) / 2, firstX, width - 26 - detailWidth),
+            y: top + rowHeight + 3, width: detailWidth, height: detailHeight };
+        }
+        const parents = dependencies.get(id), children = dependants.get(id);
+        const evidence = roleStates(base);
+        const gateState = base.gateState ?? 'planned';
+        const gateLabel = base.gateLabel ?? '验收通过后放行';
+        const junction = children.length > 1 || parents.length > 1;
+        const delivery = id === deliveryTask;
+        const blocked = gateState !== 'passed'
+          && (base.observed?.status === 'blocked' || parents.some(parent => bases.get(parent)?.gateState === 'failed'));
+        modules.push({
+          id, taskId: id, kind: 'agent', step: 'agent', role: 'coding', roleLabel: '编码智能体',
+          title: label(task.workflowModule?.name) || task.title || base.title || id,
+          label: base.label ?? '', meta: base.meta ?? '', roleHelp: OPERATIONS[0].roleHelp,
+          group, slot, rank: ranks.get(id), movable: true, expanded: id === expandedId, basePosition, position, movementBounds,
+          width: nodeWidth, height: nodeHeight, selected: Boolean(base.selected), className: base.className ?? '',
+          gateState, gateLabel, reviewState: evidence.review.gateState, reviewLabel: evidence.review.gateLabel,
+          operations: OPERATIONS.map(operation => ({ ...operation, ...evidence[operation.step] })),
+          ...(parents.length > 1 ? { join: { count: parents.length, ...joinState(parents, bases) } } : {}),
+          ...(children.length > 1 ? { fork: { count: children.length, ...forkState(gateState) } } : {}),
+          ...(junction || delivery || blocked || gateState === 'failed' ? { checkpoint: { gateState, gateLabel, delivery, blocked } } : {}),
+        });
       }
-      const parents = dependencies.get(id), children = dependants.get(id);
-      const evidence = roleStates(base);
-      const gateState = base.gateState ?? 'planned';
-      const gateLabel = base.gateLabel ?? '验收通过后放行';
-      const junction = children.length > 1 || parents.length > 1;
-      const delivery = id === deliveryTask;
-      const blocked = gateState !== 'passed'
-        && (base.observed?.status === 'blocked' || parents.some(parent => bases.get(parent)?.gateState === 'failed'));
-      modules.push({
-        id, taskId: id, kind: 'agent', step: 'agent', role: 'coding', roleLabel: '编码智能体',
-        title: label(task.workflowModule?.name) || task.title || base.title || id,
-        label: base.label ?? '', meta: base.meta ?? '', roleHelp: OPERATIONS[0].roleHelp,
-        group, slot, rank: ranks.get(id), movable: true, expanded: id === expandedId, basePosition, position, movementBounds,
-        width: nodeWidth, height: nodeHeight, selected: Boolean(base.selected), className: base.className ?? '',
-        gateState, gateLabel, reviewState: evidence.review.gateState, reviewLabel: evidence.review.gateLabel,
-        operations: OPERATIONS.map(operation => ({ ...operation, ...evidence[operation.step] })),
-        ...(parents.length > 1 ? { join: { count: parents.length, ...joinState(parents, bases) } } : {}),
-        ...(children.length > 1 ? { fork: { count: children.length, ...forkState(gateState) } } : {}),
-        ...(junction || delivery || blocked || gateState === 'failed' ? { checkpoint: { gateState, gateLabel, delivery, blocked } } : {}),
-      });
-    });
-    top += height + laneGap;
-  });
+      top = geometry.bottom + (opensHere ? detailHeight + 20 : 0);
+    }
+    groups.push({ id: JSON.stringify([group, previous]), rank: bandIndex, title: previous ? group + '（续）' : group, group,
+      top: bandTop, height: top - bandTop, left: 10, width: width - 20,
+      headerSide: narrow ? undefined : 'left', count, expanded });
+    top += laneGap;
+  }
 
   const byId = new Map(modules.map(node => [node.id, node]));
-  const laneById = new Map(groups.map(group => [group.id, group]));
-  const orders = depthOrder.map(row => [...row].sort((a, b) => laneById.get(groupByTask.get(a)).rank - laneById.get(groupByTask.get(b)).rank));
+  const orders = depthOrder.map(row => [...row].sort((a, b) => rowById.get(a).index - rowById.get(b).index));
   const keys = (source, target) => JSON.stringify([source, target]);
   const originalEdges = new Map(edges.map(edge => [keys(edge.source, edge.target), edge]));
   const idsInUse = new Set(ids);
@@ -252,7 +277,7 @@ export function projectWorkflow({ tasks, graph, narrow = false, nodes, edges, or
     idsInUse.add(id);
     return {
       id, source, target, fromTask: source, toTask: target, caption: original?.caption || caption,
-      relation: original?.relation ?? 'muted', internal: false, ...dependencyRoute(from, to, laneById, width, index % 3 * 3),
+      relation: original?.relation ?? 'muted', internal: false, ...dependencyRoute(from, to, rowById, width, firstX - 14, index % 3 * 3),
     };
   }));
   return { nodes: modules, edges: visualEdges, groups, columns: [], detailBounds, width,

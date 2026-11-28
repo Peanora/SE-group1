@@ -73,6 +73,15 @@ test('Edge 工作流从任务图核对同一候选的 Review，独立审查通�
     if (width === 390) await task(page, 'B').tap();
     else await task(page, 'B').press('Enter');
     await review(page, 'B').waitFor();
+    const checks = await page.locator('.task-expanded-flow [data-expanded-op]').evaluateAll(nodes =>
+      Object.fromEntries(nodes.map(node => {
+        const { x, y, height } = node.getBoundingClientRect();
+        return [node.dataset.expandedOp, { x, y, height }];
+      })));
+    assert.ok(checks.http.x === checks.edge.x && checks.edge.x === checks.review.x);
+    assert.ok(checks.http.y + checks.http.height < checks.edge.y && checks.edge.y + checks.edge.height < checks.review.y);
+    assert.equal(await page.locator('.task-expanded-flow [data-wire="tests-review"]').count(), 1);
+    assert.ok(checks.repair.y > checks.gate.y + checks.gate.height);
     if (width === 1440) {
       const panel = page.locator('.task-expanded-flow');
       const code = panel.locator('[data-expanded-op="code"]');

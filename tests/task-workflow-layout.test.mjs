@@ -29,17 +29,52 @@ test('every real task starts collapsed in its functional phase, with siblings ar
   assert.deepEqual(model.laneOrder, ['基础', '预约', '通知', '工程开发']);
   assert.equal(model.detailBounds, null);
   assert.ok(model.nodes.every(node => !node.expanded && node.movable));
-  assert.deepEqual(model.groups.map(group => group.count), [1, 3, 1, 1]);
+  assert.deepEqual(model.groups.map(group => [group.group, group.count]), [
+    ['基础', 1], ['预约', 2], ['通知', 1], ['预约', 1], ['工程开发', 1],
+  ]);
+  assert.equal(new Set(model.groups.map(g => g.id)).size, model.groups.length);
+  assert.equal(model.groups[3].title, '预约（续）');
   assert.equal(module(model, 'left').title, '发起预约');
   assert.equal(module(model, 'right').title, '核对资格');
   assert.equal(module(model, '任务「任意 / ID」').title, '兼容旧任务');
   assert.equal(module(model, 'release').group, '预约');
-  assert.equal(module(model, 'left').position.y, module(model, 'release').position.y);
   assert.equal(module(model, 'left').position.y, module(model, 'right').position.y);
   assert.ok(module(model, 'left').position.x + model.nodeWidth < module(model, 'right').position.x);
-  assert.ok(module(model, 'right').position.x + model.nodeWidth < module(model, 'release').position.x);
+  assert.ok(module(model, 'right').position.y + model.nodeHeight < module(model, 'release').position.y);
   assert.ok(module(model, 'left').position.y < module(model, 'notice').position.y);
   assert.deepEqual(module(model, 'left').operations.map(item => item.step), ['agent', 'self', 'http', 'browser', 'review']);
+});
+
+test('a legacy chain remains a single vertical phase and expands immediately under the selected task', () => {
+  const plan = Array.from({ length: 80 }, (_, i) => ({ id: 'T' + i, dependsOn: i ? ['T' + (i - 1)] : [] }));
+  for (const narrow of [false, true]) {
+    const model = diagram({ plan, narrow }), expanded = diagram({ plan, narrow, expandedId: 'T30' });
+    assert.equal(model.groups.length, 1);
+    assert.equal(expanded.groups.length, 1);
+    assert.ok(model.width <= (narrow ? 320 : 620));
+    assert.equal(new Set(model.nodes.map(n => n.position.x)).size, 1);
+    for (const [i, n] of model.nodes.entries()) {
+      const e = expanded.nodes[i];
+      assert.deepEqual(e.position, i <= 30 ? n.position : { x: n.position.x, y: n.position.y + expanded.height - model.height });
+      if (i) assert.ok(n.position.y > model.nodes[i - 1].position.y + model.nodeHeight);
+    }
+    assert.ok(expanded.detailBounds.y + expanded.detailBounds.height < module(expanded, 'T31').position.y);
+  }
+});
+
+test('wide independent sets wrap; their dependent starts below every row', () => {
+  const roots = Array.from({ length: 9 }, (_, i) => ({ id: 'P' + i, dependsOn: [] }));
+  const plan = [...roots, { id: 'merge', dependsOn: roots.map(task => task.id) }];
+  for (const [narrow, capacity] of [[false, 3], [true, 2]]) {
+    const model = diagram({ plan, narrow }), ys = new Map();
+    for (const task of roots) {
+      const n = module(model, task.id);
+      ys.set(n.position.y, (ys.get(n.position.y) ?? 0) + 1);
+      assert.ok(n.position.y + n.height < module(model, 'merge').position.y);
+    }
+    assert.equal(ys.size, Math.ceil(roots.length / capacity));
+    assert.equal(Math.max(...ys.values()), capacity);
+  }
 });
 
 test('same-depth swaps update local slots or move whole lanes without changing ownership or depth', () => {
@@ -78,14 +113,14 @@ test('branches and joins follow actual dependency direction between and within p
     ['left', 'release'], ['right', 'release'], ['notice', 'release'], ['base', 'release'],
   ]);
   assert.ok(model.edges.every(edge => !edge.internal && edge.source === edge.fromTask && edge.target === edge.toTask));
-  assert.deepEqual(model.edges.map(edge => [edge.sourceSide, edge.targetSide]), [
-    ['bottom','top'], ['bottom','top'], ['bottom','top'], ['bottom','bottom'],
-    ['right','left'], ['top','bottom'], ['bottom','top'],
-  ]);
+  for (const edge of model.edges) {
+    assert.deepEqual([edge.sourceSide, edge.targetSide], ['bottom', 'top']);
+    assert.ok(module(model, edge.source).position.y + model.nodeHeight < module(model, edge.target).position.y);
+  }
   assert.deepEqual(model.edges.slice(0, 3).map(edge => edge.caption), ['分支 1', '分支 2', '分支 3']);
   const long = model.edges.find(edge => edge.fromTask === 'base' && edge.toTask === 'notice');
-  const source = module(model, 'base'), fromLane = model.groups.find(group => group.id === source.group);
-  assert.ok(long.channel < fromLane.rowBottom && long.targetChannel < model.groups[2].top);
+  const source = module(model, 'base');
+  assert.ok(long.channel > source.position.y + model.nodeHeight && long.targetChannel < module(model, 'notice').position.y);
   assert.ok(Number.isFinite(long.viaX));
   assert.equal(source.fork.count, 4);
   assert.equal(module(model, 'release').join.count, 4);
@@ -99,15 +134,13 @@ test('expanding reserves space in exactly one group; links skirt the detail fram
     const expanded = diagram({ expandedId: id });
     const detail = expanded.detailBounds;
     const lane = expanded.groups.find(group => group.expanded);
-    assert.equal(lane.id, module(expanded, id).group);
+    assert.equal(lane.group, module(expanded, id).group);
     assert.deepEqual(expanded.nodes.filter(node => node.expanded).map(node => node.id), [id]);
     assert.ok(detail.width >= 860 && detail.height >= 250);
     assert.ok(detail.x >= lane.left && detail.x + detail.width <= lane.left + lane.width);
-    assert.ok(detail.y >= lane.rowBottom && detail.y + detail.height < lane.top + lane.height);
+    assert.ok(detail.y > module(expanded, id).position.y + expanded.nodeHeight && detail.y + detail.height < lane.top + lane.height);
     assert.deepEqual(expanded.edges.map(edge => edge.id), start.edges.map(edge => edge.id));
-    for (const node of expanded.nodes.filter(node => node.group === lane.id)) {
-      assert.ok(node.position.y + node.height < detail.y);
-    }
+    assert.ok(expanded.nodes.every(node => node.position.y + node.height < detail.y || node.position.y > detail.y + detail.height));
     for (const edge of expanded.edges) {
       const from = module(expanded, edge.source), to = module(expanded, edge.target);
       if (Math.min(from.position.y, to.position.y) < detail.y && Math.max(from.position.y, to.position.y) > detail.y + detail.height) {
@@ -120,11 +153,11 @@ test('expanding reserves space in exactly one group; links skirt the detail fram
 
 test('saved two-axis offsets survive collapse, stay within their phase, and never modify logical order', () => {
   const original = diagram();
-  const positions = { base: {x: 42, y: 16}, left: {x: Infinity, y: 1e7}, right: {x: 1e7, y: -1e7} };
+  const positions = { base: {x: 42, y: 12}, left: {x: Infinity, y: 1e7}, right: {x: 1e7, y: -1e7} };
   const moved = diagram({ positions }), expanded = diagram({ positions, expandedId: 'base' });
   const first = module(moved, 'base');
   assert.deepEqual(first.basePosition, module(original, 'base').position);
-  assert.deepEqual(first.position, {x:first.basePosition.x + 42,y:first.basePosition.y + 16});
+  assert.deepEqual(first.position, {x:first.basePosition.x + 42,y:first.basePosition.y + 12});
   for (const id of ['base','left','right']) {
     const current = module(moved, id), afterExpand = module(expanded, id);
     assert.equal(current.position.x, afterExpand.position.x);

@@ -42,16 +42,16 @@
 }
 
 .task-flow-surface[data-plan-canvas] {
-  --flow-ink: #213d34;
-  --flow-muted: #526a60;
-  --flow-focus: #226f59;
+  --flow-ink: #193450;
+  --flow-muted: #4d6783;
+  --flow-focus: #235fb2;
 }
 
 .task-orchestration-root .task-graph-scroll[data-plan-canvas] {
-  --task-upstream: #356d5d;
-  --task-downstream: #4a837a;
-  --task-accent: #42795c;
-  background: radial-gradient(circle, #c5d3c8 .75px, transparent .9px) 0 0 / 15px 15px #eff3ef;
+  --task-upstream: #477bb6;
+  --task-downstream: #336cba;
+  --task-accent: #245fbb;
+  background: radial-gradient(circle, #c4d5e9 .75px, transparent .9px) 0 0 / 15px 15px #f3f7fd;
 }
 
 .task-flow-surface[data-plan-canvas] .task-flow-extent > .react-flow {
@@ -70,10 +70,20 @@
 .task-flow-surface[data-plan-canvas] .task-flow-group {
   position: absolute;
   overflow: hidden;
-  border: 1px solid #c5d3c7;
+  border: 1px solid #c1d3ea;
   border-radius: 14px;
-  background: linear-gradient(150deg, #fcfdfaef, #f3f7f2f2);
+  background: linear-gradient(150deg, #fffffff5, #f8fbfff2);
   box-shadow: inset 0 0 0 2px #ffffff8c;
+}
+
+.task-expanded-guide {
+  position: absolute;
+  pointer-events: none;
+  fill: none;
+  stroke: #5487c5;
+  stroke-width: 1.5;
+  stroke-dasharray: 2 4;
+  stroke-linecap: round;
 }
 
 .task-flow-group::before {
@@ -82,7 +92,7 @@
   inline-size: 42px;
   block-size: 2px;
   border-radius: 0 0 2px 2px;
-  background: #839e8b;
+  background: #78a1d5;
   content: "";
 }
 
@@ -91,14 +101,14 @@
   align-items: center;
   gap: 6px;
   margin: 5px 13px;
-  color: #526a5d;
+  color: #526b8a;
   font-size: 11px;
   line-height: 1.3;
 }
 
 .task-flow-group-heading strong {
   overflow: hidden;
-  color: #2d4436;
+  color: #254364;
   font-size: 14px;
   font-weight: 690;
   text-overflow: ellipsis;
@@ -116,11 +126,11 @@
   inline-size: 118px;
   margin: 0;
   padding: 4px 12px 0 19px;
-  background: linear-gradient(#d8e2d7 50%, transparent 50%) right top / 1px 6px repeat-y;
+  background: linear-gradient(#d0dff0 50%, transparent 50%) right top / 1px 6px repeat-y;
 }
 
 .task-flow-group[data-header-side="left"] .task-flow-group-heading i {
-  color: #708c76;
+  color: #6789b3;
   font-size: 25px;
   line-height: 1;
 }
@@ -159,11 +169,11 @@
   margin: 0;
   padding: 8px 10px;
   overflow: hidden;
-  border: 1px solid #b2c4b6;
+  border: 1px solid #b5cbe6;
   border-radius: 10px;
-  background: linear-gradient(#fff, #fcfdfb);
+  background: linear-gradient(#fff, #fcfdff);
   color: var(--flow-ink);
-  box-shadow: inset 0 0 0 1px #ffffffbf, 0 2px 5px #244a3215;
+  box-shadow: inset 0 0 0 1px #ffffffbf, 0 2px 5px #1b45741a;
   text-align: start;
   pointer-events: auto;
   cursor: grab;
@@ -171,16 +181,16 @@
 }
 
 .task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card:is(:hover, [aria-pressed="true"]) {
-  border-color: #74a18b;
+  border-color: #719cd2;
   background: #fff;
   color: var(--flow-ink);
 }
 
 .task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card:is([aria-expanded="true"], :focus-visible) {
-  border-color: #437e62;
-  outline: 1px solid #437e62;
+  border-color: #2a68b9;
+  outline: 1px solid #2a68b9;
   outline-offset: 0;
-  box-shadow: 0 3px 9px #214d341b;
+  box-shadow: 0 3px 9px #23579922;
 }
 
 .task-orchestration-root .task-graph-scroll[data-plan-canvas] .task-flow-surface .plan-task-node .task-flow-card:focus-visible {
@@ -195,14 +205,14 @@
   place-items: center;
   inline-size: 34px;
   block-size: 34px;
-  border: 1px solid #d3e2d5;
+  border: 1px solid #d1e2f8;
   border-radius: 8px;
-  background: #edf3ed;
-  color: #50715b;
+  background: #edf5ff;
+  color: #3c6ea9;
 }
 
 .task-flow-surface .task-code-symbol svg { inline-size: 19px; block-size: 19px; }
-.task-flow-surface .task-flow-card[aria-expanded="true"] .task-code-symbol { background: #dfede1; color: #285d43; }
+.task-flow-surface .task-flow-card[aria-expanded="true"] .task-code-symbol { background: #deedff; color: #225b9f; }
 
 .task-flow-surface .task-flow-card-kicker,
 .task-flow-surface .task-card-foot {
@@ -212,7 +222,7 @@
   grid-column: 2;
   gap: 5px;
   min-inline-size: 0;
-  color: #52665a;
+  color: #526a85;
   font-size: 10.5px;
   line-height: 1.2;
 }
@@ -229,8 +239,8 @@
 }
 
 .task-flow-surface .task-module-note {
-  --status-bg: #eff3ef;
-  --status-ink: #5e6e63;
+  --status-bg: #f3f7fd;
+  --status-ink: #516984;
   display: block;
   flex: none;
   max-inline-size: 57%;
@@ -255,8 +265,8 @@
   content: "";
 }
 
-.task-flow-surface .task-flow-card:is([data-gate-state="passed"], .sim-completed) .task-module-note { --status-bg: #e7f3e8; --status-ink: #2c6b4b; }
-.task-flow-surface .task-flow-card:is([data-gate-state="checking"], .sim-running, .draft-changed) .task-module-note { --status-bg: #e7f2f3; --status-ink: #316c6e; }
+.task-flow-surface .task-flow-card:is([data-gate-state="passed"], .sim-completed) .task-module-note { --status-bg: #e2effc; --status-ink: #275d8f; }
+.task-flow-surface .task-flow-card:is([data-gate-state="checking"], .sim-running, .draft-changed) .task-module-note { --status-bg: #e5f0ff; --status-ink: #245ca0; }
 .task-flow-surface .task-flow-card:is(.sim-awaiting_confirmation, .draft-downstream) .task-module-note { --status-bg: #fbefdc; --status-ink: #8c5c20; }
 .task-flow-surface .task-flow-card:is([data-gate-state="failed"], .sim-failed) .task-module-note { --status-bg: #fff0e6; --status-ink: #935334; }
 
@@ -276,16 +286,16 @@
 
 .task-card-foot > span:first-child { white-space: nowrap; }
 .task-flow-surface .task-module-junctions { display: inline-flex; align-items: center; gap: 3px; margin-inline-end: auto; }
-.task-flow-surface .task-module-junctions > span { display: inline-flex; align-items: center; gap: 1px; color: #667b6c; font-size: 9px; }
+.task-flow-surface .task-module-junctions > span { display: inline-flex; align-items: center; gap: 1px; color: #627e9d; font-size: 9px; }
 .task-flow-surface .task-module-junctions svg { inline-size: 11px; block-size: 11px; }
-.task-flow-surface .task-card-foot .dev-task-grip { position: static; flex: none; inline-size: 11px; block-size: 11px; margin: 0; color: #6f8575; cursor: grab; }
+.task-flow-surface .task-card-foot .dev-task-grip { position: static; flex: none; inline-size: 11px; block-size: 11px; margin: 0; color: #718ca8; cursor: grab; }
 .task-flow-surface .task-card-chevron { flex: none; inline-size: 13px; block-size: 13px; }
 .task-flow-surface .task-flow-card[aria-expanded="true"] .task-card-chevron { transform: rotate(180deg); }
 .task-orchestration-root .react-flow__node.dragging .task-flow-card { cursor: grabbing; }
 
 .task-orchestration-root .task-flow-surface .plan-task-node > .react-flow__handle {
-  border-color: #7b9987;
-  background: #f7fbf7;
+  border-color: #7094c0;
+  background: #f7fbff;
 }
 
 .task-orchestration-root .task-flow-surface .react-flow__handle:is(.react-flow__handle-left,.react-flow__handle-right) {
@@ -293,13 +303,13 @@
 }
 
 .task-orchestration-root .task-flow-surface .task-edge[data-gate-state="planned"] {
-  stroke: var(--edge-ink, #739789);
+  stroke: var(--edge-ink, #7896bd);
   stroke-width: 1.7;
   stroke-dasharray: none;
 }
 
-.task-flow-surface .task-edge.relation-upstream { --edge-ink: #356d5d; }
-.task-flow-surface .task-edge.relation-downstream { --edge-ink: #4a837a; }
+.task-flow-surface .task-edge.relation-upstream { --edge-ink: #477bb6; }
+.task-flow-surface .task-edge.relation-downstream { --edge-ink: #336cba; }
 .task-orchestration-root [data-focus-relations="true"] .task-flow-surface .task-edge.relation-muted { opacity: .35; }
 .task-orchestration-root [data-focus-relations="true"] .task-flow-surface .task-edge-motion[data-edge-motion="ambient"] { opacity: 0; }
 
@@ -308,7 +318,7 @@
   .task-flow-surface .task-edge-motion {
     display: inline;
     fill: none;
-    stroke: #b3dccc;
+    stroke: #b4dfff;
     stroke-width: 2.1px;
     stroke-linecap: round;
     stroke-dasharray: 5 93;
@@ -317,7 +327,7 @@
     animation: task-flow-travel 4.6s linear infinite;
   }
   .task-flow-surface .task-edge-motion[data-edge-motion="selected"] { animation-duration: 3.7s; }
-  .task-flow-surface .task-edge-motion[data-edge-motion="active"] { stroke: #91e3ba; animation-duration: 2.7s; }
+  .task-flow-surface .task-edge-motion[data-edge-motion="active"] { stroke: #87cfff; animation-duration: 2.7s; }
   .task-flow-surface .react-flow__edge:nth-child(3n+1) .task-edge-motion { animation-delay: -1s; }
   .task-flow-surface .react-flow__edge:nth-child(3n+2) .task-edge-motion { animation-delay: -2s; }
   .task-flow-extent[data-motion-paused="true"] .task-edge-motion { animation-play-state: paused; }

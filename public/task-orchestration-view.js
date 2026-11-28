@@ -3,8 +3,8 @@ import { executionVersionEvidence } from './planned-execution.js';
 import { projectTaskReview, renderTaskReview } from './task-review-flow.js';
 import { renderExpandedFlow, bindExpandedFlow } from './task-expanded-flow.js';
 
-const ORDER_KEY = 'taskflow.workflow.lanes.v1';
-const POSITION_KEY = 'taskflow.workflow.positions.v1';
+const ORDER_KEY = 'taskflow.workflow.lanes.v2';
+const POSITION_KEY = 'taskflow.workflow.positions.v2';
 const zoomLabel = zoom => `${Number((zoom * 100).toFixed(zoom < .01 ? 2 : zoom < .1 ? 1 : 0))}%`;
 const sizerStyle = (width, height, zoom) => `width:${Math.ceil(width * zoom)}px;height:${Math.ceil(height * zoom)}px`;
 
@@ -178,7 +178,7 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
         versions: execution ? executionVersionEvidence(execution) : [], escape, simulation, preview, contextKey: reviewContext, historyOpen }),
       html: `<div class="task-graph-zone" data-focus-relations="${focusRelations}">
         <div class="task-orchestration-bar">
-          <div class="task-orchestration-heading"><h3>模块工作流</h3><p>${layout.groups.length} 个板块 · ${tasks.length} 个模块 · ${edges.length} 条依赖${simulation ? ' · 模拟运行' : execution ? ' · 正在查看执行记录' : dependencyExecution ? engineeringReady ? ' · 按图运行' : ' · 按图计划，待工程契约' : ' · 编排设计'}</p></div>
+          <div class="task-orchestration-heading"><h3>模块工作流</h3><p>${layout.laneOrder.length} 个板块 · ${tasks.length} 个模块 · ${edges.length} 条依赖${simulation ? ' · 模拟运行' : execution ? ' · 正在查看执行记录' : dependencyExecution ? engineeringReady ? ' · 按图运行' : ' · 按图计划，待工程契约' : ' · 编排设计'}</p></div>
           ${editable ? `<button type="button" class="task-canvas-relations" data-task-canvas="edit-links" data-focus-key="task-canvas-edit-links" aria-pressed="${editingGraph}">编辑连线</button>` : ''}
           <button type="button" class="task-canvas-relations" data-task-canvas="relations" data-focus-key="task-canvas-relations" aria-pressed="${focusRelations}">突出关联</button>
           <div class="task-orchestration-tools" role="group" aria-label="画布缩放">
@@ -532,8 +532,10 @@ export function createTaskOrchestration(host, { escape, onLayoutChange, onChange
     const viewport = observedViewport;
     if (!panel || !viewport) return;
     const box = panel.getBoundingClientRect(), view = viewport.getBoundingClientRect();
-    if (box.top < view.top + 8 || box.bottom > view.top + viewport.clientHeight - 8)
-      viewport.scrollTop += box.top - view.top - Math.max(8, (viewport.clientHeight - box.height) / 2);
+    const card = viewport.querySelector('.dev-task[aria-expanded="true"]')?.getBoundingClientRect();
+    const top = Math.min(card?.top ?? box.top, box.top);
+    if (top < view.top + 8 || box.bottom > view.top + viewport.clientHeight - 8)
+      viewport.scrollTop += top - view.top - Math.max(8, (viewport.clientHeight - (box.bottom - top)) / 2);
     if (box.left < view.left || box.right > view.left + viewport.clientWidth)
       viewport.scrollLeft += box.left - view.left - Math.max(8, (viewport.clientWidth - box.width) / 2);
   }

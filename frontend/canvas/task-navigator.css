@@ -15,7 +15,7 @@
   inline-size: 102px;
   block-size: 48px;
   padding: 3px;
-  border: 1px solid #a8b8d4;
+  border: 1px solid #b1c8e5;
   border-radius: 7px;
   background: #f9fbff;
   cursor: crosshair;
@@ -23,11 +23,11 @@
 }
 
 .task-orchestration-root .task-navigator:is(:hover, :focus-visible) {
-  border-color: var(--task-accent, #3846ce);
+  border-color: var(--task-accent, #245fbb);
 }
 
 .task-orchestration-root .task-navigator:focus-visible {
-  outline: 2px solid var(--task-accent, #3846ce);
+  outline: 2px solid var(--task-accent, #245fbb);
   outline-offset: 2px;
 }
 
@@ -39,13 +39,13 @@
 }
 
 .task-navigator-nodes { fill: #a5b4ce; }
-.task-navigator-nodes [data-relation="selected"] { fill: var(--task-accent, #3846ce); }
-.task-navigator-nodes [data-relation="upstream"] { fill: var(--task-upstream, #197d79); }
-.task-navigator-nodes [data-relation="downstream"] { fill: var(--task-downstream, #748cdc); }
+.task-navigator-nodes [data-relation="selected"] { fill: var(--task-accent, #245fbb); }
+.task-navigator-nodes [data-relation="upstream"] { fill: var(--task-upstream, #477bb6); }
+.task-navigator-nodes [data-relation="downstream"] { fill: var(--task-downstream, #336cba); }
 .task-navigator-shade { fill: #e3ebf7a3; }
 .task-navigator-viewport {
-  fill: #646de013;
-  stroke: var(--task-accent, #3846ce);
+  fill: #347cd413;
+  stroke: var(--task-accent, #245fbb);
   stroke-width: 1.25px;
 }
 

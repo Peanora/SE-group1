@@ -75,6 +75,7 @@ type DependencyData = (PlanDependency & { gateState: GateState; motion?: EdgeMot
 type CanvasEdge = { id?: string; source: string; target: string } & (PlanDependency | { focused: boolean });
 type PlanGroup = { headerSide?: 'left'; id: string; rank: number; title: string; top: number; height: number; left: number; width: number; count: number };
 type PlanColumn = { rank: number; title: string; left: number; width: number };
+type DetailBounds = XYPosition & { width: number; height: number };
 
 type CanvasModel = {
   nodes: (PlanNode | ExecutionNode)[];
@@ -86,6 +87,7 @@ type CanvasModel = {
   nodeHeight: number;
   zoom: number;
   groups?: PlanGroup[];
+  detailBounds?: DetailBounds | null;
   columns?: PlanColumn[];
   variant?: 'execution';
   key?: string;
@@ -101,10 +103,10 @@ type Move = { model: CanvasModel; taskId: string; position: XYPosition; dragging
 const sidePositions: Record<Side, Position> = {
   top: Position.Top, bottom: Position.Bottom, left: Position.Left, right: Position.Right,
 };
-const markerColors: Record<Relation, string> = {
-  muted: '#739789',
-  upstream: '#356d5d',
-  downstream: '#4a837a',
+const planMarkerColors: Record<Relation, string> = {
+  muted: '#7896bd',
+  upstream: '#477bb6',
+  downstream: '#336cba',
 };
 const gateHelp = '同一代码版本的自检、独立 HTTP、Edge 和 Review 均通过且完成代码集成后，才释放后续任务。';
 const portSize = 6;
@@ -219,6 +221,24 @@ function roundedPath(points: XYPosition[]) {
   return `M${pointAt(points[0])}` + points.slice(1, -1).map((point, index) =>
     `L${along(point, points[index])}Q${pointAt(point)} ${along(point, points[index + 2])}`).join('')
     + `L${pointAt(points[points.length - 1])}`;
+}
+
+function ExpandedGuide({ node, panel }: { node: TaskNode; panel: DetailBounds }) {
+  // Keep the disclosure line separate from dependency ports at the card centre.
+  const startX = node.position.x + (node.width ?? 0) * .75;
+  const startY = node.position.y + (node.height ?? 0);
+  const endX = Math.max(panel.x + 16, Math.min(startX, panel.x + panel.width - 16));
+  const left = Math.min(startX, endX) - 2;
+  const length = panel.y - startY;
+  if (length <= 0) return null;
+  const x1 = startX - left, x2 = endX - left;
+  const d = x1 === x2 ? `M${x1} 0V${length}` : roundedPath([
+    { x: x1, y: 0 }, { x: x1, y: length / 2 }, { x: x2, y: length / 2 }, { x: x2, y: length },
+  ]);
+  return <svg className="task-expanded-guide" data-detail-guide={node.id} aria-hidden="true"
+    style={{ left, top: startY }} width={Math.abs(endX - startX) + 4} height={length}>
+    <path d={d} />
+  </svg>;
 }
 
 function outsideHandle(x: number, y: number, position: Position) {
@@ -384,7 +404,7 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
       const id = edge.id ?? JSON.stringify([source, target]);
       if (execution) return {
         id, type: 'dependency', source, target, data: { focused: edge.focused, vertical },
-        markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: edge.focused ? markerColors.downstream : '#aab5cf' },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: edge.focused ? '#4a837a' : '#aab5cf' },
       };
       const fromTask = edge.internal ? undefined : edge.fromTask ?? planNodes.get(source)?.taskId;
       const toTask = edge.internal ? undefined : edge.toTask ?? planNodes.get(target)?.taskId;
@@ -397,7 +417,7 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
         else if (gateState === 'planned' && (related || edges.length <= 32)) motion = related ? 'selected' : 'ambient';
         if (motion) pulseCount++;
       }
-      const color = { failed: '#a83245', checking: '#9a5c10', waiting: '#66758a', passed: '#19734f', planned: markerColors[edge.relation] }[gateState];
+      const color = { failed: '#a83245', checking: '#4279bd', waiting: '#75869e', passed: '#2f69aa', planned: planMarkerColors[edge.relation] }[gateState];
       return {
         id, type: 'dependency', source, target,
         sourceHandle: `output-${edge.sourceSide ?? 'right'}`, targetHandle: `input-${edge.targetSide ?? 'left'}`,
@@ -440,6 +460,7 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
       && sourceHandle === 'output-right' && targetHandle === 'input-left';
   }
 
+  const expandedNode = model.detailBounds && flowNodes.find(node => 'kind' in node.data && node.data.expanded);
   const viewport = useMemo(() => ({ x: 0, y: 0, zoom }), [zoom]);
   // React Flow owns node interaction and zoom. Native scroll owns panning.
   return (
@@ -460,6 +481,7 @@ function TaskCanvas({ model }: { model: CanvasModel }) {
               <span>{column.title}</span>
             </div>
           ))}
+          {expandedNode && model.detailBounds && <ExpandedGuide node={expandedNode} panel={model.detailBounds} />}
         </div>
       )}
       <ReactFlow<TaskNode, DependencyEdge>

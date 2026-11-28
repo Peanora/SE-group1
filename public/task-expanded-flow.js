@@ -1,15 +1,15 @@
 // The plan describes the route. Only the same-candidate projection supplies node results.
 const stages = {
-  code:   { title: '编码与自检', x: 12, y: 67, w: 111, icon: 'm5 5-4 4 4 4m8-8 4 4-4 4m-3-10-2 14' },
-  freeze: { title: '固定候选', x: 149, y: 67, w: 107, icon: 'm9 1 7 4-7 4-7-4 7-4Zm-7 4v8l7 4 7-4V5M9 9v8' },
-  http:   { title: 'HTTP 测试', x: 291, y: 25, w: 115, icon: 'M6 3H3v4L1 9l2 2v4h3m6-12h3v4l2 2-2 2v4h-3m-5-2 4-8' },
-  edge:   { title: 'Edge 测试', x: 291, y: 100, w: 115, icon: 'M2 4h14v11H2zM2 7.5h14' },
-  review: { title: '独立 Review', x: 445, y: 67, w: 122, icon: 'm9 2 6 2.5v4c0 3.4-2.4 5.7-6 7.5-3.6-1.8-6-4.1-6-7.5v-4L9 2Zm-3 7 2 2 4-4' },
-  gate:   { title: '验收判定', x: 595, y: 67, w: 100, icon: 'm9 1 8 8-8 8-8-8 8-8Zm-3 8 2 2 4-4' },
-  merge:  { title: '集成与放行', x: 737, y: 67, w: 113, icon: 'M4 4v11m10-11c0 5-10 2-10 9m-2 0 2 2 2-2m6-9 2-2 2 2' },
-  repair: { title: '修订代码', x: 464, y: 151, w: 116, icon: 'm11 3 4 4M3 15l4-1 9-9-3-3-9 9-1 4Z' },
+  code:   { title: '编码与自检', x: 14, y: 73, w: 120, icon: 'm5 5-4 4 4 4m8-8 4 4-4 4m-3-10-2 14' },
+  freeze: { title: '固定候选', x: 171, y: 73, w: 115, icon: 'm9 1 7 4-7 4-7-4 7-4Zm-7 4v8l7 4 7-4V5M9 9v8' },
+  http:   { title: 'HTTP 测试', x: 350, y: 12, w: 135, icon: 'M6 3H3v4L1 9l2 2v4h3m6-12h3v4l2 2-2 2v4h-3m-5-2 4-8' },
+  edge:   { title: 'Edge 测试', x: 350, y: 73, w: 135, icon: 'M2 4h14v11H2zM2 7.5h14' },
+  review: { title: '独立 Review', x: 350, y: 144, w: 135, icon: 'm9 2 6 2.5v4c0 3.4-2.4 5.7-6 7.5-3.6-1.8-6-4.1-6-7.5v-4L9 2Zm-3 7 2 2 4-4' },
+  gate:   { title: '验收判定', x: 578, y: 73, w: 106, icon: 'm9 1 8 8-8 8-8-8 8-8Zm-3 8 2 2 4-4' },
+  merge:  { title: '集成与放行', x: 737, y: 73, w: 113, icon: 'M4 4v11m10-11c0 5-10 2-10 9m-2 0 2 2 2-2m6-9 2-2 2 2' },
+  repair: { title: '修订代码', x: 184, y: 168, w: 127, icon: 'm11 3 4 4M3 15l4-1 9-9-3-3-9 9-1 4Z' },
 };
-const width = 860, height = 205, cardHeight = 43;
+const width = 860, height = 218, cardHeight = 43;
 const clamp = (value, lo, hi) => Math.max(lo, Math.min(hi, value));
 const offset = value => Number.isFinite(value) ? value : 0;
 
@@ -44,7 +44,7 @@ function routeGeometry(nodes) {
   }
   function join(from, to, ink, spine) {
     const s = port(from, 'right'), t = port(to, 'left');
-    if (t[0] < s[0] + 12) {
+    if (spine == null && t[0] < s[0] + 12) {
       const y = clamp(s[1] + (s[1] <= t[1] ? -32 : 32), 3, height - 3);
       wire(from + '-' + to, [s, [s[0] + 6, s[1]], [s[0] + 6, y], [t[0] - 6, y], [t[0] - 6, t[1]], t], ink);
     } else {
@@ -53,24 +53,26 @@ function routeGeometry(nodes) {
     }
   }
   const split = (port('freeze', 'right')[0] + Math.min(nodes.http.x, nodes.edge.x)) / 2;
-  const gather = (Math.max(port('http', 'right')[0], port('edge', 'right')[0]) + nodes.review.x) / 2;
+  const gateInput = port('gate', 'left');
+  const gather = (Math.max(port('http', 'right')[0], port('edge', 'right')[0]) + gateInput[0]) / 2;
   join('code', 'freeze', 'neutral');
   for (const key of ['http', 'edge']) {
     join('freeze', key, 'candidate', split);
-    join(key, 'review', 'neutral', gather);
+    join(key, 'gate', 'neutral', gather);
   }
-  join('review', 'gate', 'neutral');
+  // The review checks the same candidate, after both independent tests pass.
+  const reviewTop = [nodes.review.x + nodes.review.w / 2, nodes.review.y - 3];
+  const turnY = reviewTop[1] - 9;
+  wire('tests-review', [[gather, gateInput[1]], [gather, turnY], [reviewTop[0], turnY], reviewTop],
+    'candidate', label('两项通过后', gather, reviewTop[0], turnY));
+  join('review', 'gate', 'neutral', (gather + gateInput[0]) / 2);
   join('gate', 'merge', 'candidate');
   const gate = port('gate', 'bottom'), fix = port('repair', 'right'), resume = port('repair', 'left'), code = port('code', 'bottom');
-  const repairInput = [nodes.repair.x + nodes.repair.w / 2, nodes.repair.y - 3];
-  const failY = Math.max(nodes.edge.y + cardHeight, nodes.review.y + cardHeight) + 4;
   function label(text, x1, x2, y) {
     return { text, x: (x1 + x2) / 2, y: y - 5, visible: Math.abs(x2 - x1) > 55 };
   }
-  wire('tests-repair', [[gather, port('review', 'left')[1]], [gather, failY], [repairInput[0], failY], repairInput],
-    'revision', label('测试未通过', gather, repairInput[0], failY));
   wire('gate-repair', [gate, [gate[0], fix[1]], [fix[0] + 3, fix[1]]],
-    'revision', label('审查退回', gate[0], fix[0], fix[1]));
+    'revision', label('退回修订', gate[0], gate[0] + (fix[0] - gate[0]) * 0.4, fix[1]));
   wire('repair-code', [[resume[0] + 3, resume[1]], [code[0], resume[1]], [code[0], code[1] + 3]],
     'retry', label('新提交复验', resume[0], code[0], resume[1]));
   return connections;
@@ -104,9 +106,7 @@ export function renderExpandedFlow({ task, flow, offsets = {}, escape }) {
     `<marker id="${prefix}-${ink}" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path class="ef-arrow ef-${ink}" d="m1 1 5.5 3L1 7"/></marker>`).join('');
   const wires = routeGeometry(nodes).map(({ id: wireId, ink, d, caption }, index) => {
     const loop = wireId === 'repair-code' ? ` data-review-loop="${states.gate.state === 'failed' ? 'blocked' : 'conditional'}"` : '';
-    const showPulse = (wireId === 'gate-repair' ? flow.review.state === 'failed'
-      : wireId === 'tests-repair' ? [flow.http, flow.browser].some(step => step.state === 'failed')
-        : wireId === 'repair-code' ? states.gate.state === 'failed' : true);
+    const showPulse = !['gate-repair', 'repair-code'].includes(wireId) || states.gate.state === 'failed';
     const label = caption ? `<text class="ef-caption" x="${caption.x}" y="${caption.y}" visibility="${caption.visible ? 'visible' : 'hidden'}">${caption.text}</text>` : '';
     return `<g class="ef-wire ef-${ink}" data-wire="${wireId}"${loop} aria-hidden="true"><path class="ef-base" d="${d}" marker-end="url(#${prefix}-${ink})"/>${showPulse ? `<path class="ef-pulse" d="${d}" pathLength="100" style="--stagger:${-index * 317}ms"/>` : ''}${label}</g>`;
   }).join('');
