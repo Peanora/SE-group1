@@ -116,7 +116,7 @@ test('disabled team mode preserves the unauthenticated workbench and local proje
   await page.waitForFunction(() => !document.querySelector('#project-dialog').open);
   const projects = f.app.store.list();
   assert.equal(projects.length, 1);
-  await page.waitForURL(f.origin + '/?' + new URLSearchParams({ project: projects[0].id, view: 'overview' }));
+  await page.waitForURL(f.origin + '/?' + new URLSearchParams({ project: projects[0].id, view: 'source' }));
   await page.goto(f.origin + '/team.html'); await page.waitForFunction(() => document.querySelector('#team-description')?.textContent.includes('本地单人模式')); assert.equal(await page.locator('#team-login').isVisible(), false); assert.equal(await page.locator('#team-account').isVisible(), false); await noCredentialStorage(page);
   await page.getByRole('link', { name: '返回工作台', exact: true }).click(); await workbench(page, f);
 });

@@ -42,33 +42,30 @@ function ProjectLaunch() {
 
 export function RunOverview() {
   return (
-    <section id="workspace-overview" className="workspace-panel studio-overview"
-      data-workspace-panel="overview" role="tabpanel" aria-labelledby="workspace-tab-overview" tabIndex={-1}>
-      <details id="delivery-workflow" className="studio-workflow" open>
-        <summary aria-controls="delivery-steps">
-          <span className="studio-workflow-title"><GitBranch size={18} aria-hidden="true" />项目流程</span>
-          <span id="studio-workflow-scope" className="studio-workflow-scope" hidden>旧版规划 · 仅至文档导出</span>
-          <span className="studio-workflow-current">
-            <span id="delivery-current-title">需求输入</span>
-            <span id="delivery-current-state" aria-live="polite">尚未开始</span>
+    <details id="delivery-workflow" className="studio-workflow" open>
+      <summary aria-controls="delivery-steps">
+        <span className="studio-workflow-title"><GitBranch size={18} aria-hidden="true" />流程总览</span>
+        <span id="studio-workflow-scope" className="studio-workflow-scope" hidden>旧版规划 · 仅至文档导出</span>
+        <span className="studio-workflow-current">
+          <span id="delivery-current-title">需求输入</span>
+          <span id="delivery-current-state" aria-live="polite">尚未开始</span>
+        </span>
+        <span className="studio-workflow-tools">
+          <span id="delivery-done-count">0 / 9 完成</span>
+          <span className="studio-workflow-disclosure">
+            <span className="studio-flow-expand">展开</span><span className="studio-flow-collapse">收起</span>
+            <ChevronDown size={15} aria-hidden="true" />
           </span>
-          <span className="studio-workflow-tools">
-            <span id="delivery-done-count">0 / 9 完成</span>
-            <span className="studio-workflow-disclosure">
-              <span className="studio-flow-expand">展开</span><span className="studio-flow-collapse">收起</span>
-              <ChevronDown size={15} aria-hidden="true" />
-            </span>
-          </span>
-        </summary>
-        <ol id="delivery-steps" className="studio-route" aria-label="项目流程图" />
-        <ul className="studio-map-legend" aria-label="流程图状态图例">
-          <li data-tone="done">已完成</li>
-          <li data-tone="working">执行中</li>
-          <li data-tone="waiting">待处理</li>
-          <li data-tone="failed">异常</li>
-        </ul>
-      </details>
-    </section>
+        </span>
+      </summary>
+      <ol id="delivery-steps" className="studio-route" aria-label="项目流程图" />
+      <ul className="studio-map-legend" aria-label="流程图状态图例">
+        <li data-tone="done">已完成</li>
+        <li data-tone="working">执行中</li>
+        <li data-tone="waiting">待处理</li>
+        <li data-tone="failed">异常</li>
+      </ul>
+    </details>
   );
 }
 
@@ -111,7 +108,6 @@ export function RunInspector() {
         <div className="workspace-context-actions">
           <Button id="workspace-next-root" data-workspace-next>处理当前步骤</Button>
           <Button asChild><a id="automatic-download" hidden>下载已验收源码</a></Button>
-          <a className="studio-controls-jump" href="#studio-run-controls">运行控制<ChevronDown size={13} aria-hidden="true" /></a>
         </div>
       </section>
       <RunControls />

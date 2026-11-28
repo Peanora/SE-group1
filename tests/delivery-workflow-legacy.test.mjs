@@ -85,7 +85,10 @@ test('Edge opens a persisted v1 run at its single review gate and finishes with 
   page.on('request', request => {
     if (request.method() === 'POST') mutations.push(request.postDataJSON());
   });
-  await page.goto('http://127.0.0.1:' + app.server.address().port + '/?' + new URLSearchParams({ project: project.id, run: run.id }));
+  const projectUrl = 'http://127.0.0.1:' + app.server.address().port + '/?' + new URLSearchParams({ project: project.id, run: run.id });
+  await page.goto(projectUrl + '&view=overview');
+  await page.waitForURL(projectUrl + '&view=source');
+  assert.equal(await page.locator('#workspace-tab-source').getAttribute('aria-selected'), 'true');
   await page.locator('#studio-workflow-scope').waitFor();
   await page.locator('#delivery-current-state').getByText('等待审阅', { exact: true }).waitFor();
   assert.match(await page.locator('#delivery-done-count').innerText(), /3\s*\/\s*4/u);
@@ -98,7 +101,6 @@ test('Edge opens a persisted v1 run at its single review gate and finishes with 
   assert.deepEqual(mutations, []);
   await page.getByRole('button', { name: '确认并导出', exact: true }).click();
   await page.locator('#download-bundle').waitFor();
-  await page.locator('#workspace-tab-overview').click();
   await exportStep.getByText('规划文档已导出', { exact: true }).waitFor();
   assert.match(await page.locator('#delivery-done-count').innerText(), /4\s*\/\s*4/u);
   assert.equal(run.workflowVersion, undefined);

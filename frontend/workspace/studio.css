@@ -230,10 +230,12 @@ body.tf-workbench {
   border-radius: 9px;
   background: var(--tf-paper);
 }
-.tf-workbench .studio-panels > .studio-overview {
-  padding: 0;
-  border: 0;
-  background: transparent;
+.studio-run-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+  margin-bottom: 17px;
 }
 .studio-inspector { display: grid; align-content: start; gap: 10px; min-width: 0; }
 .studio-inspector > * { min-width: 0; }
@@ -291,7 +293,6 @@ body.tf-workbench {
 .tf-workbench .studio-main .studio-current .button-outline { border-color: var(--tf-line); background: #fff; color: var(--tf-ink); }
 .tf-workbench .studio-main .studio-current .button-outline:hover { background: var(--tf-accent-soft); }
 .tf-workbench .studio-main .studio-current .button:focus-visible { outline-color: #4278be; }
-.studio-controls-jump { display: none; }
 .studio-run-tools .workflow-controls { gap: 7px; }
 .studio-run-tools .workflow-controls :is(select, .button) { max-width: 100%; min-height: 35px; }
 .studio-run-tools .workspace-budget { margin: 0; color: var(--tf-muted); }
@@ -504,72 +505,14 @@ body.tf-workbench {
 .studio-map-legend [data-tone="failed"] { --legend-tone: #b8494d; }
 
 @media (min-width: 1051px) {
-  .tf-workbench .studio-panels:has(> .studio-overview:not([hidden])) {
+  .studio-run-summary {
     grid-template-columns: minmax(0, 1fr) minmax(275px, 24%);
-    align-items: start;
     gap: 16px;
-  }
-  .studio-panels:has(> .studio-overview:not([hidden])) > .studio-inspector { grid-area: 1 / 2; }
-  .studio-panels > .studio-overview { grid-area: 1 / 1; }
-  .studio-panels:not(:has(> .studio-overview:not([hidden]))) .studio-inspector {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 11px;
-    padding: 8px 11px;
-    border: 1px solid var(--tf-line);
-    border-radius: 8px;
-    background: #fff;
-  }
-  .tf-workbench .studio-panels:not(:has(> .studio-overview:not([hidden]))) .studio-inspector :is(.studio-current, .studio-run-tools) {
-    border: 0;
-    padding: 0;
-  }
-  .tf-workbench .studio-panels:not(:has(> .studio-overview:not([hidden]))) .studio-current {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .tf-workbench .studio-panels:not(:has(> .studio-overview:not([hidden]))) .studio-current h2 {
-    margin: 3px 0 0;
-    font-size: 15px;
-  }
-  .studio-panels:not(:has(> .studio-overview:not([hidden]))) .studio-region-label { display: none; }
-  .studio-main .studio-panels:not(:has(> .studio-overview:not([hidden]))) #workspace-context #workspace-context-note {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    overflow: hidden;
-    font-size: 12px;
-  }
-  .studio-panels:not(:has(> .studio-overview:not([hidden]))) .studio-run-history > ul {
-    position: absolute;
-    z-index: 10;
-    inset-inline-end: 0;
-    width: 280px;
-    background: #fff;
-    border: 1px solid var(--tf-line);
-    border-radius: 7px;
-    box-shadow: 0 7px 21px #172a461a;
-  }
-}
-
-@media (max-width: 1050px) {
-  .studio-inspector { display: contents; }
-  .studio-panels :is(.studio-launch, .studio-current) { grid-row: 1; }
-  .studio-panels > .workspace-panel { grid-row: 2; }
-  .studio-panels .studio-run-tools { grid-row: 3; }
-  .studio-panels .studio-run-history { grid-row: 4; }
-  .studio-panels:not(:has(> .studio-overview:not([hidden]))) .studio-controls-jump {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    padding: 4px;
-    color: var(--tf-accent);
-    font-size: 12px;
   }
 }
 
 @media (max-width: 760px) {
+  html:has(.studio-app) { scroll-padding-top: 98px; }
   .studio-appbar-inner { gap: 6px; min-height: 52px; padding-inline: 9px; }
   .studio-brand { padding-inline-end: 6px; gap: 5px; font-size: 15px; }
   .studio-brand-mark { width: 26px; height: 26px; }
@@ -590,6 +533,7 @@ body.tf-workbench {
   .tf-workbench .studio-views { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 11px; gap: 3px; }
   .tf-workbench .studio-views button { gap: 4px; min-height: 38px; padding: 3px; font-size: 12px; }
   .studio-views button > svg { width: 14px; height: 14px; }
+  .studio-run-summary { gap: 10px; margin-bottom: 11px; }
   .tf-workbench .studio-panels { gap: 10px; }
   .tf-workbench .studio-main .studio-current,
   .tf-workbench .studio-main .studio-run-tools { padding: 11px; gap: 7px; }

@@ -156,7 +156,6 @@ for (const width of [1440, 390]) test(`真实Edge ${width}px：从任务图编�
   assert.equal(exported.tasks[1].workflowModule.name, changedModuleName);
   assert.equal(exported.planRevision, run.planRevision);
   const flow = page.locator('#delivery-workflow');
-  await page.locator('#workspace-tab-overview').click();
   assert.equal(await flow.locator('#delivery-steps').getByRole('button').count(), 9);
   assert.equal(await flow.locator('[data-delivery-step="plan-approval"]').getAttribute('data-state'), 'done');
   await flow.locator('[data-delivery-step="coding"]').click();
@@ -164,7 +163,6 @@ for (const width of [1440, 390]) test(`真实Edge ${width}px：从任务图编�
   await prepare.click();
   assert.equal(await page.locator('#verification-plans-section').evaluate(section => section.open), true);
   assert.equal(await page.locator('#execution-tools').evaluate(section => section.open), false);
-  await page.locator('#workspace-tab-overview').click();
   await flow.locator('[data-delivery-step="plan"]').click();
   assert.equal(await page.locator('[data-edit-selected-task]').isEnabled(), true);
   assert.equal(await page.locator('[data-add-feature]').isEnabled(), true);
@@ -208,18 +206,14 @@ test('全流程以当前版本的实际记录更新，并定位验收清单、�
   await page.route(`**${base}/development-executions`, route => route.fulfill({ json: { capabilities: { canStart: approved, contractRevision: revision,
     model: { name: 'fixture' }, budget, reason: approved ? '' : '必须先认可当前联合HTTP与浏览器验收定义。' }, executions: execution ? [execution] : [] } }));
   await page.getByRole('button', { name: '确认计划并导出', exact: true }).click();
-  const overview = page.locator('#workspace-tab-overview');
-  await overview.click();
   const step = id => page.locator(`[data-delivery-step="${id}"]`);
   await step('verification').getByText('待准备清单', { exact: true }).waitFor();
   await page.getByRole('button', { name: '打开验收清单', exact: true }).click();
   assert.equal(await page.locator('#verification-plans-section > summary').evaluate(element => document.activeElement === element), true);
   approved = true;
-  await overview.click();
   await step('coding').click();
   const refresh = page.getByRole('button', { name: '刷新开发状态', exact: true });
   await refresh.click();
-  await overview.click();
   await step('verification').getByText('清单已确认', { exact: true }).waitFor();
   await step('coding').getByText('待开始开发', { exact: true }).waitFor();
   const start = page.getByRole('button', { name: '按当前规划开始开发', exact: true });
@@ -230,7 +224,6 @@ test('全流程以当前版本的实际记录更新，并定位验收清单、�
   execution = { id: 'fixture-run', projectId: project.id, runId: run.id, kind: 'planned_web', current: true, binding,
     proposalId: definition.id, revision, active: true, status: 'validating', candidateCommit: '1'.repeat(40), tasks: [], actions: {} };
   await refresh.click();
-  await overview.click();
   await step('testing').getByText('正在检查候选', { exact: true }).waitFor();
   assert.equal(await step('delivery').getAttribute('data-state'), 'idle');
   await step('testing').click();
@@ -238,7 +231,6 @@ test('全流程以当前版本的实际记录更新，并定位验收清单、�
   execution = { ...execution, active: false, status: 'accepted', accepted: true, actions: { canPreview: true, canDownload: true },
     checks: { http: [{ passed: true }], browser: [{ passed: true }, { passed: true }], review: 'completed', issues: [] } };
   await refresh.click();
-  await overview.click();
   await step('testing').getByText('HTTP 1/1，浏览器 2/2', { exact: true }).waitFor();
   await step('delivery').click();
   assert.equal(await page.getByRole('heading', { name: '软件预览' }).evaluate(element => document.activeElement === element), true);

@@ -135,7 +135,7 @@ for (const width of [1440, 390]) test(`真实 Edge ${width}px：开发任务依�
     };
   });
   assert.equal(shell.projectInToolbar && shell.runInHeading, true);
-  assert.deepEqual(shell.views, ['overview', 'source', 'plan', 'tasks', 'execution', 'trace']);
+  assert.deepEqual(shell.views, ['source', 'plan', 'tasks', 'execution', 'trace']);
   const control = name => root.getByRole('button', { name, exact: true });
   const task = taskCard(root, 'B');
   const noPageOverflow = () => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1);

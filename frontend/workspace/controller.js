@@ -623,7 +623,6 @@ function handleWorkspaceNext() {
   if (kind === 'artifacts') { showArtifact('task.md'); return; }
   if (kind === 'failure') { locateWorkspaceProblem({ source: 'planning', stageId: state.run?.stages.find(stage => stage.status === 'failed')?.id }); return; }
   if (kind === 'start') {
-    workspaceLayout.show('overview');
     focusWorkspaceTarget($('#start-automatic').hidden || $('#start-automatic').disabled ? $('#start-run') : $('#start-automatic'));
     return;
   }
@@ -1157,7 +1156,7 @@ async function selectRun(id) {
 async function startRun(expectedSource, { automatic = false } = {}) {
   if (!state.project || state.busy || state.selectionPending || (!historicalRun() && ACTIVE.has(state.run?.status))) return;
   if ($(automatic ? '#start-automatic' : '#start-run').disabled) return;
-  workspaceLayout.show(automatic ? 'overview' : 'plan');
+  if (!automatic) workspaceLayout.show('plan');
   clearError(); setBusy(true); clearTimeout(state.pollTimer); const epoch = ++state.epoch;
   state.selectionPending = true; syncExecutionPanel();
   try {
@@ -1169,7 +1168,9 @@ async function startRun(expectedSource, { automatic = false } = {}) {
     if (epoch !== state.epoch) return;
     state.selectionPending = false;
     state.stageId = 'intake'; state.taskId = null; state.artifactName = 'task.md'; state.tab = 'events';
-    updateRun(run); workspaceLayout.show(automatic ? 'overview' : 'plan');
+    updateRun(run);
+    if (automatic) $('#delivery-workflow > summary').scrollIntoView({ block: 'nearest' });
+    else workspaceLayout.show('plan');
     renderHeader(); schedulePoll(); toast(automatic ? '已启动自动交付，正在处理需求。' : '编排已启动，可以点击节点查看过程');
   } catch (error) { if (epoch === state.epoch) showError(error); }
   finally { if (epoch === state.epoch) { state.selectionPending = false; syncExecutionPanel(); schedulePoll(); } setBusy(false); }
@@ -1461,7 +1462,7 @@ function addressedRun() {
   const safeId = value => /^[\w-]{1,128}$/u.test(value || '') ? value : null;
   const view = params.get('view');
   return { projectId: safeId(params.get('project')), runId: safeId(params.get('run')),
-    view: view === 'details' ? 'plan' : WORKSPACE_VIEWS.includes(view) ? view : null };
+    view: view === 'overview' ? 'source' : view === 'details' ? 'plan' : WORKSPACE_VIEWS.includes(view) ? view : null };
 }
 
 function teamUrl({ projectId, runId, view }) {

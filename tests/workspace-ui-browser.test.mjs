@@ -12,7 +12,7 @@ const content = '用户可以查看资源列表。';
 const specification = text => ({ title: '资源工作台', summary: text, goals: ['查看资源'], roles: ['用户'], questions: [], constraints: [], assumptions: [], acceptanceScenarios: ['展示资源列表'],
   stack: { frontend: 'HTML/CSS/JavaScript', backend: 'Node.js', storage: 'SQLite' }, sourceMode: 'local',
   requirements: [{ id: 'R-001', title: '查看资源', description: text, sourceQuote: text, acceptance: ['展示资源列表'] }] });
-const views = ['overview', 'source', 'plan', 'tasks', 'execution', 'trace'];
+const views = ['source', 'plan', 'tasks', 'execution', 'trace'];
 const nav = (page, view) => page.locator(`[data-workspace-view="${view}"]`);
 const pane = (page, view) => page.locator(`#workspace-${view}`);
 
@@ -266,15 +266,43 @@ for (const height of [667, 844]) test(`短屏 390×${height}：长错误可滚�
   await page.screenshot({ path: path.join(shots, `short-error-recovered-${height}.png`) });
 });
 
-for (const width of [1440, 390]) test(`统一工作台 ${width}px：六个工作面、草稿阅读位置与就地任务编辑`, { timeout: 90000 }, async t => {
+for (const width of [1440, 390]) test(`统一工作台 ${width}px：共用流程、五个工作面、草稿阅读位置与就地任务编辑`, { timeout: 90000 }, async t => {
   const { app, project, run, page, modelCalls } = await fixture(t, width);
   await assertOnlyView(page, 'plan');
-  for (const view of views) { await nav(page, view).click(); await assertOnlyView(page, view); }
+  const flow = page.locator('#delivery-workflow');
+  const flowSummary = flow.locator('> summary');
+  const flowNodes = flow.locator('[data-delivery-step]');
+  assert.equal(await flow.evaluate(element => element.open), true);
+  const overviewShot = path.resolve('output/workspace-ui'); await mkdir(overviewShot, { recursive: true });
+  await page.screenshot({ path: path.join(overviewShot, `shared-workflow-${width}.png`) });
+  if (width === 1440) {
+    await nav(page, 'source').click();
+    await assertInViewport(flowSummary);
+  }
+  for (const expanded of [false, true]) {
+    await flowSummary.click();
+    for (const view of views) {
+      await nav(page, view).click();
+      await assertOnlyView(page, view);
+      assert.equal(await flow.count(), 1);
+      assert.equal(await flowSummary.isVisible(), true);
+      assert.equal(await flowNodes.first().isVisible(), expanded);
+      const order = await flow.evaluate((element, activeView) => {
+        const navigation = document.querySelector('#workspace-nav');
+        const panel = document.getElementById(`workspace-${activeView}`);
+        return Boolean(element.compareDocumentPosition(navigation) & Node.DOCUMENT_POSITION_FOLLOWING)
+          && Boolean(navigation.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING);
+      }, view);
+      assert.equal(order, true, `流程、栏目导航、${view}内容按顺序排列`);
+    }
+  }
   await nav(page, 'plan').focus(); await nav(page, 'plan').press('ArrowRight');
   assert.equal(await nav(page, 'tasks').evaluate(element => document.activeElement === element), true);
   await nav(page, 'tasks').press('Enter'); await assertOnlyView(page, 'tasks');
 
-  await nav(page, 'source').click();
+  await flow.locator('[data-delivery-step="source"]').click();
+  await assertOnlyView(page, 'source');
+  assert.equal(await pane(page, 'source').evaluate(element => document.activeElement === element), true);
   const source = page.locator('.source-changes').getByLabel('需求正文', { exact: true });
   await source.waitFor(); await source.fill(`${content}\n用户尚未保存的补充内容。`);
   const sourceDraft = await source.inputValue();

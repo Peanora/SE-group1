@@ -350,7 +350,6 @@ test('automatic delivery in Edge pauses only for the missing business answer and
   assert.deepEqual((await responseJson(deliveryUrl)).usageByStage, completed.usageByStage);
 
   await page.reload();
-  await page.locator('#workspace-tab-overview').click();
   await page.locator('#delivery-done-count').getByText(/9\s*\/\s*9/u).waitFor();
   await page.locator('[data-delivery-step="coding"] small').getByText(/调用 5 次.*费用估算 0.00006 CNY/u).waitFor();
   const downloadEvent = page.waitForEvent('download');

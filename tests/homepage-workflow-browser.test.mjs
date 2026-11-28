@@ -55,8 +55,6 @@ const native = process.env.TASKFLOW_TEST_REAL_SANDBOX === '1' && !!process.env.E
 const stage = (page, id) => page.locator(`[data-delivery-step="${id}"]`);
 const flow = page => page.locator('#delivery-workflow');
 async function openFlow(page) {
-  const overview = page.locator('#workspace-tab-overview');
-  if (await overview.isVisible()) await overview.click();
   const summary = flow(page).locator('> summary');
   await summary.waitFor();
   if (!await flow(page).evaluate(element => element.open)) await summary.click();
@@ -99,7 +97,7 @@ test('homepage opens on the workflow map and supports keyboard navigation on des
     await page.locator('#delivery-current-title').getByText('需求输入', { exact: true }).waitFor();
     assert.equal(await flow(page).evaluate(element => element.tagName), 'DETAILS');
     assert.equal(await flow(page).evaluate(element => element.open), true);
-    assert.match(await summary.innerText(), /项目流程/u);
+    assert.match(await summary.innerText(), /流程总览/u);
     assert.equal(await page.locator('#delivery-current-state').innerText(), '尚未开始');
     assert.match(await page.locator('#delivery-done-count').innerText(), /0\s*\/\s*9/u);
     assert.equal(await stage(page, 'source').isVisible(), true);
@@ -130,7 +128,6 @@ test('homepage opens on the workflow map and supports keyboard navigation on des
   assert.equal(await flow(page).evaluate(element => element.open), false);
   await page.locator('#mode-select').selectOption('local');
   await page.locator('#start-run').click();
-  await page.locator('#workspace-tab-overview').click();
   await page.locator('#delivery-current-title').getByText('设计规格', { exact: true }).waitFor();
   await page.locator('#delivery-current-state').getByText('等待补充需求', { exact: true }).waitFor();
   assert.match(await page.locator('#delivery-done-count').innerText(), /1\s*\/\s*9/u);

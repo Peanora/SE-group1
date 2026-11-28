@@ -1,6 +1,6 @@
 import {
   Activity, Cable, ChevronDown, CircleHelp, ClipboardCheck, FileText, FolderOpen,
-  GitBranch, LayoutGrid, Plus, RefreshCw, Settings2, ShieldCheck, Workflow,
+  GitBranch, Plus, RefreshCw, Settings2, ShieldCheck, Workflow,
 } from 'lucide-react';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { WorkspaceDialogs } from './dialogs';
@@ -8,7 +8,6 @@ import { ProjectHeading, RunInspector, RunOverview } from './overview';
 import { DeliveryPanel, PlanningPanel, RequirementsPanel, TaskPanel } from './panels';
 
 const views = [
-  { id: 'overview', label: '流程总览', icon: LayoutGrid },
   { id: 'source', label: '需求版本', icon: FileText },
   { id: 'plan', label: '规格与计划', icon: ClipboardCheck },
   { id: 'tasks', label: '任务编排', icon: GitBranch },
@@ -22,7 +21,7 @@ function WorkAreaNavigation() {
       {views.map(({ id, label, icon: Icon }) => (
         <button key={id} type="button" id={id === 'tasks' ? 'tab-tasks' : 'workspace-tab-' + id}
           role="tab" data-workspace-view={id} aria-controls={'workspace-' + id}
-          aria-selected={id === 'overview'} tabIndex={id === 'overview' ? 0 : -1}>
+          aria-selected={id === 'source'} tabIndex={id === 'source' ? 0 : -1}>
           <Icon size={16} aria-hidden="true" />
           {label}
           {id === 'tasks' && <span id="task-count">0</span>}
@@ -114,9 +113,7 @@ function ProjectTopbar() {
 
 function WorkAreas() {
   return (
-    <div id="workspace-panels" className="workspace-panels studio-panels">
-      <RunInspector />
-      <RunOverview />
+    <div id="workspace-panels" className="workspace-panels studio-panels" hidden>
       <RequirementsPanel />
       <PlanningPanel />
       <TaskPanel />
@@ -141,6 +138,10 @@ export function Workspace() {
             <button type="button" id="dismiss-error" aria-label="关闭错误提示">×</button>
           </div>
           <ProjectHeading />
+          <div id="workspace-run-summary" className="studio-run-summary">
+            <RunOverview />
+            <RunInspector />
+          </div>
           <WorkAreaNavigation />
           <WorkAreas />
           <details className="workspace-scope studio-scope">
